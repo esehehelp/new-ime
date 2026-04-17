@@ -32,6 +32,9 @@ wandb/
 # Data
 data/raw/
 data/processed/
+datasets/
+checkpoints/
+results/
 *.bz2
 *.gz
 *.zip
