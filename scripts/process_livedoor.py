@@ -43,7 +43,9 @@ def _get_reading(tagger, text: str) -> str | None:
         if features[0] == "未知語":
             return None
         reading = None
-        if len(features) >= 7 and features[6] != "*":
+        if len(features) >= 18 and features[17] != "*":
+            reading = features[17]
+        elif len(features) >= 7 and features[6] != "*":
             reading = features[6]
         if reading:
             hira = jaconv.kata2hira(reading)

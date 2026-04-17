@@ -113,14 +113,17 @@ def _get_reading(tagger, text: str, jaconv) -> str | None:
             return None
 
         # unidic-lite feature layout:
-        #   [6] = 書字形出現形 (katakana orthographic form — IME-compatible)
-        #   [7] = 書字形基本形 (can be kanji — DO NOT USE as reading)
-        #   [9] = 発音形出現形 (phonetic: う→ー, は→わ — NOT IME input)
+        #   [6]  = 書字形出現形 (dictionary form katakana — wrong for conjugated words)
+        #   [7]  = 書字形基本形 (can be kanji — DO NOT USE)
+        #   [9]  = 発音形出現形 (phonetic: う→ー, は→わ — wrong for IME)
+        #   [17] = 仮名形出現形 (conjugated katakana, no phonetic changes — CORRECT)
         #
-        # Use [6] for IME: ヨホウ→よほう (correct), not ヨホー→よほー
+        # [17] gives: し (not スル), コウショウ (not コーショー), ハ (not ワ)
         reading = None
-        if len(features) >= 7 and features[6] != "*":
-            reading = features[6]
+        if len(features) >= 18 and features[17] != "*":
+            reading = features[17]
+        elif len(features) >= 7 and features[6] != "*":
+            reading = features[6]  # fallback
 
         if reading:
             hira = jaconv.kata2hira(reading)
