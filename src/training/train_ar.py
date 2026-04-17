@@ -115,68 +115,118 @@ class SimpleGPT2(nn.Module):
         return logits
 
 
-def evaluate(model, dataloader, device, collator, max_batches=50):
-    """Quick evaluation on dev set."""
+def evaluate_loss(model, dataloader, device, max_batches=50):
+    """Quick loss/perplexity evaluation (teacher-forced). Used during training."""
     model.eval()
     total_loss = 0.0
     total_tokens = 0
-    eval_result = EvalResult()
-
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100, reduction="sum")
 
     with torch.no_grad():
         for i, batch in enumerate(dataloader):
             if i >= max_batches:
                 break
-
             input_ids = batch["input_ids"].to(device)
             labels = batch["labels"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
             logits = model(input_ids, attention_mask)
-
-            # Shift for causal LM: predict next token
             shift_logits = logits[:, :-1].contiguous()
             shift_labels = labels[:, 1:].contiguous()
 
-            loss = loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss = loss_fn(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+            )
             valid_tokens = (shift_labels != -100).sum().item()
             total_loss += loss.item()
             total_tokens += valid_tokens
 
-            # Greedy decode for CharAcc
-            predictions = logits.argmax(dim=-1)
-            for b in range(input_ids.shape[0]):
-                # Find OUT token position
-                seq = input_ids[b].tolist()
-                if collator.OUT in seq:
-                    out_pos = seq.index(collator.OUT)
-                    # Predicted surface: tokens after OUT until EOS or PAD
-                    pred_ids = []
-                    for t in range(out_pos + 1, len(seq)):
-                        pid = predictions[b, t].item()
-                        if pid == collator.EOS or pid == collator.PAD:
-                            break
-                        pred_ids.append(pid)
-                    pred_text = collator.decode_ids(pred_ids)
-
-                    # Reference surface
-                    ref_ids = []
-                    lab = labels[b].tolist()
-                    for t in range(len(lab)):
-                        if lab[t] != -100 and lab[t] != collator.EOS:
-                            ref_ids.append(lab[t])
-                    ref_text = collator.decode_ids(ref_ids)
-
-                    eval_result.add(ref_text, [pred_text])
-
     avg_loss = total_loss / max(total_tokens, 1)
-    ppl = math.exp(min(avg_loss, 20))  # Cap to avoid overflow
-    return {
-        "loss": avg_loss,
-        "perplexity": ppl,
-        **eval_result.summary(),
-    }
+    ppl = math.exp(min(avg_loss, 20))
+    return {"loss": avg_loss, "perplexity": ppl}
+
+
+@torch.no_grad()
+def autoregressive_generate(
+    model,
+    prefix_ids: list[int],
+    device,
+    max_new_tokens: int = 128,
+    max_seq_len: int = 256,
+    eos_id: int = 3,
+    pad_id: int = 0,
+) -> list[int]:
+    """Generate tokens autoregressively from a prefix.
+
+    Args:
+        model: Causal LM model.
+        prefix_ids: Token IDs for [context SEP reading OUT].
+        max_new_tokens: Maximum tokens to generate.
+        max_seq_len: Maximum total sequence length (prefix + generated).
+        eos_id: EOS token ID.
+
+    Returns:
+        List of generated token IDs (excluding prefix).
+    """
+    model.eval()
+    # Truncate prefix if it's already too long
+    prefix_ids = prefix_ids[-(max_seq_len - 1):]
+    input_ids = torch.tensor([prefix_ids], dtype=torch.long, device=device)
+
+    generated = []
+    for _ in range(max_new_tokens):
+        if input_ids.shape[1] >= max_seq_len:
+            break
+
+        attention_mask = torch.ones_like(input_ids)
+        logits = model(input_ids, attention_mask)
+        next_id = logits[0, -1].argmax().item()
+
+        if next_id == eos_id or next_id == pad_id:
+            break
+
+        generated.append(next_id)
+        next_token = torch.tensor([[next_id]], dtype=torch.long, device=device)
+        input_ids = torch.cat([input_ids, next_token], dim=1)
+
+    return generated
+
+
+def evaluate_characc(model, dev_data, device, collator, max_samples=200):
+    """Evaluate CharAcc with actual autoregressive generation.
+
+    This is the correct metric — model generates from its own outputs,
+    not teacher-forced.
+    """
+    model.eval()
+    eval_result = EvalResult()
+
+    for i, sample in enumerate(dev_data):
+        if i >= max_samples:
+            break
+
+        context = sample.get("context", "")[-40:]
+        reading = sample["reading"]
+        reference = sample["surface"]
+
+        # Build prefix: context [SEP] reading [OUT]
+        ctx_ids = collator.encode_text(context)
+        read_ids = collator.encode_text(reading)
+        prefix = ctx_ids + [collator.SEP] + read_ids + [collator.OUT]
+
+        # Generate autoregressively
+        gen_ids = autoregressive_generate(
+            model, prefix, device,
+            max_new_tokens=len(reference) + 20,
+            eos_id=collator.EOS,
+            pad_id=collator.PAD,
+        )
+        pred_text = collator.decode_ids(gen_ids)
+
+        eval_result.add(reference, [pred_text])
+
+    return eval_result.summary()
 
 
 def save_checkpoint(
@@ -425,13 +475,21 @@ def main():
 
                 # Eval
                 if global_step % args.eval_every == 0:
-                    eval_results = evaluate(model, dev_loader, device, collator)
+                    loss_results = evaluate_loss(
+                        model, dev_loader, device,
+                    )
+                    ar_results = evaluate_characc(
+                        model, dev_dataset.data, device, collator,
+                        max_samples=200,
+                    )
                     print(
-                        f"  [eval] loss={eval_results['loss']:.4f} "
-                        f"ppl={eval_results['perplexity']:.1f} "
-                        f"CharAcc={eval_results.get('char_acc_top1', 0):.4f}",
+                        f"  [eval] loss={loss_results['loss']:.4f} "
+                        f"ppl={loss_results['perplexity']:.1f} "
+                        f"CharAcc(AR)="
+                        f"{ar_results.get('char_acc_top1', 0):.4f}",
                         flush=True,
                     )
+                    eval_results = loss_results
                     if eval_results["loss"] < best_loss:
                         best_loss = eval_results["loss"]
                         best_path = str(output_dir / "best.pt")
