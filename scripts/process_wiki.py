@@ -3,23 +3,28 @@
 Usage:
     uv run python scripts/process_wiki.py \
         --input datasets/src/jawiki-latest-pages-articles.xml.bz2 \
-        --output datasets/wiki_sentences.jsonl
+        --output datasets/wiki_sentences.jsonl \
+        --workers 8
 
-Pipeline:
-    1. Parse XML dump via mwxml + mwparserfromhell (no wikiextractor)
-    2. Strip wikitext markup → plain text
-    3. Split into sentences
-    4. Assign readings via MeCab
-    5. Filter bad sentences
-    6. Output (reading, surface, context) triples as JSONL
+Architecture:
+    Producer (1 thread)  → XML bz2 read + mwparserfromhell strip
+    Worker pool (N procs) → MeCab reading assignment + filtering
+    Writer (1 thread)    → JSONL output
+
+MeCab is CPU-bound and holds the GIL via C extension, so multiprocessing
+(not threading) is required for actual parallelism.
 """
 
 from __future__ import annotations
 
 import argparse
+import bz2
 import json
+import os
 import re
+from multiprocessing import Pool, Queue, Process
 from pathlib import Path
+from queue import Empty
 
 import jaconv
 import MeCab
@@ -42,11 +47,8 @@ def wikitext_to_plain(wikitext: str) -> str:
         text = parsed.strip_code(normalize=True, collapse=True)
     except Exception:
         return ""
-    # Remove section headers (== title ==)
     text = re.sub(r"={2,}.*?={2,}", "", text)
-    # Remove leftover markup artifacts
     text = re.sub(r"\[\[|\]\]|\{\{|\}\}", "", text)
-    # Collapse multiple newlines/spaces
     text = re.sub(r"\n{2,}", "\n", text)
     text = re.sub(r" {2,}", " ", text)
     return text.strip()
@@ -55,12 +57,7 @@ def wikitext_to_plain(wikitext: str) -> str:
 def split_sentences(text: str) -> list[str]:
     """Split text into sentences."""
     sentences = SENTENCE_SPLIT.split(text)
-    result = []
-    for s in sentences:
-        s = s.strip()
-        if s:
-            result.append(s)
-    return result
+    return [s.strip() for s in sentences if s.strip()]
 
 
 def is_valid_sentence(text: str) -> bool:
@@ -77,57 +74,71 @@ def is_valid_sentence(text: str) -> bool:
     return True
 
 
-class ReadingAssigner:
-    """Assign hiragana readings to Japanese text using MeCab."""
+def get_reading(tagger: MeCab.Tagger, text: str) -> str | None:
+    """Get full hiragana reading. Returns None if unreliable."""
+    node = tagger.parseToNode(text)
+    readings = []
 
-    def __init__(self) -> None:
-        self.tagger = MeCab.Tagger()
-        self.tagger.parse("")
-
-    def get_reading(self, text: str) -> str | None:
-        """Get full hiragana reading. Returns None if unreliable."""
-        node = self.tagger.parseToNode(text)
-        readings = []
-
-        while node:
-            surface = node.surface
-            if not surface:
-                node = node.next
-                continue
-
-            features = node.feature.split(",")
-
-            if features[0] == "未知語":
-                return None
-
-            reading = None
-            if len(features) >= 8 and features[7] != "*":
-                reading = features[7]
-            elif len(features) >= 7 and features[6] != "*":
-                reading = features[6]
-
-            if reading:
-                hira = jaconv.kata2hira(reading)
-                # Reject if reading contains ASCII or other non-Japanese chars
-                if any(c.isascii() and c.isalpha() for c in hira):
-                    return None
-                readings.append(hira)
-            elif all("\u3040" <= c <= "\u309f" or not c.strip() for c in surface):
-                readings.append(surface)
-            elif all(c in "、。！？「」『』（）・…―─　\n\r\t " for c in surface):
-                readings.append(surface)
-            else:
-                return None
-
+    while node:
+        surface = node.surface
+        if not surface:
             node = node.next
+            continue
 
-        return "".join(readings)
+        features = node.feature.split(",")
+
+        if features[0] == "未知語":
+            return None
+
+        reading = None
+        if len(features) >= 8 and features[7] != "*":
+            reading = features[7]
+        elif len(features) >= 7 and features[6] != "*":
+            reading = features[6]
+
+        if reading:
+            hira = jaconv.kata2hira(reading)
+            if any(c.isascii() and c.isalpha() for c in hira):
+                return None
+            readings.append(hira)
+        elif all("\u3040" <= c <= "\u309f" or not c.strip() for c in surface):
+            readings.append(surface)
+        elif all(c in "、。！？「」『』（）・…―─　\n\r\t " for c in surface):
+            readings.append(surface)
+        else:
+            return None
+
+        node = node.next
+
+    return "".join(readings)
 
 
-def iter_wiki_articles(dump_path: str):
-    """Iterate over Wikipedia articles from XML bz2 dump."""
-    import bz2
+def process_article_batch(sentences_batch: list[list[str]]) -> list[list[dict]]:
+    """Worker function: process a batch of articles (list of sentence lists).
 
+    Each worker creates its own MeCab tagger (not shared across processes).
+    Returns list of article results, each a list of {reading, surface} dicts.
+    """
+    tagger = MeCab.Tagger()
+    tagger.parse("")
+
+    results = []
+    for sentences in sentences_batch:
+        article_pairs = []
+        for sent in sentences:
+            if not is_valid_sentence(sent):
+                continue
+            reading = get_reading(tagger, sent)
+            if reading is None:
+                continue
+            article_pairs.append({"reading": reading, "surface": sent})
+        results.append(article_pairs)
+    return results
+
+
+def iter_wiki_articles(dump_path: str, max_articles: int = 0):
+    """Iterate over Wikipedia articles, yielding (title, sentence_list) tuples."""
+    count = 0
     with bz2.open(dump_path, "rt", encoding="utf-8") as f:
         dump = mwxml.Dump.from_file(f)
         for page in dump:
@@ -135,7 +146,14 @@ def iter_wiki_articles(dump_path: str):
                 continue
             for revision in page:
                 if revision.text:
-                    yield page.title, revision.text
+                    plain = wikitext_to_plain(revision.text)
+                    if plain:
+                        sentences = split_sentences(plain)
+                        if sentences:
+                            yield sentences
+                            count += 1
+                            if max_articles and count >= max_articles:
+                                return
                 break
 
 
@@ -144,50 +162,68 @@ def main():
     parser.add_argument("--input", required=True, help="Path to jawiki XML bz2 dump")
     parser.add_argument("--output", required=True, help="Output JSONL path")
     parser.add_argument("--max-articles", type=int, default=0, help="Limit articles (0=all)")
+    parser.add_argument("--workers", type=int, default=0, help="Worker processes (0=auto)")
+    parser.add_argument("--batch-size", type=int, default=500, help="Articles per worker batch")
     args = parser.parse_args()
+
+    num_workers = args.workers or max(1, os.cpu_count() - 2)
+    print(f"Using {num_workers} worker processes, batch size {args.batch_size}")
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    assigner = ReadingAssigner()
     total_pairs = 0
     total_articles = 0
+    batch: list[list[str]] = []
 
-    with open(output_path, "w", encoding="utf-8") as out:
-        for title, wikitext in iter_wiki_articles(args.input):
-            plain_text = wikitext_to_plain(wikitext)
-            if not plain_text:
-                continue
+    with open(output_path, "w", encoding="utf-8") as out, \
+         Pool(processes=num_workers) as pool:
 
-            sentences = split_sentences(plain_text)
-            prev_surface = ""
+        pending = []
 
-            for sent in sentences:
-                if not is_valid_sentence(sent):
-                    prev_surface = ""
-                    continue
-
-                reading = assigner.get_reading(sent)
-                if reading is None:
-                    prev_surface = ""
-                    continue
-
-                context = prev_surface[-40:] if prev_surface else ""
-                pair = {
-                    "reading": reading,
-                    "surface": sent,
-                    "context": context,
-                }
-                out.write(json.dumps(pair, ensure_ascii=False) + "\n")
-                total_pairs += 1
-                prev_surface = sent
-
+        for sentences in iter_wiki_articles(args.input, args.max_articles):
+            batch.append(sentences)
             total_articles += 1
-            if total_articles % 10000 == 0:
-                print(f"  {total_articles} articles, {total_pairs} pairs...")
 
-            if args.max_articles and total_articles >= args.max_articles:
-                break
+            if len(batch) >= args.batch_size:
+                # Submit batch to pool
+                pending.append(pool.apply_async(process_article_batch, (batch,)))
+                batch = []
+
+            # Drain completed results
+            still_pending = []
+            for future in pending:
+                if future.ready():
+                    for article_pairs in future.get():
+                        prev_surface = ""
+                        for pair in article_pairs:
+                            context = prev_surface[-40:] if prev_surface else ""
+                            pair["context"] = context
+                            out.write(json.dumps(pair, ensure_ascii=False) + "\n")
+                            total_pairs += 1
+                            prev_surface = pair["surface"]
+                else:
+                    still_pending.append(future)
+            pending = still_pending
+
+            if total_articles % 10000 == 0:
+                print(f"  {total_articles} articles, {total_pairs} pairs, "
+                      f"{len(pending)} batches pending...")
+
+        # Submit remaining batch
+        if batch:
+            pending.append(pool.apply_async(process_article_batch, (batch,)))
+
+        # Drain all remaining
+        for future in pending:
+            for article_pairs in future.get():
+                prev_surface = ""
+                for pair in article_pairs:
+                    context = prev_surface[-40:] if prev_surface else ""
+                    pair["context"] = context
+                    out.write(json.dumps(pair, ensure_ascii=False) + "\n")
+                    total_pairs += 1
+                    prev_surface = pair["surface"]
 
     print(f"\nDone: {total_articles} articles -> {total_pairs} sentence pairs")
     print(f"Output: {output_path}")
