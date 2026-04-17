@@ -134,6 +134,34 @@ class CTCCollator:
         }
 
 
+def move_batch_to_device(batch: dict, device: torch.device) -> dict:
+    return {
+        k: (v.to(device, non_blocking=True) if torch.is_tensor(v) else v)
+        for k, v in batch.items()
+    }
+
+
+def resolve_num_workers(requested: int, device: torch.device) -> int:
+    if requested >= 0:
+        return requested
+    return 2 if device.type == "cuda" else 0
+
+
+def should_run_kd_microbatch(
+    step: int,
+    batch_idx: int,
+    grad_accum: int,
+    teacher: ARTeacher | None,
+    kd_config: KDConfig,
+) -> bool:
+    if teacher is None:
+        return False
+    if grad_accum <= 1:
+        return kd_config.active(step)
+    is_optimizer_boundary = ((batch_idx + 1) % grad_accum) == 0
+    return is_optimizer_boundary and kd_config.active(step)
+
+
 def build_model(preset: str, vocab_size: int, use_cvae: bool) -> CTCNAT:
     return CTCNAT.from_preset(preset, vocab_size=vocab_size, use_cvae=use_cvae, blank_id=BLANK_ID)
 
@@ -436,6 +464,8 @@ def make_dataloader(
     num_workers: int,
     seed: int = 42,
     short_sample_max_chars: int = 0,
+    max_context: int = 40,
+    pin_memory: bool = False,
 ):
     dataset = KanaKanjiDataset(path, max_samples=max_samples, seed=seed)
     if short_sample_max_chars > 0:
@@ -452,14 +482,23 @@ def make_dataloader(
     collator = CTCCollator(
         tokenizer,
         max_seq_len=max_seq_len,
+        max_context=max_context,
         short_sample_max_chars=short_sample_max_chars,
     )
-    return DataLoader(
-        dataset,
+    loader_kwargs = dict(
+        dataset=dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         collate_fn=collator,
         num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=shuffle,
+    )
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 2
+    return DataLoader(
+        **loader_kwargs,
     )
 
 
@@ -499,6 +538,8 @@ def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher 
 
 def train_local(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_workers = resolve_num_workers(args.num_workers, device)
+    pin_memory = device.type == "cuda"
     tokenizer = build_tokenizer(args)
     model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -527,9 +568,11 @@ def train_local(args: argparse.Namespace) -> None:
         max_seq_len=args.max_seq_len,
         max_samples=args.tiny_overfit_samples or args.max_train_samples,
         shuffle=True,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
         seed=args.seed,
         short_sample_max_chars=args.short_sample_max_chars,
+        max_context=args.max_context,
+        pin_memory=pin_memory,
     )
     eval_path = args.dev
     eval_max_samples = args.max_dev_samples
@@ -551,7 +594,30 @@ def train_local(args: argparse.Namespace) -> None:
         num_workers=0,
         seed=eval_seed,
         short_sample_max_chars=args.short_sample_max_chars if args.tiny_overfit_samples else 0,
+        max_context=args.max_context,
+        pin_memory=pin_memory,
     )
+
+    warmup_loader = None
+    if (
+        args.warmup_short_sample_steps > 0
+        and args.warmup_short_sample_max_chars > 0
+        and args.tiny_overfit_samples == 0
+        and start_step < args.warmup_short_sample_steps
+    ):
+        warmup_loader = make_dataloader(
+            args.train,
+            tokenizer=tokenizer,
+            batch_size=args.batch_size,
+            max_seq_len=args.max_seq_len,
+            max_samples=args.max_train_samples,
+            shuffle=True,
+            num_workers=num_workers,
+            seed=args.seed,
+            short_sample_max_chars=args.warmup_short_sample_max_chars,
+            max_context=args.max_context,
+            pin_memory=pin_memory,
+        )
 
     estimate = estimate_training_memory(
         model,
@@ -562,6 +628,16 @@ def train_local(args: argparse.Namespace) -> None:
         use_adamw=True,
     )
     print(format_memory_table(estimate, peak_gb=None))
+    print(
+        f"dataloader: workers={num_workers} pin_memory={pin_memory} "
+        f"persistent_workers={num_workers > 0}"
+    )
+    if warmup_loader is not None:
+        print(
+            "short-sample warmup: "
+            f"steps={args.warmup_short_sample_steps} "
+            f"max_chars={args.warmup_short_sample_max_chars}"
+        )
     if args.tiny_overfit_samples:
         effective_batches = math.ceil(args.tiny_overfit_samples / args.batch_size)
         effective_steps_per_epoch = math.ceil(effective_batches / args.grad_accum)
@@ -584,7 +660,196 @@ def train_local(args: argparse.Namespace) -> None:
     last_log = time.perf_counter()
     running_losses: deque[float] = deque(maxlen=args.loss_window)
     kd_stats = {"loss_sum": 0.0, "hard_sum": 0, "total_sum": 0, "conf_sum": 0.0, "batches": 0}
+
+    def fetch_next_batch(loader_iter, loader):
+        try:
+            batch = next(loader_iter)
+        except StopIteration:
+            loader_iter = iter(loader)
+            batch = next(loader_iter)
+        return batch, loader_iter
+
+    def run_microbatch(batch, batch_idx: int, epoch_idx: int) -> None:
+        nonlocal step, last_log, kd_stats, best_metric
+
+        contexts = batch.get("_contexts", [])
+        readings = batch.get("_readings", [])
+        batch = move_batch_to_device(batch, device)
+        kwargs = {}
+        if args.use_cvae:
+            kwargs.update(
+                writer_ids=batch["writer_ids"],
+                domain_ids=batch["domain_ids"],
+                source_ids=batch["source_ids"],
+            )
+
+        run_kd = should_run_kd_microbatch(step, batch_idx, args.grad_accum, teacher, kd_config)
+        with torch.amp.autocast(device_type=autocast_device, enabled=use_amp):
+            result = model(
+                input_ids=batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                target_ids=batch["target_ids"],
+                target_lengths=batch["target_lengths"],
+                **kwargs,
+            )
+            loss = result["loss"]
+            if args.use_cvae and "kl" in result:
+                loss = loss + args.kl_weight * result["kl"]
+
+            if run_kd:
+                with torch.no_grad():
+                    teacher_texts, teacher_conf = teacher.generate(
+                        contexts=contexts,
+                        readings=readings,
+                        max_new_tokens=kd_config.max_new_tokens,
+                    )
+                conf_tensor = torch.tensor(teacher_conf, device=device)
+                hard_mask = hard_example_mask(conf_tensor, kd_config.hard_threshold)
+                teacher_ids, teacher_lengths = encode_texts_for_student(
+                    teacher_texts,
+                    tokenizer=tokenizer,
+                    max_len=args.max_seq_len,
+                )
+                kd_loss_value, num_hard = compute_kd_ctc_loss(
+                    student_log_probs=result["log_probs"],
+                    input_lengths=batch["attention_mask"].sum(dim=1).long(),
+                    teacher_ids=teacher_ids,
+                    teacher_lengths=teacher_lengths,
+                    hard_mask=hard_mask,
+                    blank_id=BLANK_ID,
+                )
+                alpha_now = kd_config.alpha_at(step)
+                if num_hard > 0 and alpha_now > 0.0:
+                    # KD fires on only 1 of grad_accum microbatches per active
+                    # optimizer step. The subsequent `loss / grad_accum` would
+                    # otherwise shrink the KD contribution by that same factor.
+                    # Pre-multiply so --kd-alpha acts as a grad_accum-invariant
+                    # weight on the KD term.
+                    loss = loss + alpha_now * args.grad_accum * kd_loss_value
+                kd_stats["loss_sum"] += float(kd_loss_value.detach().item())
+                kd_stats["hard_sum"] += num_hard
+                kd_stats["total_sum"] += len(teacher_texts)
+                kd_stats["conf_sum"] += (
+                    float(conf_tensor.mean().item()) if conf_tensor.numel() else 0.0
+                )
+                kd_stats["batches"] += 1
+
+            loss = loss / args.grad_accum
+
+        if use_amp:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        if (batch_idx + 1) % args.grad_accum == 0:
+            if use_amp:
+                scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            if use_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            step += 1
+            current_loss = loss.item() * args.grad_accum
+            running_losses.append(current_loss)
+
+            if step % args.log_every == 0:
+                now = time.perf_counter()
+                rate = args.log_every / max(now - last_log, 1e-6)
+                last_log = now
+                avg_loss = sum(running_losses) / max(len(running_losses), 1)
+                lr = optimizer.param_groups[0]["lr"]
+                line = (
+                    f"[step {step}] loss={current_loss:.4f} "
+                    f"avg{args.loss_window}={avg_loss:.4f} "
+                    f"lr={lr:.6f} rate={rate:.2f} steps/s"
+                )
+                if teacher is not None and kd_stats["batches"] > 0:
+                    kd_avg = kd_stats["loss_sum"] / kd_stats["batches"]
+                    hard_ratio = kd_stats["hard_sum"] / max(kd_stats["total_sum"], 1)
+                    conf_avg = kd_stats["conf_sum"] / kd_stats["batches"]
+                    alpha_now = kd_config.alpha_at(step)
+                    line += (
+                        f" kd_loss={kd_avg:.4f} "
+                        f"kd_hard={hard_ratio:.2f} "
+                        f"kd_conf={conf_avg:.2f} "
+                        f"kd_alpha={alpha_now:.3f}"
+                    )
+                print(line)
+                kd_stats = {
+                    "loss_sum": 0.0,
+                    "hard_sum": 0,
+                    "total_sum": 0,
+                    "conf_sum": 0.0,
+                    "batches": 0,
+                }
+
+            if step % args.eval_every == 0:
+                metrics, samples = evaluate_model(
+                    model,
+                    dev_loader,
+                    tokenizer=tokenizer,
+                    device=device,
+                    use_cvae=args.use_cvae,
+                    max_batches=args.eval_batches,
+                    print_samples=args.print_samples,
+                )
+                print(
+                    f"[eval {step}] loss={metrics['loss']:.4f} "
+                    f"EM={metrics.get('exact_match_top1', 0):.4f} "
+                    f"CharAcc={metrics.get('char_acc_top1', 0):.4f} "
+                    f"blank={metrics.get('blank_fraction', 0):.3f} "
+                    f"pred_len={metrics.get('mean_decoded_chars', 0):.1f}/"
+                    f"{metrics.get('mean_target_chars', 0):.1f}"
+                )
+                for idx, sample in enumerate(samples, start=1):
+                    print(
+                        f"  sample{idx}: ref={sample['reference'][:40]} "
+                        f"pred={sample['prediction'][:40]}"
+                    )
+                metric_key = metrics.get("exact_match_top1", 0.0)
+                if metric_key > best_metric:
+                    best_metric = metric_key
+                    save_checkpoint(
+                        os.path.join(args.output, "best.pt"),
+                        model,
+                        optimizer,
+                        scheduler,
+                        step=step,
+                        epoch=epoch_idx,
+                        tokenizer=tokenizer,
+                        best_metric=best_metric,
+                        args=args,
+                    )
+
+            if step % args.checkpoint_every == 0:
+                save_checkpoint(
+                    os.path.join(args.output, f"checkpoint_step_{step}.pt"),
+                    model,
+                    optimizer,
+                    scheduler,
+                    step=step,
+                    epoch=epoch_idx,
+                    tokenizer=tokenizer,
+                    best_metric=best_metric,
+                    args=args,
+                )
+
     try:
+        if warmup_loader is not None:
+            warmup_iter = iter(warmup_loader)
+            while step < args.warmup_short_sample_steps:
+                for warmup_batch_idx in range(args.grad_accum):
+                    if args.max_steps and step >= args.max_steps:
+                        raise StopIteration
+                    batch, warmup_iter = fetch_next_batch(warmup_iter, warmup_loader)
+                    run_microbatch(batch, batch_idx=warmup_batch_idx, epoch_idx=start_epoch)
+                    if step >= args.warmup_short_sample_steps:
+                        break
+
         for epoch in range(start_epoch, args.epochs):
             model.train()
             optimizer.zero_grad(set_to_none=True)
@@ -592,168 +857,7 @@ def train_local(args: argparse.Namespace) -> None:
             for batch_idx, batch in enumerate(train_loader):
                 if args.max_steps and step >= args.max_steps:
                     raise StopIteration
-
-                contexts = batch.get("_contexts", [])
-                readings = batch.get("_readings", [])
-                batch = {
-                    k: (v.to(device) if torch.is_tensor(v) else v)
-                    for k, v in batch.items()
-                }
-                kwargs = {}
-                if args.use_cvae:
-                    kwargs.update(
-                        writer_ids=batch["writer_ids"],
-                        domain_ids=batch["domain_ids"],
-                        source_ids=batch["source_ids"],
-                    )
-
-                run_kd = teacher is not None and kd_config.active(step)
-                with torch.amp.autocast(device_type=autocast_device, enabled=use_amp):
-                    result = model(
-                        input_ids=batch["input_ids"],
-                        attention_mask=batch["attention_mask"],
-                        target_ids=batch["target_ids"],
-                        target_lengths=batch["target_lengths"],
-                        **kwargs,
-                    )
-                    loss = result["loss"]
-                    if args.use_cvae and "kl" in result:
-                        loss = loss + args.kl_weight * result["kl"]
-
-                    if run_kd:
-                        with torch.no_grad():
-                            teacher_texts, teacher_conf = teacher.generate(
-                                contexts=contexts,
-                                readings=readings,
-                                max_new_tokens=kd_config.max_new_tokens,
-                            )
-                        conf_tensor = torch.tensor(teacher_conf, device=device)
-                        hard_mask = hard_example_mask(conf_tensor, kd_config.hard_threshold)
-                        teacher_ids, teacher_lengths = encode_texts_for_student(
-                            teacher_texts,
-                            tokenizer=tokenizer,
-                            max_len=args.max_seq_len,
-                        )
-                        kd_loss_value, num_hard = compute_kd_ctc_loss(
-                            student_log_probs=result["log_probs"],
-                            input_lengths=batch["attention_mask"].sum(dim=1).long(),
-                            teacher_ids=teacher_ids,
-                            teacher_lengths=teacher_lengths,
-                            hard_mask=hard_mask,
-                            blank_id=BLANK_ID,
-                        )
-                        alpha_now = kd_config.alpha_at(step)
-                        if num_hard > 0 and alpha_now > 0.0:
-                            loss = loss + alpha_now * kd_loss_value
-                        kd_stats["loss_sum"] += float(kd_loss_value.detach().item())
-                        kd_stats["hard_sum"] += num_hard
-                        kd_stats["total_sum"] += len(teacher_texts)
-                        kd_stats["conf_sum"] += float(conf_tensor.mean().item()) if conf_tensor.numel() else 0.0
-                        kd_stats["batches"] += 1
-
-                    loss = loss / args.grad_accum
-
-                if use_amp:
-                    scaler.scale(loss).backward()
-                else:
-                    loss.backward()
-
-                if (batch_idx + 1) % args.grad_accum == 0:
-                    if use_amp:
-                        scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                    if use_amp:
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad(set_to_none=True)
-                    step += 1
-                    current_loss = loss.item() * args.grad_accum
-                    running_losses.append(current_loss)
-
-                    if step % args.log_every == 0:
-                        now = time.perf_counter()
-                        rate = args.log_every / max(now - last_log, 1e-6)
-                        last_log = now
-                        avg_loss = sum(running_losses) / max(len(running_losses), 1)
-                        lr = optimizer.param_groups[0]["lr"]
-                        line = (
-                            f"[step {step}] loss={current_loss:.4f} "
-                            f"avg{args.loss_window}={avg_loss:.4f} "
-                            f"lr={lr:.6f} rate={rate:.2f} steps/s"
-                        )
-                        if teacher is not None and kd_stats["batches"] > 0:
-                            kd_avg = kd_stats["loss_sum"] / kd_stats["batches"]
-                            hard_ratio = kd_stats["hard_sum"] / max(kd_stats["total_sum"], 1)
-                            conf_avg = kd_stats["conf_sum"] / kd_stats["batches"]
-                            alpha_now = kd_config.alpha_at(step)
-                            line += (
-                                f" kd_loss={kd_avg:.4f} "
-                                f"kd_hard={hard_ratio:.2f} "
-                                f"kd_conf={conf_avg:.2f} "
-                                f"kd_alpha={alpha_now:.3f}"
-                            )
-                        print(line)
-                        kd_stats = {
-                            "loss_sum": 0.0,
-                            "hard_sum": 0,
-                            "total_sum": 0,
-                            "conf_sum": 0.0,
-                            "batches": 0,
-                        }
-
-                    if step % args.eval_every == 0:
-                        metrics, samples = evaluate_model(
-                            model,
-                            dev_loader,
-                            tokenizer=tokenizer,
-                            device=device,
-                            use_cvae=args.use_cvae,
-                            max_batches=args.eval_batches,
-                            print_samples=args.print_samples,
-                        )
-                        print(
-                            f"[eval {step}] loss={metrics['loss']:.4f} "
-                            f"EM={metrics.get('exact_match_top1', 0):.4f} "
-                            f"CharAcc={metrics.get('char_acc_top1', 0):.4f} "
-                            f"blank={metrics.get('blank_fraction', 0):.3f} "
-                            f"pred_len={metrics.get('mean_decoded_chars', 0):.1f}/"
-                            f"{metrics.get('mean_target_chars', 0):.1f}"
-                        )
-                        for idx, sample in enumerate(samples, start=1):
-                            print(
-                                f"  sample{idx}: ref={sample['reference'][:40]} "
-                                f"pred={sample['prediction'][:40]}"
-                            )
-                        metric_key = metrics.get("exact_match_top1", 0.0)
-                        if metric_key > best_metric:
-                            best_metric = metric_key
-                            save_checkpoint(
-                                os.path.join(args.output, "best.pt"),
-                                model,
-                                optimizer,
-                                scheduler,
-                                step=step,
-                                epoch=epoch,
-                                tokenizer=tokenizer,
-                                best_metric=best_metric,
-                                args=args,
-                            )
-
-                    if step % args.checkpoint_every == 0:
-                        save_checkpoint(
-                            os.path.join(args.output, f"checkpoint_step_{step}.pt"),
-                            model,
-                            optimizer,
-                            scheduler,
-                            step=step,
-                            epoch=epoch,
-                            tokenizer=tokenizer,
-                            best_metric=best_metric,
-                            args=args,
-                        )
+                run_microbatch(batch, batch_idx=batch_idx, epoch_idx=epoch)
 
     except KeyboardInterrupt:
         print("\nInterrupted. Saving checkpoint before exit...")
@@ -804,7 +908,12 @@ def main() -> None:
     parser.add_argument("--tokenizer-path", default="", help="Path to a saved SharedCharTokenizer JSON")
     parser.add_argument("--max-train-samples", type=int, default=200_000)
     parser.add_argument("--max-dev-samples", type=int, default=2_000)
-    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=-1,
+        help="-1 auto-selects 2 workers on CUDA and 0 on CPU",
+    )
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--grad-clip", type=float, default=1.0)
@@ -812,6 +921,8 @@ def main() -> None:
     parser.add_argument("--warmup-steps", type=int, default=1000)
     parser.add_argument("--tiny-overfit-samples", type=int, default=0)
     parser.add_argument("--short-sample-max-chars", type=int, default=0)
+    parser.add_argument("--warmup-short-sample-steps", type=int, default=0)
+    parser.add_argument("--warmup-short-sample-max-chars", type=int, default=0)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--checkpoint-every", type=int, default=2000)
     parser.add_argument("--eval-every", type=int, default=2000)
@@ -822,7 +933,12 @@ def main() -> None:
     parser.add_argument("--tiny-overfit-eval-train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--estimate-only", action="store_true")
-    parser.add_argument("--max-context", type=int, default=40, help="Max context chars fed to teacher")
+    parser.add_argument(
+        "--max-context",
+        type=int,
+        default=40,
+        help="Max context chars fed to both the student encoder and the AR teacher",
+    )
 
     kd_group = parser.add_argument_group("online KD (AR teacher)")
     kd_group.add_argument("--kd-teacher-path", default="", help="AR teacher checkpoint (.pt)")
@@ -840,10 +956,8 @@ def main() -> None:
         type=int,
         default=4,
         help=(
-            "Gate KD on optimizer-step boundary: KD runs for every microbatch "
-            "of an optimizer step where (step %% N == 0). With grad_accum=M and "
-            "kd_every=N, teacher inference fires on M microbatches per N "
-            "optimizer steps (ratio M/N of microbatches)."
+            "Apply KD every N optimizer steps. KD only runs on the microbatch "
+            "that triggers optimizer.step(), not on every accumulation shard."
         ),
     )
     kd_group.add_argument("--kd-max-new-tokens", type=int, default=96)

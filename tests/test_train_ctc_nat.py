@@ -9,8 +9,11 @@ from src.training.train_ctc_nat import (
     build_tokenizer,
     build_model,
     estimate_training_memory,
+    resolve_num_workers,
+    should_run_kd_microbatch,
     validate_resume_compatibility,
 )
+from src.training.kd import KDConfig
 
 
 def test_estimate_training_memory_for_30m():
@@ -173,3 +176,50 @@ def test_build_tokenizer_from_path(tmp_path: Path):
     args = argparse.Namespace(tokenizer_path=str(tokenizer_path), max_kanji=9999)
     loaded = build_tokenizer(args)
     assert loaded.vocab_size == tokenizer.vocab_size
+
+
+def test_resolve_num_workers_auto_cuda():
+    device = argparse.Namespace(type="cuda")
+    assert resolve_num_workers(-1, device) == 2
+
+
+def test_resolve_num_workers_explicit_zero():
+    device = argparse.Namespace(type="cuda")
+    assert resolve_num_workers(0, device) == 0
+
+
+def test_should_run_kd_microbatch_only_on_boundary():
+    cfg = KDConfig(alpha=0.3, every=4)
+    teacher = object()
+    # Before accumulation boundary: no KD.
+    assert not should_run_kd_microbatch(0, batch_idx=0, grad_accum=4, teacher=teacher, kd_config=cfg)
+    assert not should_run_kd_microbatch(0, batch_idx=2, grad_accum=4, teacher=teacher, kd_config=cfg)
+    # Boundary microbatch on active optimizer step: KD runs.
+    assert should_run_kd_microbatch(0, batch_idx=3, grad_accum=4, teacher=teacher, kd_config=cfg)
+    # Boundary microbatch on inactive optimizer step: no KD.
+    assert not should_run_kd_microbatch(1, batch_idx=3, grad_accum=4, teacher=teacher, kd_config=cfg)
+
+
+def test_kd_boundary_scaling_is_grad_accum_invariant():
+    """Regression: KD fires on 1/grad_accum microbatches, so we pre-multiply by
+    grad_accum before the shared `loss / grad_accum` division. The accumulated
+    per-optimizer-step loss must then equal `ctc + alpha * kd` regardless of
+    grad_accum."""
+    ctc = 1.0
+    kd = 2.0
+    alpha = 0.3
+
+    def per_opt_step(grad_accum: int) -> float:
+        # Mirrors the loss arithmetic in run_microbatch:
+        #   boundary microbatch:    (ctc + alpha * grad_accum * kd) / grad_accum
+        #   non-boundary microbatches:  ctc / grad_accum
+        # Gradient accumulation sums them.
+        boundary = (ctc + alpha * grad_accum * kd) / grad_accum
+        non_boundary = ctc / grad_accum
+        return (grad_accum - 1) * non_boundary + boundary
+
+    expected = ctc + alpha * kd
+    for grad_accum in [1, 2, 4, 8, 16]:
+        assert abs(per_opt_step(grad_accum) - expected) < 1e-9, (
+            f"grad_accum={grad_accum}: got {per_opt_step(grad_accum)}, want {expected}"
+        )
