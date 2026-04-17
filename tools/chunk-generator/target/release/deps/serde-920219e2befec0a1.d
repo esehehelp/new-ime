@@ -1,0 +1,14 @@
+/mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/deps/serde-920219e2befec0a1.d: /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/build/serde-c0a593441f8c5c6c/out/private.rs
+
+/mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/deps/libserde-920219e2befec0a1.rlib: /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/build/serde-c0a593441f8c5c6c/out/private.rs
+
+/mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/deps/libserde-920219e2befec0a1.rmeta: /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/build/serde-c0a593441f8c5c6c/out/private.rs
+
+/home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/esehe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/build/serde-c0a593441f8c5c6c/out/private.rs:
+
+# env-dep:OUT_DIR=/mnt/c/Users/admin/Dev/new-ime/tools/chunk-generator/target/release/build/serde-c0a593441f8c5c6c/out
