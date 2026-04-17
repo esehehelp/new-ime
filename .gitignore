@@ -1,0 +1,46 @@
+# Reference repos (cloned for reading, not part of this project)
+/references/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+uv.lock
+
+# C++ build
+build/
+cmake-build-*/
+compile_commands.json
+
+# ML artifacts
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+*.pt
+*.pth
+checkpoints/
+wandb/
+
+# Data
+data/raw/
+data/processed/
+*.bz2
+*.gz
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(git clone:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)",
+      "Bash(find \"C:\\\\Users\\\\admin\\\\Dev\\\\new-ime\\\\references\\\\hazkey\\\\hazkey-server\\\\Sources\\\\hazkey-server\" -name \"*.swift\" -exec wc -l {} +)",
+      "Bash(xargs wc:*)",
+      "Bash(python -m pytest tests/test_tokenizer.py -v)",
+      "Bash(uv init:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)"
+    ]
+  }
+}
