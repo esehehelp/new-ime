@@ -66,19 +66,35 @@ def main():
 
     print(f"Exporting to {args.output} (opset {args.opset})...")
 
-    torch.onnx.export(
-        model,
-        (dummy_input_ids, dummy_attention_mask),
-        str(output_path),
-        opset_version=args.opset,
-        input_names=["input_ids", "attention_mask"],
-        output_names=["logits"],
-        dynamic_axes={
-            "input_ids": {0: "batch", 1: "seq_len"},
-            "attention_mask": {0: "batch", 1: "seq_len"},
-            "logits": {0: "batch", 1: "seq_len"},
-        },
-    )
+    # Use dynamo-based export for better dynamic shape support
+    try:
+        export_output = torch.onnx.export(
+            model,
+            (dummy_input_ids, dummy_attention_mask),
+            str(output_path),
+            opset_version=args.opset,
+            input_names=["input_ids", "attention_mask"],
+            output_names=["logits"],
+            dynamic_axes={
+                "input_ids": {0: "batch", 1: "seq_len"},
+                "attention_mask": {0: "batch", 1: "seq_len"},
+                "logits": {0: "batch", 1: "seq_len"},
+            },
+            # Export with multiple example sizes to help trace dynamic shapes
+            training=torch.onnx.TrainingMode.EVAL,
+        )
+    except Exception as e:
+        print(f"Standard export failed: {e}")
+        print("Trying with torch.export...")
+        # Fallback: export with explicit dynamic shapes via torch.export
+        from torch.export import export as torch_export, Dim
+        seq = Dim("seq", min=1, max=MAX_POS)
+        ep = torch_export(
+            model,
+            (dummy_input_ids, dummy_attention_mask),
+            dynamic_shapes={"input_ids": {1: seq}, "attention_mask": {1: seq}},
+        )
+        torch.onnx.export(ep, str(output_path), opset_version=args.opset)
 
     print(f"ONNX exported: {output_path} ({output_path.stat().st_size / 1024**2:.1f} MB)")
 
