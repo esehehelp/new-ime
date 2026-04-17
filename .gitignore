@@ -15,6 +15,7 @@ uv.lock
 
 # C++ build
 build/
+build_test/
 cmake-build-*/
 compile_commands.json
 
