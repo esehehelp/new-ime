@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -58,6 +58,7 @@ class KDConfig:
 
     alpha: float = 0.3
     hard_threshold: float = 0.6
+    gate_mode: Literal["low_conf", "high_conf", "all"] = "low_conf"
     start_step: int = 0
     warmup_steps: int = 0
     every: int = 1
@@ -311,8 +312,22 @@ def encode_texts_for_student(
     return ids_tensor, length_tensor
 
 
-def hard_example_mask(confidences: torch.Tensor, threshold: float) -> torch.Tensor:
-    """Return True for samples whose teacher confidence is below threshold."""
+def hard_example_mask(
+    confidences: torch.Tensor,
+    threshold: float,
+    mode: Literal["low_conf", "high_conf", "all"] = "low_conf",
+) -> torch.Tensor:
+    """Select which samples contribute to KD.
+
+    Modes:
+    - low_conf: teacher is uncertain, useful for "hard-example" KD.
+    - high_conf: teacher is confident, useful for stabilizing the student.
+    - all: apply KD to every sample and ignore the threshold.
+    """
+    if mode == "all":
+        return torch.ones_like(confidences, dtype=torch.bool)
+    if mode == "high_conf":
+        return confidences >= threshold
     return confidences < threshold
 
 

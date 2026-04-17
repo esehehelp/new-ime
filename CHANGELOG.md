@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-04-18 (later-2): データソース拡充 (Step C) scaffolding
+
+### 追加ソース (downloader + processor)
+
+- **zenz-v2.5 llm-jp-corpus-v3 subset** (ODC-BY, 30.2 GB): 既に kana-kanji pair 形式。
+  `scripts/download_zenz_subset.py` / `scripts/process_zenz_subset.py`。
+  入力カタカナ → ひらがなへ `jaconv.kata2hira` 変換、長さフィルタ、オプション 6-gram 汚染監査。
+  CC-BY-SA な `train_wikipedia.jsonl` は明示拒否。
+- **HPLT v3 ja (jpn_Jpan)** (CC0-1.0): `.jsonl.zst` の 38 shard (tier 10 = 3.1 GB ~ tier 5 = 37.8 GB/shard)。
+  `scripts/download_hplt3_ja.py` (shard map fetch, tier filter, resume 対応) + `scripts/process_hplt.py`。
+- **FineWeb-2 jpn_Jpan** (ODC-By, 474 parquet shards × ~4.6 GB): CulturaX は gated のため代替採用。
+  `scripts/download_fineweb2_ja.py` / `scripts/process_fineweb2.py`。
+
+### 共通化
+
+- `src/data/mecab_pipeline.py` 新規: `worker_init`, `text_to_pairs`, `attach_context`, sentence
+  filters, `reading_from_mecab` (features[17] 固定)。`scripts/process_wiki.py` を
+  thin wrapper に refactor、HPLT / FineWeb-2 から同一 worker を再利用。
+- `scripts/audit_pools.py` 拡張: source タグ集計 + `SOURCE_LICENSE` テーブル引き、
+  `ATTRIBUTION.md` 同梱検査、デフォルトの eval 汚染比較対象に `eval_v3/test.jsonl` 追加。
+- `pyproject.toml`: `zstandard` を依存に追加 (HPLT shard 展開)。
+
+### 依存
+
+- MIT 互換のみ (ODC-BY / CC0 / ODC-By の 3 種)。
+- 各ソース DL 先に `ATTRIBUTION.md` 自動生成、attribution 義務を監査で検出可能に。
+- `datasets/src/<source>/` 構造を plan 通り踏襲。
+
+### テスト
+
+- `tests/test_mecab_pipeline.py` 8 件追加 (sentence split, filters, context attach, worker_init guard)。
+- 全 suite 120 pass。
+
 ## 2026-04-18 (later): オンライン KD 実装
 
 ### 追加

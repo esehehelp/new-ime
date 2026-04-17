@@ -15,12 +15,25 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 KANJI_START = 0x4E00
 KANJI_END = 0x9FFF
+
+# Source tag → license mapping. Populated as new corpora land.
+# "unknown" marks a legacy pool that predates the source-tag convention.
+SOURCE_LICENSE: dict[str, str] = {
+    "zenz_llmjp": "ODC-BY 1.0 (Common Crawl subset of llm-jp-corpus-v3)",
+    "hplt3_ja": "CC0-1.0 (Common Crawl terms of use apply)",
+    "fineweb2_ja": "ODC-BY 1.0 (Common Crawl terms of use apply)",
+    "wiki": "CC-BY-SA 3.0 — derivative of Wikipedia",
+    "aozora": "Public Domain",
+    "livedoor": "CC BY-ND 2.1 JP — evaluation/exploration only",
+    "tatoeba": "CC-BY 2.0 FR",
+    "unknown": "unknown (no source tag in pool)",
+}
 
 
 @dataclass
@@ -32,6 +45,8 @@ class PoolStats:
     kanji_surface_ratio: float = 0.0
     lexical_overlap: int = 0
     sixgram_overlap: int = 0
+    source_histogram: dict[str, int] = field(default_factory=dict)
+    has_attribution_file: bool | None = None
 
 
 def contains_kanji(text: str) -> bool:
@@ -84,6 +99,7 @@ def audit_pool(path: str, eval_lexical: set[tuple[str, str, str]], eval_sixgrams
     kanji_count = 0
     lexical_overlap = 0
     sixgram_overlap = 0
+    source_counter: Counter[str] = Counter()
 
     for row in rows:
         reading, surface, context = normalize_sample(row)
@@ -94,12 +110,25 @@ def audit_pool(path: str, eval_lexical: set[tuple[str, str, str]], eval_sixgrams
         lexical_overlap += int((reading, surface, context) in eval_lexical)
         if surface_sixgrams(surface) & eval_sixgrams:
             sixgram_overlap += 1
+        source_counter[row.get("source") or "unknown"] += 1
 
     stats.avg_reading_chars = reading_chars / stats.lines
     stats.avg_surface_chars = surface_chars / stats.lines
     stats.kanji_surface_ratio = kanji_count / stats.lines
     stats.lexical_overlap = lexical_overlap
     stats.sixgram_overlap = sixgram_overlap
+    stats.source_histogram = dict(source_counter)
+
+    # ATTRIBUTION.md co-located with the source directory implies the
+    # redistribute-with-attribution requirement is acknowledged upstream.
+    # We look in both the pool's own dir and the corresponding src/<source>/ dir.
+    attribution_candidates: list[Path] = [Path(path).parent / "ATTRIBUTION.md"]
+    for source in source_counter:
+        if source == "unknown":
+            continue
+        attribution_candidates.append(Path("datasets/src") / source / "ATTRIBUTION.md")
+    stats.has_attribution_file = any(c.exists() for c in attribution_candidates)
+
     return stats
 
 
@@ -109,7 +138,11 @@ def main() -> None:
     parser.add_argument(
         "--eval-sets",
         nargs="+",
-        default=["datasets/eval_v3/dev.jsonl", "datasets/gold_1k.jsonl"],
+        default=[
+            "datasets/eval_v3/dev.jsonl",
+            "datasets/eval_v3/test.jsonl",
+            "datasets/gold_1k.jsonl",
+        ],
         help="Evaluation JSONL files used for contamination checks",
     )
     parser.add_argument("--limit", type=int, default=0, help="Optional per-pool row cap for fast audits")
@@ -124,9 +157,15 @@ def main() -> None:
 
     eval_lexical, eval_sixgrams = build_eval_indices(args.eval_sets, limit_per_file=args.eval_limit)
 
-    report = {"pools": [], "eval_sets": args.eval_sets}
+    report: dict = {"pools": [], "eval_sets": args.eval_sets}
     for pool in args.pools:
         stats = audit_pool(pool, eval_lexical, eval_sixgrams, limit=args.limit)
+        source_licenses = sorted(
+            {
+                SOURCE_LICENSE.get(src, "(not in SOURCE_LICENSE table)")
+                for src in stats.source_histogram
+            }
+        )
         report["pools"].append(
             {
                 "path": stats.path,
@@ -136,6 +175,9 @@ def main() -> None:
                 "kanji_surface_ratio": round(stats.kanji_surface_ratio, 4),
                 "lexical_overlap": stats.lexical_overlap,
                 "sixgram_overlap": stats.sixgram_overlap,
+                "source_histogram": stats.source_histogram,
+                "source_licenses": source_licenses,
+                "has_attribution_file": stats.has_attribution_file,
             }
         )
 

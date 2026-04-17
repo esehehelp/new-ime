@@ -89,6 +89,16 @@ class TestHardExampleMask:
         mask = hard_example_mask(confs, threshold=0.6)
         assert mask.tolist() == [True, True, False, False]
 
+    def test_high_conf_mode(self):
+        confs = torch.tensor([0.1, 0.5, 0.6, 0.9])
+        mask = hard_example_mask(confs, threshold=0.6, mode="high_conf")
+        assert mask.tolist() == [False, False, True, True]
+
+    def test_all_mode(self):
+        confs = torch.tensor([0.1, 0.5, 0.6, 0.9])
+        mask = hard_example_mask(confs, threshold=0.6, mode="all")
+        assert mask.tolist() == [True, True, True, True]
+
     def test_empty(self):
         mask = hard_example_mask(torch.empty(0), threshold=0.6)
         assert mask.numel() == 0

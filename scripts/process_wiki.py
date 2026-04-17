@@ -22,38 +22,27 @@ import bz2
 import json
 import os
 import re
+import sys
 from multiprocessing import Pool
 from pathlib import Path
 
 import mwxml
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-# ---- Functions that run in worker processes ----
-# These must be top-level (picklable). Each worker imports its own
-# MeCab, jaconv, mwparserfromhell on first call.
-
-SENTENCE_SPLIT = re.compile(r"(?<=[。！？\n])")
-RE_URL = re.compile(r"https?://")
-RE_MARKUP = re.compile(r"[{}\[\]|<>]")
+from src.data.mecab_pipeline import text_to_pairs, worker_init as _worker_init
 
 
-def _worker_init():
-    """Called once per worker process to initialize MeCab tagger."""
-    import MeCab as _MeCab
-    global _tagger
-    _tagger = _MeCab.Tagger()
-    _tagger.parse("")
+# ---- Wikitext-specific stripping runs in the worker, then hands plain text
+# off to the shared mecab_pipeline. ----
 
 
 def _process_article(wikitext: str) -> list[dict]:
-    """Process a single article's raw wikitext → list of {reading, surface} dicts.
-
-    Runs in worker process. Does mwparserfromhell + MeCab.
-    """
+    """Strip wikitext → plain text → shared sentence/reading pipeline."""
     import mwparserfromhell as mwp
-    import jaconv
 
-    # Strip wikitext → plain text
     try:
         parsed = mwp.parse(wikitext)
         text = parsed.strip_code(normalize=True, collapse=True)
@@ -68,78 +57,7 @@ def _process_article(wikitext: str) -> list[dict]:
     if not text:
         return []
 
-    # Split into sentences
-    sentences = [s.strip() for s in SENTENCE_SPLIT.split(text) if s.strip()]
-
-    # Process each sentence
-    global _tagger
-    pairs = []
-    for sent in sentences:
-        # Filter
-        if len(sent) < 5 or len(sent) > 100:
-            continue
-        if RE_URL.search(sent):
-            continue
-        if RE_MARKUP.search(sent):
-            continue
-        ascii_count = sum(1 for c in sent if ord(c) < 0x80)
-        if ascii_count / len(sent) > 0.3:
-            continue
-
-        # MeCab reading assignment
-        reading = _get_reading(_tagger, sent, jaconv)
-        if reading is None:
-            continue
-
-        pairs.append({"reading": reading, "surface": sent})
-
-    return pairs
-
-
-def _get_reading(tagger, text: str, jaconv) -> str | None:
-    """Get hiragana reading via MeCab. Returns None if unreliable."""
-    node = tagger.parseToNode(text)
-    readings = []
-
-    while node:
-        surface = node.surface
-        if not surface:
-            node = node.next
-            continue
-
-        features = node.feature.split(",")
-
-        if features[0] == "未知語":
-            return None
-
-        # unidic-lite feature layout:
-        #   [6]  = 書字形出現形 (dictionary form katakana — wrong for conjugated words)
-        #   [7]  = 書字形基本形 (can be kanji — DO NOT USE)
-        #   [9]  = 発音形出現形 (phonetic: う→ー, は→わ — wrong for IME)
-        #   [17] = 仮名形出現形 (conjugated katakana, no phonetic changes — CORRECT)
-        #
-        # [17] gives: し (not スル), コウショウ (not コーショー), ハ (not ワ)
-        reading = None
-        if len(features) >= 18 and features[17] != "*":
-            reading = features[17]
-        elif len(features) >= 7 and features[6] != "*":
-            reading = features[6]  # fallback
-
-        if reading:
-            hira = jaconv.kata2hira(reading)
-            if any(c.isascii() and c.isalpha() for c in hira):
-                return None
-            readings.append(hira)
-        elif all("\u3040" <= c <= "\u309f" or not c.strip() for c in surface):
-            readings.append(surface)
-        elif all(c in "、。！？「」『』（）・…―─　\n\r\t " for c in surface):
-            readings.append(surface)
-        else:
-            return None
-
-        node = node.next
-
-    return "".join(readings)
+    return text_to_pairs(text)
 
 
 # ---- Producer: runs in main process ----

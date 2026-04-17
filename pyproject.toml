@@ -16,6 +16,7 @@ dependencies = [
     "accelerate",
     "onnxruntime",
     "protobuf>=4.0",
+    "zstandard>=0.25.0",
 ]
 
 [dependency-groups]

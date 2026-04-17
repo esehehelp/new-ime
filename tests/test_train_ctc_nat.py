@@ -109,6 +109,7 @@ def test_validate_resume_compatibility_raises_on_kd_drift():
         kd_teacher_vocab="",
         kd_alpha=0.5,
         kd_hard_threshold=0.6,
+        kd_gate_mode="all",
         kd_start_step=0,
         kd_warmup_steps=0,
         kd_every=4,
@@ -124,6 +125,7 @@ def test_validate_resume_compatibility_raises_on_kd_drift():
             "teacher_vocab": "",
             "alpha": 0.5,
             "hard_threshold": 0.6,
+            "gate_mode": "all",
             "start_step": 0,
             "warmup_steps": 0,
             "every": 4,
@@ -145,6 +147,7 @@ def test_validate_resume_compatibility_accepts_matching_kd():
         kd_teacher_vocab="",
         kd_alpha=0.3,
         kd_hard_threshold=0.7,
+        kd_gate_mode="high_conf",
         kd_start_step=1000,
         kd_warmup_steps=2000,
         kd_every=4,
@@ -160,6 +163,7 @@ def test_validate_resume_compatibility_accepts_matching_kd():
             "teacher_vocab": "",
             "alpha": 0.3,
             "hard_threshold": 0.7,
+            "gate_mode": "high_conf",
             "start_step": 1000,
             "warmup_steps": 2000,
             "every": 4,
@@ -167,6 +171,44 @@ def test_validate_resume_compatibility_accepts_matching_kd():
         },
     }
     validate_resume_compatibility(checkpoint, args)
+
+
+def test_validate_resume_compatibility_raises_on_kd_gate_mode_drift():
+    args = argparse.Namespace(
+        preset="phase3_20m",
+        use_cvae=False,
+        max_seq_len=128,
+        max_kanji=6000,
+        tokenizer_path="",
+        kd_teacher_path="checkpoints/ar_v3_vast/best.pt",
+        kd_teacher_vocab="",
+        kd_alpha=0.3,
+        kd_hard_threshold=0.7,
+        kd_gate_mode="all",
+        kd_start_step=1000,
+        kd_warmup_steps=2000,
+        kd_every=4,
+        kd_max_new_tokens=96,
+    )
+    checkpoint = {
+        "preset": "phase3_20m",
+        "use_cvae": False,
+        "max_seq_len": 128,
+        "max_kanji": 6000,
+        "kd": {
+            "teacher_path": "checkpoints/ar_v3_vast/best.pt",
+            "teacher_vocab": "",
+            "alpha": 0.3,
+            "hard_threshold": 0.7,
+            "gate_mode": "low_conf",
+            "start_step": 1000,
+            "warmup_steps": 2000,
+            "every": 4,
+            "max_new_tokens": 96,
+        },
+    }
+    with pytest.raises(ValueError, match="kd.gate_mode"):
+        validate_resume_compatibility(checkpoint, args)
 
 
 def test_build_tokenizer_from_path(tmp_path: Path):

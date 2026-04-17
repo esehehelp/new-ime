@@ -294,6 +294,7 @@ def save_checkpoint(
             "teacher_vocab": getattr(args, "kd_teacher_vocab", "") or "",
             "alpha": float(getattr(args, "kd_alpha", 0.0)),
             "hard_threshold": float(getattr(args, "kd_hard_threshold", 0.0)),
+            "gate_mode": getattr(args, "kd_gate_mode", "low_conf"),
             "start_step": int(getattr(args, "kd_start_step", 0)),
             "warmup_steps": int(getattr(args, "kd_warmup_steps", 0)),
             "every": int(getattr(args, "kd_every", 1)),
@@ -357,6 +358,7 @@ def validate_resume_compatibility(
         ("teacher_vocab", "kd_teacher_vocab", ""),
         ("alpha", "kd_alpha", 0.0),
         ("hard_threshold", "kd_hard_threshold", 0.0),
+        ("gate_mode", "kd_gate_mode", "low_conf"),
         ("start_step", "kd_start_step", 0),
         ("warmup_steps", "kd_warmup_steps", 0),
         ("every", "kd_every", 1),
@@ -507,6 +509,7 @@ def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher 
     kd_config = KDConfig(
         alpha=args.kd_alpha,
         hard_threshold=args.kd_hard_threshold,
+        gate_mode=args.kd_gate_mode,
         start_step=args.kd_start_step,
         warmup_steps=args.kd_warmup_steps,
         every=max(args.kd_every, 1),
@@ -529,7 +532,7 @@ def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher 
     print(
         f"KD teacher loaded: {args.kd_teacher_path} "
         f"(vocab={teacher.collator.vocab_size}, fp16={teacher_config.fp16}) "
-        f"α={kd_config.alpha}, threshold={kd_config.hard_threshold}, "
+        f"α={kd_config.alpha}, threshold={kd_config.hard_threshold}, mode={kd_config.gate_mode}, "
         f"start={kd_config.start_step}, warmup={kd_config.warmup_steps}, "
         f"every={kd_config.every}"
     )
@@ -697,6 +700,11 @@ def train_local(args: argparse.Namespace) -> None:
                 loss = loss + args.kl_weight * result["kl"]
 
             if run_kd:
+                alpha_now = kd_config.alpha_at(step)
+                if alpha_now <= 0.0:
+                    run_kd = False
+
+            if run_kd:
                 with torch.no_grad():
                     teacher_texts, teacher_conf = teacher.generate(
                         contexts=contexts,
@@ -704,7 +712,11 @@ def train_local(args: argparse.Namespace) -> None:
                         max_new_tokens=kd_config.max_new_tokens,
                     )
                 conf_tensor = torch.tensor(teacher_conf, device=device)
-                hard_mask = hard_example_mask(conf_tensor, kd_config.hard_threshold)
+                hard_mask = hard_example_mask(
+                    conf_tensor,
+                    kd_config.hard_threshold,
+                    mode=kd_config.gate_mode,
+                )
                 teacher_ids, teacher_lengths = encode_texts_for_student(
                     teacher_texts,
                     tokenizer=tokenizer,
@@ -718,7 +730,6 @@ def train_local(args: argparse.Namespace) -> None:
                     hard_mask=hard_mask,
                     blank_id=BLANK_ID,
                 )
-                alpha_now = kd_config.alpha_at(step)
                 if num_hard > 0 and alpha_now > 0.0:
                     # KD fires on only 1 of grad_accum microbatches per active
                     # optimizer step. The subsequent `loss / grad_accum` would
@@ -949,6 +960,15 @@ def main() -> None:
     kd_group.add_argument("--kd-teacher-max-seq-len", type=int, default=256)
     kd_group.add_argument("--kd-alpha", type=float, default=0.0, help="KD loss weight (0 disables)")
     kd_group.add_argument("--kd-hard-threshold", type=float, default=0.6)
+    kd_group.add_argument(
+        "--kd-gate-mode",
+        choices=["low_conf", "high_conf", "all"],
+        default="low_conf",
+        help=(
+            "Which teacher outputs contribute to KD: "
+            "low_conf=uncertain only, high_conf=confident only, all=no gating"
+        ),
+    )
     kd_group.add_argument("--kd-start-step", type=int, default=0)
     kd_group.add_argument("--kd-warmup-steps", type=int, default=0)
     kd_group.add_argument(
