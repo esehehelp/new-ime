@@ -94,6 +94,78 @@ def test_validate_resume_compatibility_raises_on_mismatch():
         validate_resume_compatibility(checkpoint, args)
 
 
+def test_validate_resume_compatibility_raises_on_kd_drift():
+    """Resume must fail if KD hyperparameters differ from the checkpoint."""
+    args = argparse.Namespace(
+        preset="phase3_20m",
+        use_cvae=False,
+        max_seq_len=128,
+        max_kanji=6000,
+        tokenizer_path="",
+        kd_teacher_path="checkpoints/ar_v3_vast/best.pt",
+        kd_teacher_vocab="",
+        kd_alpha=0.5,
+        kd_hard_threshold=0.6,
+        kd_start_step=0,
+        kd_warmup_steps=0,
+        kd_every=4,
+        kd_max_new_tokens=96,
+    )
+    checkpoint = {
+        "preset": "phase3_20m",
+        "use_cvae": False,
+        "max_seq_len": 128,
+        "max_kanji": 6000,
+        "kd": {
+            "teacher_path": "checkpoints/ar_baseline/best.pt",  # different teacher
+            "teacher_vocab": "",
+            "alpha": 0.5,
+            "hard_threshold": 0.6,
+            "start_step": 0,
+            "warmup_steps": 0,
+            "every": 4,
+            "max_new_tokens": 96,
+        },
+    }
+    with pytest.raises(ValueError, match="kd.teacher_path"):
+        validate_resume_compatibility(checkpoint, args)
+
+
+def test_validate_resume_compatibility_accepts_matching_kd():
+    args = argparse.Namespace(
+        preset="phase3_20m",
+        use_cvae=False,
+        max_seq_len=128,
+        max_kanji=6000,
+        tokenizer_path="",
+        kd_teacher_path="checkpoints/ar_v3_vast/best.pt",
+        kd_teacher_vocab="",
+        kd_alpha=0.3,
+        kd_hard_threshold=0.7,
+        kd_start_step=1000,
+        kd_warmup_steps=2000,
+        kd_every=4,
+        kd_max_new_tokens=96,
+    )
+    checkpoint = {
+        "preset": "phase3_20m",
+        "use_cvae": False,
+        "max_seq_len": 128,
+        "max_kanji": 6000,
+        "kd": {
+            "teacher_path": "checkpoints/ar_v3_vast/best.pt",
+            "teacher_vocab": "",
+            "alpha": 0.3,
+            "hard_threshold": 0.7,
+            "start_step": 1000,
+            "warmup_steps": 2000,
+            "every": 4,
+            "max_new_tokens": 96,
+        },
+    }
+    validate_resume_compatibility(checkpoint, args)
+
+
 def test_build_tokenizer_from_path(tmp_path: Path):
     tokenizer = SharedCharTokenizer(max_kanji=32)
     tokenizer_path = tmp_path / "shared_tokenizer.json"

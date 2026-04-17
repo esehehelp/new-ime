@@ -26,6 +26,14 @@ from src.data.dataset import KanaKanjiDataset
 from src.data.tokenizer import BLANK_ID, PAD_ID, SharedCharTokenizer
 from src.eval.metrics import EvalResult
 from src.model.ctc_nat import CTCNAT, PRESETS
+from src.training.kd import (
+    ARTeacher,
+    KDConfig,
+    TeacherConfig,
+    compute_kd_ctc_loss,
+    encode_texts_for_student,
+    hard_example_mask,
+)
 
 
 @dataclass
@@ -79,16 +87,25 @@ class CTCCollator:
         writer_ids: list[int] = []
         domain_ids: list[int] = []
         source_ids: list[int] = []
+        contexts: list[str] = []
+        readings: list[str] = []
+        surfaces: list[str] = []
 
         for sample in batch:
-            inp = self._encode_input(sample.get("context", ""), sample["reading"])
-            tgt = self._encode_target(sample["surface"])
+            context = sample.get("context", "") or ""
+            reading = sample["reading"]
+            surface = sample["surface"]
+            inp = self._encode_input(context, reading)
+            tgt = self._encode_target(surface)
             encoded_inputs.append(inp)
             encoded_targets.append(tgt)
             target_lengths.append(len(tgt))
             writer_ids.append(int(sample.get("writer_id", 0)))
             domain_ids.append(int(sample.get("domain_id", 0)))
             source_ids.append(int(sample.get("source_id", 0)))
+            contexts.append(context)
+            readings.append(reading)
+            surfaces.append(surface)
 
         max_input_len = max(len(x) for x in encoded_inputs)
         max_target_len = max(max(target_lengths), 1)
@@ -111,6 +128,9 @@ class CTCCollator:
             "writer_ids": torch.tensor(writer_ids, dtype=torch.long),
             "domain_ids": torch.tensor(domain_ids, dtype=torch.long),
             "source_ids": torch.tensor(source_ids, dtype=torch.long),
+            "_contexts": contexts,
+            "_readings": readings,
+            "_surfaces": surfaces,
         }
 
 
@@ -241,6 +261,16 @@ def save_checkpoint(
         "max_kanji": args.max_kanji,
         "vocab_size": tokenizer.vocab_size,
         "tokenizer_path": getattr(args, "tokenizer_path", ""),
+        "kd": {
+            "teacher_path": getattr(args, "kd_teacher_path", "") or "",
+            "teacher_vocab": getattr(args, "kd_teacher_vocab", "") or "",
+            "alpha": float(getattr(args, "kd_alpha", 0.0)),
+            "hard_threshold": float(getattr(args, "kd_hard_threshold", 0.0)),
+            "start_step": int(getattr(args, "kd_start_step", 0)),
+            "warmup_steps": int(getattr(args, "kd_warmup_steps", 0)),
+            "every": int(getattr(args, "kd_every", 1)),
+            "max_new_tokens": int(getattr(args, "kd_max_new_tokens", 0)),
+        },
     }
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(checkpoint, path)
@@ -291,6 +321,29 @@ def validate_resume_compatibility(
             f"vocab_size: ckpt={checkpoint.get('vocab_size')} current={tokenizer.vocab_size}"
         )
 
+    # KD metadata: resume must use matching teacher + hyperparameters, otherwise
+    # the optimizer/scheduler state belongs to a different objective.
+    kd_prev = checkpoint.get("kd") or {}
+    kd_fields = [
+        ("teacher_path", "kd_teacher_path", ""),
+        ("teacher_vocab", "kd_teacher_vocab", ""),
+        ("alpha", "kd_alpha", 0.0),
+        ("hard_threshold", "kd_hard_threshold", 0.0),
+        ("start_step", "kd_start_step", 0),
+        ("warmup_steps", "kd_warmup_steps", 0),
+        ("every", "kd_every", 1),
+        ("max_new_tokens", "kd_max_new_tokens", 0),
+    ]
+    for ckpt_key, arg_key, default in kd_fields:
+        ckpt_val = kd_prev.get(ckpt_key, default) if kd_prev else default
+        cur_val = getattr(args, arg_key, default)
+        if type(default) is float:
+            if abs(float(ckpt_val) - float(cur_val)) > 1e-9:
+                mismatches.append(f"kd.{ckpt_key}: ckpt={ckpt_val} current={cur_val}")
+        else:
+            if ckpt_val != cur_val:
+                mismatches.append(f"kd.{ckpt_key}: ckpt={ckpt_val} current={cur_val}")
+
     if mismatches:
         details = "; ".join(mismatches)
         raise ValueError(f"Resume checkpoint is incompatible with current run: {details}")
@@ -320,7 +373,7 @@ def evaluate_model(
         if batch_idx >= max_batches:
             break
 
-        batch = {k: v.to(device) for k, v in batch.items()}
+        batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
         kwargs = {}
         if use_cvae:
             kwargs.update(
@@ -410,6 +463,40 @@ def make_dataloader(
     )
 
 
+def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher | None, KDConfig]:
+    """Construct the KD teacher + config from CLI args (teacher is optional)."""
+    kd_config = KDConfig(
+        alpha=args.kd_alpha,
+        hard_threshold=args.kd_hard_threshold,
+        start_step=args.kd_start_step,
+        warmup_steps=args.kd_warmup_steps,
+        every=max(args.kd_every, 1),
+        max_new_tokens=args.kd_max_new_tokens,
+    )
+    if not args.kd_teacher_path or args.kd_alpha <= 0.0:
+        return None, kd_config
+    teacher_config = TeacherConfig(
+        checkpoint_path=args.kd_teacher_path,
+        vocab_path=args.kd_teacher_vocab or "",
+        hidden_size=args.kd_teacher_hidden,
+        num_layers=args.kd_teacher_layers,
+        num_heads=args.kd_teacher_heads,
+        max_seq_len=args.kd_teacher_max_seq_len,
+        max_new_tokens=args.kd_max_new_tokens,
+        max_context_chars=args.max_context,
+        fp16=args.fp16,
+    )
+    teacher = ARTeacher.from_checkpoint(teacher_config, device=device)
+    print(
+        f"KD teacher loaded: {args.kd_teacher_path} "
+        f"(vocab={teacher.collator.vocab_size}, fp16={teacher_config.fp16}) "
+        f"α={kd_config.alpha}, threshold={kd_config.hard_threshold}, "
+        f"start={kd_config.start_step}, warmup={kd_config.warmup_steps}, "
+        f"every={kd_config.every}"
+    )
+    return teacher, kd_config
+
+
 def train_local(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = build_tokenizer(args)
@@ -419,6 +506,8 @@ def train_local(args: argparse.Namespace) -> None:
         optimizer,
         lr_lambda=lambda step: min((step + 1) / max(args.warmup_steps, 1), 1.0),
     )
+
+    teacher, kd_config = build_kd(args, device)
 
     start_step = 0
     start_epoch = 0
@@ -494,6 +583,7 @@ def train_local(args: argparse.Namespace) -> None:
     step = start_step
     last_log = time.perf_counter()
     running_losses: deque[float] = deque(maxlen=args.loss_window)
+    kd_stats = {"loss_sum": 0.0, "hard_sum": 0, "total_sum": 0, "conf_sum": 0.0, "batches": 0}
     try:
         for epoch in range(start_epoch, args.epochs):
             model.train()
@@ -503,7 +593,12 @@ def train_local(args: argparse.Namespace) -> None:
                 if args.max_steps and step >= args.max_steps:
                     raise StopIteration
 
-                batch = {k: v.to(device) for k, v in batch.items()}
+                contexts = batch.get("_contexts", [])
+                readings = batch.get("_readings", [])
+                batch = {
+                    k: (v.to(device) if torch.is_tensor(v) else v)
+                    for k, v in batch.items()
+                }
                 kwargs = {}
                 if args.use_cvae:
                     kwargs.update(
@@ -512,6 +607,7 @@ def train_local(args: argparse.Namespace) -> None:
                         source_ids=batch["source_ids"],
                     )
 
+                run_kd = teacher is not None and kd_config.active(step)
                 with torch.amp.autocast(device_type=autocast_device, enabled=use_amp):
                     result = model(
                         input_ids=batch["input_ids"],
@@ -523,6 +619,38 @@ def train_local(args: argparse.Namespace) -> None:
                     loss = result["loss"]
                     if args.use_cvae and "kl" in result:
                         loss = loss + args.kl_weight * result["kl"]
+
+                    if run_kd:
+                        with torch.no_grad():
+                            teacher_texts, teacher_conf = teacher.generate(
+                                contexts=contexts,
+                                readings=readings,
+                                max_new_tokens=kd_config.max_new_tokens,
+                            )
+                        conf_tensor = torch.tensor(teacher_conf, device=device)
+                        hard_mask = hard_example_mask(conf_tensor, kd_config.hard_threshold)
+                        teacher_ids, teacher_lengths = encode_texts_for_student(
+                            teacher_texts,
+                            tokenizer=tokenizer,
+                            max_len=args.max_seq_len,
+                        )
+                        kd_loss_value, num_hard = compute_kd_ctc_loss(
+                            student_log_probs=result["log_probs"],
+                            input_lengths=batch["attention_mask"].sum(dim=1).long(),
+                            teacher_ids=teacher_ids,
+                            teacher_lengths=teacher_lengths,
+                            hard_mask=hard_mask,
+                            blank_id=BLANK_ID,
+                        )
+                        alpha_now = kd_config.alpha_at(step)
+                        if num_hard > 0 and alpha_now > 0.0:
+                            loss = loss + alpha_now * kd_loss_value
+                        kd_stats["loss_sum"] += float(kd_loss_value.detach().item())
+                        kd_stats["hard_sum"] += num_hard
+                        kd_stats["total_sum"] += len(teacher_texts)
+                        kd_stats["conf_sum"] += float(conf_tensor.mean().item()) if conf_tensor.numel() else 0.0
+                        kd_stats["batches"] += 1
+
                     loss = loss / args.grad_accum
 
                 if use_amp:
@@ -551,11 +679,30 @@ def train_local(args: argparse.Namespace) -> None:
                         last_log = now
                         avg_loss = sum(running_losses) / max(len(running_losses), 1)
                         lr = optimizer.param_groups[0]["lr"]
-                        print(
+                        line = (
                             f"[step {step}] loss={current_loss:.4f} "
                             f"avg{args.loss_window}={avg_loss:.4f} "
                             f"lr={lr:.6f} rate={rate:.2f} steps/s"
                         )
+                        if teacher is not None and kd_stats["batches"] > 0:
+                            kd_avg = kd_stats["loss_sum"] / kd_stats["batches"]
+                            hard_ratio = kd_stats["hard_sum"] / max(kd_stats["total_sum"], 1)
+                            conf_avg = kd_stats["conf_sum"] / kd_stats["batches"]
+                            alpha_now = kd_config.alpha_at(step)
+                            line += (
+                                f" kd_loss={kd_avg:.4f} "
+                                f"kd_hard={hard_ratio:.2f} "
+                                f"kd_conf={conf_avg:.2f} "
+                                f"kd_alpha={alpha_now:.3f}"
+                            )
+                        print(line)
+                        kd_stats = {
+                            "loss_sum": 0.0,
+                            "hard_sum": 0,
+                            "total_sum": 0,
+                            "conf_sum": 0.0,
+                            "batches": 0,
+                        }
 
                     if step % args.eval_every == 0:
                         metrics, samples = evaluate_model(
@@ -675,6 +822,32 @@ def main() -> None:
     parser.add_argument("--tiny-overfit-eval-train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--estimate-only", action="store_true")
+    parser.add_argument("--max-context", type=int, default=40, help="Max context chars fed to teacher")
+
+    kd_group = parser.add_argument_group("online KD (AR teacher)")
+    kd_group.add_argument("--kd-teacher-path", default="", help="AR teacher checkpoint (.pt)")
+    kd_group.add_argument("--kd-teacher-vocab", default="", help="AR teacher vocab JSON (default: auto)")
+    kd_group.add_argument("--kd-teacher-hidden", type=int, default=512)
+    kd_group.add_argument("--kd-teacher-layers", type=int, default=8)
+    kd_group.add_argument("--kd-teacher-heads", type=int, default=8)
+    kd_group.add_argument("--kd-teacher-max-seq-len", type=int, default=256)
+    kd_group.add_argument("--kd-alpha", type=float, default=0.0, help="KD loss weight (0 disables)")
+    kd_group.add_argument("--kd-hard-threshold", type=float, default=0.6)
+    kd_group.add_argument("--kd-start-step", type=int, default=0)
+    kd_group.add_argument("--kd-warmup-steps", type=int, default=0)
+    kd_group.add_argument(
+        "--kd-every",
+        type=int,
+        default=4,
+        help=(
+            "Gate KD on optimizer-step boundary: KD runs for every microbatch "
+            "of an optimizer step where (step %% N == 0). With grad_accum=M and "
+            "kd_every=N, teacher inference fires on M microbatches per N "
+            "optimizer steps (ratio M/N of microbatches)."
+        ),
+    )
+    kd_group.add_argument("--kd-max-new-tokens", type=int, default=96)
+
     args = parser.parse_args()
     if args.small_vocab_max_kanji > 0:
         args.max_kanji = args.small_vocab_max_kanji

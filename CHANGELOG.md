@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-04-18 (later): オンライン KD 実装
+
+### 追加
+
+- `src/training/kd.py`: AR 教師 (`SimpleGPT2`) の online 蒸留モジュール
+  - `ARTeacher`: eval/no_grad/fp16、バッチ greedy 生成、frozen-vocab エンコード (UNK fallback で
+    推論時の vocab 拡張を禁止)
+  - `KDConfig`: α 線形 ramp、hard-example threshold、`kd_every` による optimizer-step ゲート
+  - `compute_kd_ctc_loss`: hard sample 限定の CTC 蒸留損失 (input<target の例は除外)
+- `src/training/train_ctc_nat.py`: `--kd-*` フラグで KD を有効化。KD 関連メタを checkpoint 保存
+  し、resume 時に不一致で fail-fast
+- `tests/test_kd.py` (17) / `tests/test_train_ctc_nat.py` (KD validation, 2 追加)
+
+### 方針
+
+- **教師 vocab ≠ 生徒 vocab** のため、ID 空間を合わせず**テキスト経由で再エンコード**する
+  hard-target 蒸留。ソフト KL は採用せず。
+- **Hard-example 基準**: 教師の mean top-1 confidence < threshold のサンプルだけを蒸留対象に。
+  容易例は gold のみ。
+- **設定漂流防止**: KD teacher path / alpha / threshold / schedule は checkpoint に固着。
+  resume 時の差分は `ValueError`。
+
 ## 2026-04-18: 長期ビジョン・ベンチ比較・ドキュメント整理
 
 ### 長期ビジョン確定

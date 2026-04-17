@@ -211,8 +211,40 @@ L = L_CTC + β(t) · max(KL(q(z|x,y) || p(z|x)), free_bits)
 - [ ] D2: S4 完走 (CVAE 有効化、KL annealing、70k steps)
 - [ ] D3: S5 完走 (1.58-bit QAT 有効化、BitLinear 置換、60k steps)
 
-**KD 方針**: オンライン生成。AR 教師 (`checkpoints/ar_baseline/best.pt`) を別 GPU/別プロセス
-で走らせ、hard-example のみ KD ターゲットとして差し替える。**全件事前展開の JSONL は作らない**。
+**KD 方針**: オンライン生成。AR 教師 (`checkpoints/ar_v3_vast/best.pt`, 32M, vocab 6997) を同一 GPU
+上の fp16 / eval / no_grad で走らせ、hard-example のみ KD ターゲットとして差し替える。
+**全件事前展開の JSONL は作らない**。
+
+実装は `src/training/kd.py` + `src/training/train_ctc_nat.py --kd-*` フラグ。主要点:
+
+- **Tokenizer 橋渡し**: 教師は独自の `ARCollator` vocab (動的文字 ID)、生徒は `SharedCharTokenizer`
+  (4k frequency vocab)。ID 互換性がないため、教師出力テキスト → 生徒 tokenizer で再エンコード
+  (hard-target CTC KD)。教師側は vocab 固定ルックアップ (unknown → UNK)、推論時の vocab 拡張を
+  禁止 (embedding range を超える ID 防止)。
+- **Hard-example 基準**: 教師の mean top-1 confidence < `--kd-hard-threshold` (default 0.6) の
+  サンプルだけが KD 損失に寄与。容易例はスキップ (教師上限で生徒を縛らない)。
+- **損失**: `L = L_CTC(gold) + α(step) · L_CTC(teacher) · hard_mask`。α は `--kd-start-step` から
+  `--kd-warmup-steps` で線形 ramp。CTC 条件違反 (input_len < target_len) の hard 例は除外。
+- **コスト償却**: `--kd-every N` で N optimizer step に一度だけ KD 活性化 (その step 内の全
+  microbatch は一貫して KD あり)。grad_accum=M, kd_every=N なら teacher 推論は M/N microbatch
+  の比率で発火。
+- **Resume 安全性**: KD ハイパーパラメータ (`teacher_path`, `alpha`, `hard_threshold`,
+  `start_step`, `warmup_steps`, `every`, `max_new_tokens`) は checkpoint に保存され、resume
+  時に差分があると fail-fast。別設定の run を無警告で継続できない。
+- **別 GPU / 別プロセスへの分離は未実装** (v1 は同 GPU fp16)。将来 Phase 3 後半で検討。
+- **ソフト KD (KL 蒸留)** は vocab 不一致のため採用せず。`docs/phase3_plan.md` 改訂時に再検討。
+
+**推奨起点 (phase3_20m 4k vocab 現行ラン)**:
+
+```
+--kd-teacher-path checkpoints/ar_v3_vast/best.pt \
+--kd-alpha 0.3 --kd-hard-threshold 0.6 \
+--kd-start-step 3000 --kd-warmup-steps 2000 --kd-every 4
+```
+
+現象 (CharAcc 高いが EM が 0.04 で停滞、errors がホモフォン選択ミス) に対して、教師の全体文脈情報を
+hard 例 (難読・ホモフォン) にだけ流し込む意図。α/threshold/every は最初の 2-3k step の KD loss・
+hard_ratio ログを見て再調整する。
 
 **計算**: 90M × 360k = H100 で ~60-80 時間、$300-500。ローカル 3060 は S0-S1 の
 smoke test のみ。
