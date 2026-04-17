@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -35,6 +36,16 @@ MAP_URL = "https://data.hplt-project.org/three/sorted/jpn_Jpan.map"
 CHUNK_BYTES = 1 << 20  # 1 MiB
 USER_AGENT = "new-ime/dataset-fetch (+https://github.com/esehehelp/new-ime)"
 SHARD_NAME_RE = re.compile(r"(?P<tier>\d+)_(?P<idx>\d+)\.jsonl\.zst$")
+
+MAX_ATTEMPTS = 20
+BACKOFF_CAP_S = 60.0
+# Exceptions that indicate a transient CDN/network issue (worth resuming).
+RETRYABLE_EXC = (
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.ConnectTimeout,
+)
 
 
 def fetch_map(url: str = MAP_URL) -> list[str]:
@@ -67,8 +78,8 @@ def select_shards(
     return selected
 
 
-def download_shard(url: str, out_dir: Path, max_bytes: int = 0) -> tuple[Path, int]:
-    out_path = out_dir / Path(urlparse(url).path).name
+def _download_shard_attempt(url: str, out_path: Path, max_bytes: int) -> int:
+    """Single attempt. Raises on network failure; caller retries with resume."""
     existing = out_path.stat().st_size if out_path.exists() else 0
 
     headers = {"User-Agent": USER_AGENT}
@@ -77,17 +88,22 @@ def download_shard(url: str, out_dir: Path, max_bytes: int = 0) -> tuple[Path, i
 
     with requests.get(url, headers=headers, stream=True, timeout=120) as r:
         if existing and r.status_code == 200:
-            # Server ignored our Range header; restart.
+            # Server ignored our Range header; truncate and restart.
+            out_path.unlink()
             existing = 0
+        if r.status_code == 416:  # Range Not Satisfiable → file already complete.
+            print(f"  {out_path.name}: server reports complete ({existing / 1024**3:.2f} GB)")
+            return existing
         r.raise_for_status()
         total_remaining = int(r.headers.get("Content-Length", 0))
         total_size = total_remaining + existing
-        print(
-            f"{out_path.name}: {total_size / 1024**3:.2f} GB total, "
-            f"resuming from {existing / 1024**3:.2f} GB"
-            if existing
-            else f"{out_path.name}: {total_size / 1024**3:.2f} GB"
-        )
+        if existing:
+            print(
+                f"  {out_path.name}: {total_size / 1024**3:.2f} GB total, "
+                f"resuming from {existing / 1024**3:.2f} GB"
+            )
+        else:
+            print(f"  {out_path.name}: {total_size / 1024**3:.2f} GB")
 
         mode = "ab" if existing else "wb"
         bytes_this_run = 0
@@ -98,9 +114,47 @@ def download_shard(url: str, out_dir: Path, max_bytes: int = 0) -> tuple[Path, i
                 f.write(chunk)
                 bytes_this_run += len(chunk)
                 if max_bytes and (existing + bytes_this_run) >= max_bytes:
-                    print(f"  hit max_bytes cap @ {(existing + bytes_this_run) / 1024**3:.2f} GB")
+                    print(
+                        f"  hit max_bytes cap @ "
+                        f"{(existing + bytes_this_run) / 1024**3:.2f} GB"
+                    )
                     break
-    return out_path, existing + bytes_this_run
+        return existing + bytes_this_run
+
+
+def download_shard(url: str, out_dir: Path, max_bytes: int = 0) -> tuple[Path, int]:
+    """Download with resume + retry on transient network failures.
+
+    HPLT's CDN drops connections mid-transfer for multi-GB shards. We catch
+    the known-transient exceptions, back off, and retry from the current
+    partial file size via an HTTP Range header. Permanent errors (4xx, 5xx
+    except 416) propagate so the caller stops.
+    """
+    out_path = out_dir / Path(urlparse(url).path).name
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return out_path, _download_shard_attempt(url, out_path, max_bytes)
+        except RETRYABLE_EXC as exc:
+            existing = out_path.stat().st_size if out_path.exists() else 0
+            wait = min(2 ** (attempt - 1), BACKOFF_CAP_S)
+            print(
+                f"  attempt {attempt}/{MAX_ATTEMPTS} failed: {type(exc).__name__}: "
+                f"{exc}. partial={existing / 1024**3:.2f} GB — retrying in {wait:.0f}s",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "?"
+            print(
+                f"  non-retryable HTTP {status} on {url}: {exc}",
+                file=sys.stderr,
+            )
+            raise
+    raise RuntimeError(
+        f"exhausted {MAX_ATTEMPTS} retries for {url}; last partial "
+        f"{out_path.stat().st_size if out_path.exists() else 0} bytes"
+    )
 
 
 def main() -> None:
