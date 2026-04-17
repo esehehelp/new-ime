@@ -1,0 +1,15 @@
+{
+  "hidden_size": 512,
+  "num_layers": 8,
+  "num_heads": 8,
+  "vocab_size": 6997,
+  "max_positions": 256,
+  "step": 70000,
+  "special_tokens": {
+    "PAD": 0,
+    "SEP": 1,
+    "OUT": 2,
+    "EOS": 3,
+    "UNK": 4
+  }
+}
