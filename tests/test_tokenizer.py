@@ -6,12 +6,14 @@ from pathlib import Path
 from src.data.tokenizer import (
     BLANK_ID,
     CLS_ID,
+    INVALID_BYTE_TOKEN,
     MASK_ID,
     PAD_ID,
     SEP_ID,
     UNK_ID,
     InputTokenizer,
     OutputTokenizer,
+    SharedCharTokenizer,
 )
 
 
@@ -117,6 +119,15 @@ class TestOutputTokenizer:
         decoded = self.tok.decode(ids)
         assert decoded == text
 
+    def test_invalid_byte_sequence_never_emits_replacement_char(self):
+        ids = [
+            self.tok.token_to_id["<0xE3>"],
+            self.tok.token_to_id["<0x81>"],
+        ]
+        decoded = self.tok.decode(ids)
+        assert "\ufffd" not in decoded
+        assert decoded == INVALID_BYTE_TOKEN
+
     def test_ascii(self):
         ids = self.tok.encode("Hello")
         assert len(ids) == 5
@@ -138,3 +149,50 @@ class TestOutputTokenizer:
         ctc_output = [BLANK_ID, kanji_ids[0], BLANK_ID, kanji_ids[1], BLANK_ID]
         decoded = self.tok.decode(ctc_output)
         assert decoded == "変換"
+
+
+class TestSharedCharTokenizer:
+    def setup_method(self):
+        self.tok = SharedCharTokenizer(max_kanji=4000)
+
+    def test_special_token_ids_stable(self):
+        assert self.tok.token_to_id["[PAD]"] == PAD_ID
+        assert self.tok.token_to_id["[SEP]"] == SEP_ID
+        assert self.tok.token_to_id["[BLANK]"] == BLANK_ID
+        assert self.tok.token_to_id["[MASK]"] == MASK_ID
+
+    def test_context_can_contain_kanji(self):
+        ids = self.tok.encode_with_special("東京都", "かな")
+        assert ids[0] == CLS_ID
+        assert SEP_ID in ids
+        assert UNK_ID not in ids[:4]
+
+    def test_vocab_is_phase3_sized(self):
+        assert 4000 < self.tok.vocab_size < 9000
+
+    def test_save_load_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "shared_tokenizer.json"
+            self.tok.save(path)
+            loaded = SharedCharTokenizer.load(path)
+            text = "漢字かな😀"
+            assert loaded.encode(text) == self.tok.encode(text)
+            assert loaded.decode(self.tok.encode(text)) == text
+
+    def test_invalid_byte_sequence_uses_safe_sentinel(self):
+        ids = [
+            self.tok.token_to_id["<0xE3>"],
+            self.tok.token_to_id["<0x81>"],
+            self.tok.token_to_id["A"],
+        ]
+        decoded = self.tok.decode(ids)
+        assert "\ufffd" not in decoded
+        assert decoded == INVALID_BYTE_TOKEN + "A"
+
+    def test_fullwidth_space_is_direct_token(self):
+        ids = self.tok.encode("\u3000")
+        assert len(ids) == 1
+
+    def test_byte_fallback_ratio_counts_unknown_chars(self):
+        ratio = self.tok.byte_fallback_ratio(["漢字", "😀"])
+        assert 0.0 < ratio < 1.0

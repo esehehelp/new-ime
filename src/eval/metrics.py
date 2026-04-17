@@ -75,12 +75,25 @@ class EvalResult:
         self.total = 0
 
     def add(self, reference: str, candidates: list[str]) -> None:
-        """Add one evaluation sample."""
+        """Add one evaluation sample (single reference)."""
+        self.add_multi([reference], candidates)
+
+    def add_multi(self, references: list[str], candidates: list[str]) -> None:
+        """Add one sample with possibly multiple acceptable references.
+
+        For CharAcc, takes the max over all reference/candidate pairs in top-k.
+        For ExactMatch, true if any top-k candidate matches any reference.
+        """
         self.total += 1
+        if not references:
+            return
         for k in [1, 5, 10]:
-            acc = top_k_character_accuracy(reference, candidates, k)
-            self.char_acc_sum[k] = self.char_acc_sum.get(k, 0.0) + acc
-            em = top_k_exact_match(reference, candidates, k)
+            best_acc = 0.0
+            for ref in references:
+                acc = top_k_character_accuracy(ref, candidates, k)
+                best_acc = max(best_acc, acc)
+            self.char_acc_sum[k] = self.char_acc_sum.get(k, 0.0) + best_acc
+            em = any(c in references for c in candidates[:k])
             self.exact_match_sum[k] = self.exact_match_sum.get(k, 0) + int(em)
 
     def summary(self) -> dict:

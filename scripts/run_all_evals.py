@@ -23,7 +23,6 @@ from src.eval.ar_backend import ARCheckpointBackend
 from src.eval.bench_loaders import (
     load_ajimee_jwtd,
     load_eval_v3,
-    load_gold,
     load_manual_test,
     sample_items,
 )
@@ -188,7 +187,6 @@ def main() -> None:
     parser.add_argument("--manual", type=int, default=100, help="manual test sample count (max 100)")
     parser.add_argument("--ajimee", type=int, default=80, help="AJIMEE-Bench sample count")
     parser.add_argument("--evalv3", type=int, default=80, help="eval_v3/dev sample count")
-    parser.add_argument("--gold", type=int, default=0, help="gold_1k sample count (0=skip)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--ajimee-path",
@@ -207,7 +205,6 @@ def main() -> None:
     manual = load_manual_test()[: args.manual] if args.manual > 0 else []
     ajimee = sample_items(load_ajimee_jwtd(args.ajimee_path), args.ajimee, args.seed)
     evalv3 = sample_items(load_eval_v3(args.evalv3_path), args.evalv3, args.seed)
-    gold = sample_items(load_gold(), args.gold, args.seed) if args.gold > 0 else []
     benches: dict[str, list[dict]] = {}
     if manual:
         benches["manual_test"] = manual
@@ -215,10 +212,8 @@ def main() -> None:
         benches["ajimee_jwtd"] = ajimee
     if evalv3:
         benches["eval_v3_dev"] = evalv3
-    if gold:
-        benches["gold_1k"] = gold
     print(
-        f"  manual={len(manual)} ajimee={len(ajimee)} eval_v3={len(evalv3)} gold={len(gold)} "
+        f"  manual={len(manual)} ajimee={len(ajimee)} eval_v3={len(evalv3)} "
         f"(total {sum(len(v) for v in benches.values())} per model)",
         flush=True,
     )

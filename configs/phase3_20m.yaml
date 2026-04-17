@@ -1,0 +1,28 @@
+model:
+  preset: phase3_20m
+  use_cvae: false
+  max_kanji: 6000
+  max_seq_len: 128
+
+training:
+  batch_size: 16
+  grad_accum: 4
+  lr: 3.0e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  fp16: true
+  warmup_steps: 1000
+  checkpoint_every: 2000
+  eval_every: 2000
+  log_every: 100
+
+data:
+  train: datasets/eval_v3/train.jsonl
+  dev: datasets/eval_v3/dev.jsonl
+  max_train_samples: 200000
+  max_dev_samples: 2000
+
+debug:
+  tiny_overfit_samples: 0
+  tiny_overfit_eval_train: false
+  print_samples: 3

@@ -1,13 +1,14 @@
-use ahash::AHashMap;
 use clap::Parser;
-use serde::Deserialize;
-use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, BufWriter};
+use std::path::Path;
 
-#[derive(Parser)]
-#[command(about = "Build output tokenizer vocabulary from character frequencies")]
+#[derive(Parser, Debug)]
+#[command(about = "Build shared tokenizer vocabulary from JSONL character frequencies")]
 struct Args {
-    /// Input JSONL files (reads 'surface' field)
+    /// Input JSONL files
     #[arg(short, long, num_args = 1..)]
     input: Vec<String>,
 
@@ -19,6 +20,14 @@ struct Args {
     #[arg(long, default_value = "4000")]
     max_kanji: usize,
 
+    /// JSON fields to count
+    #[arg(long, num_args = 1.., default_values_t = vec![
+        String::from("reading"),
+        String::from("surface"),
+        String::from("context"),
+    ])]
+    fields: Vec<String>,
+
     /// Output frequency stats JSON
     #[arg(long)]
     stats: Option<String>,
@@ -26,10 +35,42 @@ struct Args {
 
 #[derive(Deserialize)]
 struct Pair {
+    #[serde(default)]
+    reading: String,
+    #[serde(default)]
     surface: String,
+    #[serde(default)]
+    context: String,
+}
+
+#[derive(Serialize)]
+struct TokenizerJson {
+    #[serde(rename = "type")]
+    tokenizer_type: String,
+    max_kanji: usize,
+    token_to_id: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct StatsEntry {
+    char: String,
+    count: u64,
+}
+
+#[derive(Serialize)]
+struct StatsJson {
+    fields: Vec<String>,
+    total_characters: u64,
+    unique_characters: usize,
+    vocab_size: usize,
+    top_100_chars: Vec<StatsEntry>,
 }
 
 const SPECIAL_TOKENS: &[&str] = &["[PAD]", "[UNK]", "[SEP]", "[CLS]", "[BLANK]", "[MASK]"];
+const JP_SYMBOLS: &[char] = &[
+    '\u{3000}', '、', '。', '！', '？', '「', '」', '『', '』', '（', '）', '【', '】', '〔', '〕',
+    '｛', '｝', '〈', '〉', '《', '》', '・', 'ー', '～', '…', '‥', '々', '〇', '〻', 'ヶ', 'ヵ',
+];
 
 fn is_hiragana(c: char) -> bool {
     ('\u{3041}'..='\u{3096}').contains(&c)
@@ -47,16 +88,22 @@ fn is_ascii_printable(c: char) -> bool {
     ('\u{0020}'..='\u{007E}').contains(&c)
 }
 
-fn is_fullwidth_ascii(c: char) -> bool {
-    ('\u{FF01}'..='\u{FF5E}').contains(&c)
+fn selected_fields<'a>(pair: &'a Pair, fields: &'a [String]) -> impl Iterator<Item = &'a str> {
+    fields.iter().filter_map(|field| match field.as_str() {
+        "reading" => Some(pair.reading.as_str()),
+        "surface" => Some(pair.surface.as_str()),
+        "context" => Some(pair.context.as_str()),
+        _ => None,
+    })
 }
 
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
     // Count character frequencies
-    let mut freq: AHashMap<char, u64> = AHashMap::new();
+    let mut freq: HashMap<char, u64> = HashMap::new();
     let mut total_chars = 0u64;
+    let mut total_rows = 0u64;
 
     for path in &args.input {
         eprintln!("Counting characters in {}...", path);
@@ -70,17 +117,19 @@ fn main() -> std::io::Result<()> {
                 Ok(p) => p,
                 Err(_) => continue,
             };
-            for c in pair.surface.chars() {
-                *freq.entry(c).or_insert(0) += 1;
-                total_chars += 1;
+            total_rows += 1;
+            for text in selected_fields(&pair, &args.fields) {
+                for c in text.chars() {
+                    *freq.entry(c).or_insert(0) += 1;
+                    total_chars += 1;
+                }
             }
         }
     }
 
     eprintln!(
-        "Total: {} characters, {} unique",
-        total_chars,
-        freq.len()
+        "Total: {} rows, {} characters, {} unique",
+        total_rows, total_chars, freq.len()
     );
 
     // Categorize and sort by frequency
@@ -111,60 +160,95 @@ fn main() -> std::io::Result<()> {
 
     // Build vocabulary
     let mut vocab: Vec<(String, usize)> = Vec::new();
+    let mut seen = HashMap::<String, usize>::new();
     let mut idx = 0usize;
 
     // Special tokens
     for tok in SPECIAL_TOKENS {
         vocab.push((tok.to_string(), idx));
+        seen.insert(tok.to_string(), idx);
         idx += 1;
     }
 
     // Byte fallback tokens
     for b in 0..256u16 {
-        vocab.push((format!("<0x{:02X}>", b), idx));
+        let token = format!("<0x{:02X}>", b);
+        vocab.push((token.clone(), idx));
+        seen.insert(token, idx);
         idx += 1;
     }
 
     // Hiragana
     for (c, _) in &hiragana {
-        vocab.push((c.to_string(), idx));
-        idx += 1;
+        let token = c.to_string();
+        if !seen.contains_key(&token) {
+            vocab.push((token.clone(), idx));
+            seen.insert(token, idx);
+            idx += 1;
+        }
     }
 
     // Katakana
     for (c, _) in &katakana {
-        vocab.push((c.to_string(), idx));
-        idx += 1;
+        let token = c.to_string();
+        if !seen.contains_key(&token) {
+            vocab.push((token.clone(), idx));
+            seen.insert(token, idx);
+            idx += 1;
+        }
     }
 
     // ASCII
     for (c, _) in &ascii {
-        vocab.push((c.to_string(), idx));
-        idx += 1;
+        let token = c.to_string();
+        if !seen.contains_key(&token) {
+            vocab.push((token.clone(), idx));
+            seen.insert(token, idx);
+            idx += 1;
+        }
     }
 
     // Fullwidth ASCII
     for cp in 0xFF01u32..=0xFF5Eu32 {
         if let Some(c) = char::from_u32(cp) {
-            if !freq.contains_key(&c) {
-                // Add even if not seen (for completeness)
+            let token = c.to_string();
+            if !seen.contains_key(&token) {
+                vocab.push((token.clone(), idx));
+                seen.insert(token, idx);
+                idx += 1;
             }
-            vocab.push((c.to_string(), idx));
+        }
+    }
+
+    // Always-available Japanese symbols, including fullwidth space.
+    for c in JP_SYMBOLS {
+        let token = c.to_string();
+        if !seen.contains_key(&token) {
+            vocab.push((token.clone(), idx));
+            seen.insert(token, idx);
             idx += 1;
         }
     }
 
     // Symbols (by frequency)
     for (c, _) in &symbols {
-        vocab.push((c.to_string(), idx));
-        idx += 1;
+        let token = c.to_string();
+        if !seen.contains_key(&token) {
+            vocab.push((token.clone(), idx));
+            seen.insert(token, idx);
+            idx += 1;
+        }
     }
 
     // Kanji (limited to max_kanji, by frequency)
     let kanji_count = kanji.len().min(args.max_kanji);
     for (c, _) in kanji.iter().take(kanji_count) {
-        vocab.push((c.to_string(), idx));
-        idx += 1;
+        let token = c.to_string();
+        if !seen.contains_key(&token) {
+            vocab.push((token.clone(), idx));
+            seen.insert(token, idx);
+            idx += 1;
+        }
     }
 
     eprintln!("\nVocabulary summary:");
@@ -182,41 +266,50 @@ fn main() -> std::io::Result<()> {
     );
     eprintln!("  Total vocab size: {}", idx);
 
-    // Write vocab JSON: {"type": "output", "token_to_id": {...}}
-    let out_file = File::create(&args.output)?;
-    let mut writer = BufWriter::new(out_file);
-
-    write!(writer, "{{\"type\":\"output\",\"token_to_id\":{{")?;
-    for (i, (token, id)) in vocab.iter().enumerate() {
-        if i > 0 {
-            write!(writer, ",")?;
+    let token_to_id = vocab.into_iter().collect::<BTreeMap<_, _>>();
+    let tokenizer_json = TokenizerJson {
+        tokenizer_type: "shared".to_string(),
+        max_kanji: args.max_kanji,
+        token_to_id,
+    };
+    if let Some(parent) = Path::new(&args.output).parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
         }
-        // Escape token for JSON
-        let escaped = serde_json::to_string(token).unwrap();
-        write!(writer, "{}:{}", escaped, id)?;
     }
-    write!(writer, "}}}}")?;
-    writer.flush()?;
+    let out_file = File::create(&args.output)?;
+    let writer = BufWriter::new(out_file);
+    serde_json::to_writer_pretty(writer, &tokenizer_json)?;
 
     eprintln!("\nVocabulary saved to {}", args.output);
 
     // Optional stats
     if let Some(stats_path) = &args.stats {
-        let stats_file = File::create(stats_path)?;
-        let mut sw = BufWriter::new(stats_file);
-        write!(sw, "{{\"total_characters\":{},\"unique_characters\":{},\"vocab_size\":{},\"top_100_chars\":[",
-            total_chars, freq.len(), idx)?;
-        let mut all_chars: Vec<(char, u64)> = freq.into_iter().collect();
-        all_chars.sort_by(|a, b| b.1.cmp(&a.1));
-        for (i, (c, count)) in all_chars.iter().take(100).enumerate() {
-            if i > 0 {
-                write!(sw, ",")?;
+        if let Some(parent) = Path::new(stats_path).parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
             }
-            let cs = serde_json::to_string(&c.to_string()).unwrap();
-            write!(sw, "{{\"char\":{},\"count\":{}}}", cs, count)?;
         }
-        write!(sw, "]}}")?;
-        sw.flush()?;
+        let stats_file = File::create(stats_path)?;
+        let mut all_chars: Vec<(char, u64)> = freq.iter().map(|(c, count)| (*c, *count)).collect();
+        all_chars.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_100_chars = all_chars
+            .into_iter()
+            .take(100)
+            .map(|(c, count)| StatsEntry {
+                char: c.to_string(),
+                count,
+            })
+            .collect::<Vec<_>>();
+        let stats = StatsJson {
+            fields: args.fields.clone(),
+            total_characters: total_chars,
+            unique_characters: freq.len(),
+            vocab_size: idx,
+            top_100_chars,
+        };
+        let sw = BufWriter::new(stats_file);
+        serde_json::to_writer_pretty(sw, &stats)?;
         eprintln!("Stats saved to {}", stats_path);
     }
 

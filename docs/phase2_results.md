@@ -1,3 +1,8 @@
+---
+status: phase_complete
+last_updated: 2026-04-18
+---
+
 # Phase 2 実験結果まとめ (2026-04-17〜18)
 
 ## モデル構成

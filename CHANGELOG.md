@@ -1,31 +1,70 @@
 # Changelog
 
-## 2026-04-17 (continued): データ v2 + 追加コーパス + AR ベースライン学習
+## 2026-04-18: 長期ビジョン・ベンチ比較・ドキュメント整理
 
-### データパイプライン v2
+### 長期ビジョン確定
 
-- **MeCab feature 修正**: features[9] (発音形: よほー, わ, お) → features[6] (書字形: よほう, は, を)
-  - 発音形は音声学的変換を含み IME 入力と不一致だった
-  - 書字形は正書法に準拠し IME の読みと一致する
+- `docs/vision.md`: 200M CTC-NAT + 1.58-bit QAT + 階層 CVAE の最終到達点を明文化
+- 撤退経路 (CTC-NAT→DAT→AR+投機的デコード) を全階層で整備
+
+### ベンチマーク比較
+
+- `docs/benchmark_comparison.md`: 9モデル × 3ベンチの全量比較
+  - zenz-v2.5 medium/small/xsmall (greedy)
+  - 自前 ar_v3 (vast / local / chunks, greedy + beam10)
+- **自前 ar_v3_vast (32M) は eval_v3 で zenz-v2.5-medium (310M) と EM 0.412 同値**
+- AJIMEE では xsmall にも負け (0.450 vs 0.588) → 汎化データ多様性不足
+- Phase 3 の戦略指針: データ多様性 + 規模拡大 + CTC-NAT 並列生成
+
+### ドキュメント整理
+
+- `PLAN.md` + `ROADMAP.md` → `docs/roadmap.md` に統合 (旧 2 ファイル削除)
+- `docs/architecture_decisions.md` → `docs/vision.md` に吸収
+- `README.md` 刷新 (現状反映、Windows TSF を追記)
+- データ追加候補を `docs/dataset_candidates.md` に整理 (MIT 互換のみ)
+
+---
+
+## 2026-04-17 (continued): データ v3 + 追加コーパス + Windows エンジン
+
+### データパイプライン v3
+
+- **MeCab feature 確定**: features[17] (仮名形出現形) を採用
+  - v1 features[7] (書字形基本形): 漢字が reading に混入
+  - v2 features[9] (発音形出現形): 長音化 (よほー)、助詞変化 (は→わ) で IME 入力と不一致
+  - v3 **features[17]**: 活用後の正しいカタカナ、正解
 - **追加コーパス**:
-  - Livedoor News: 7,367記事 → 84,182 クリーンペア (現代ニュース文体)
-  - Tatoeba Japanese: 248K文 → 228,440 クリーンペア (短文・会話調、p50=17文字)
-- **Wikipedia v2**: features[6] で全再処理 → 1842万ペア
-- **統合データセット v2**: 2012万 train + 2K dev + 10K test
+  - Livedoor News: 7,367 記事 → 84,182 クリーンペア (現代ニュース文体)
+  - Tatoeba Japanese: 248K 文 → 228,440 クリーンペア (短文・会話調、p50=17文字)
+- **Wikipedia v3**: features[17] で全再処理 → 1842万ペア
+- **統合データセット v3**: 19.8M train + 2K dev + 10K test
+- **チャンクデータ**: tools/chunk-generator (Rust) で 100M 文節チャンク生成
 - **HuggingFace にアップロード**: esehe/new-ime-dataset (private)
 
-### AR ベースライン学習 (参考モデル、旧データ)
+### AR ベースライン完成 (Phase 2 完了)
 
-- SimpleGPT2 28.6M params (512 hidden, 8 layers)
-- RTX 3060 12GB でローカル学習
-- step 18000 時点の手動テスト結果 (20問中 ○15, △2, ×3):
-  - 東京都渋谷区、学校に行く、新聞を読む、経済学を専攻する etc. → 正解
-  - 交渉が難航している、散歩に行きましょう、明日は雨が降るでしょう → step 8000 で失敗 → step 18000 で正解に改善
-  - 感じ変換の制度を評価する (漢字→感じ) → 同音異義語、文脈不足
-  - にほんご → ニホンゴ (文字単位 AR の局所最適問題)
-- 発見: teacher-forced eval (87%) vs autoregressive eval (81%) の乖離 → CTC-NAT の優位性を示す材料
+- SimpleGPT2 31.9M params (hidden 512, 8 layers, 8 heads, vocab ~6500)
+- vast.ai で 2012万全量学習 (5090)、ベスト step 70000
+  - Dev CharAcc 91.4%, 手動テスト 80/100
+  - eval_v3 EM 0.412, manual_test EM 0.800, AJIMEE EM 0.450
+- RTX 3060 ローカル 200万サンプル版: 天井 87-88% (容量飽和)
+- チャンクのみモデル: 文レベル崩壊、混合学習が必須
 
-### 分析: 失敗モードの分類
+### 重要な知見
+
+- **beam search 内正解率 95%** (greedy top1 は 60%) → KenLM/ユーザ辞書でリランキング可
+- teacher-forced 87% vs AR 81% の乖離 → CTC-NAT の優位性を示す材料
+- 31.9M 天井は ~91-92%。これ以上は 200M が必要
+
+### Windows IME エンジン (新規)
+
+- `engine/win32/ffi_impl.cpp`: ONNX Runtime C++ FFI 実装
+- `engine/win32/new-ime-engine.dll`: DLL ビルド・動作確認済
+- `engine/win32/interactive.cpp`: 対話型コンソールデモ
+- `engine/win32/test_ffi.cpp`: FFI 単体テスト
+- ONNX エクスポート経路構築 (encoder/decoder 別ファイル方針)
+
+### 失敗モードの分類
 
 - **カテゴリA (コピー問題)**: 学習量不足 → step 増加で解消確認
 - **カテゴリB (同音異義語)**: データ頻度通り (感じ>漢字) → 文脈モデリング強化が必要
@@ -38,26 +77,26 @@
 
 ### 設計・計画
 
-- PLAN.md: NAT ベース並列生成日本語 IME の6フェーズ開発計画を策定
-- ROADMAP.md: CTC-NAT アーキテクチャの実装レベルロードマップ作成
+- PLAN.md: NAT ベース並列生成日本語 IME の 6 フェーズ開発計画を策定 (2026-04-18 に roadmap.md へ統合)
+- ROADMAP.md: CTC-NAT アーキテクチャの実装レベルロードマップ作成 (同上)
 - 設計判断の確定:
   - CMLM → **CTC-NAT** (Mask-CTC) に変更。かな漢字変換の単調アラインメントに CTC が最適
   - fairseq (2026-03 アーカイブ済み) → **スクラッチ実装 (PyTorch)**
   - エンコーダ: cl-tohoku/bert-base-japanese-char-v3 から初期化
   - 推論: ONNX Runtime (C++, int8 量子化)
-  - fcitx5 統合: クライアント・サーバー方式 (Hazkey/mozc と同パターン)
+  - IME 統合: クライアント・サーバー方式 (Hazkey/mozc と同パターン)
 - zenz-v1 のコードリーディング完了:
   - GPT-2 90M, vocab 6000, GGUF Q8_0, greedy decode
   - ラティス→ニューラル検証のドラフト・検証ループ
   - プロンプト形式、トークナイザ構成を把握
 - 外部レビュー議論の知見整理 (docs/external_review_notes.md)
 
-### データパイプライン
+### データパイプライン (初期構築、後に v3 へ進化)
 
 - Wikipedia 処理パイプライン (scripts/process_wiki.py):
   - mwxml + mwparserfromhell でテキスト抽出 (wikiextractor は Python 3.13 非互換で却下)
-  - MeCab (unidic-lite) で読み付与。**features[9] (発音形出現形)** を使用 (features[7] は書字形で漢字が混入する致命的バグを発見・修正)
-  - 16ワーカーのマルチプロセスで並列化
+  - MeCab (unidic-lite) で読み付与
+  - 16 ワーカーのマルチプロセスで並列化
   - 結果: 243万記事 → **2683万ペア**
 - 青空文庫処理パイプライン (scripts/process_aozora.py):
   - 形態素解析済み CSV (utf8_all.csv.gz) から直接変換
@@ -70,14 +109,6 @@
 - 品質監査 (scripts/audit_data.py):
   - 1% 抽出 x 2回で分布安定を確認
   - Wikipedia: 87.8% clean, 青空文庫: 92.0% clean
-
-**最終データセット:**
-
-| ソース | 生ペア | フィルタ後 | 保持率 |
-|--------|--------|-----------|--------|
-| Wikipedia | 26,838,817 | 18,426,765 | 68.7% |
-| 青空文庫 | 3,758,957 | 2,420,414 | 64.4% |
-| **合計** | **30,597,774** | **20,847,179** | |
 
 ### モデルスケルトン (Python)
 

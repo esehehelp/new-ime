@@ -172,23 +172,6 @@ def load_manual_test() -> list[dict]:
     ]
 
 
-def load_gold(path: str = "datasets/gold_1k.jsonl") -> list[dict]:
-    """Hand-crafted gold dataset: {reading, surface, context}."""
-    items: list[dict] = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            d = json.loads(line)
-            items.append(
-                {
-                    "reading": d["reading"],
-                    "context": d.get("context", ""),
-                    "references": [d["surface"]],
-                    "source": "gold_1k",
-                }
-            )
-    return items
-
-
 def sample_items(items: list[dict], n: int, seed: int = 42) -> list[dict]:
     if n <= 0 or n >= len(items):
         return items

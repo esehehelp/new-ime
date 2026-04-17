@@ -1,74 +1,95 @@
-"""CTC-NAT: Main model combining encoder, decoder, and CTC head.
-
-Architecture:
-    [context + kana input] → Encoder (BERT) → Decoder (NAT) → CTC Head → output
-
-CTC loss handles:
-    - Variable-length output (no explicit length prediction needed)
-    - Monotonic alignment between input and output
-    - Blank tokens absorb length differences
-
-Reference:
-    NMLA-NAT CTC criterion — examples/speech_recognition/criterions/CTC_loss.py
-    fairseq NATransformerModel — fairseq/models/nat/nonautoregressive_transformer.py:44-205
-"""
+"""CTC-NAT model family for the Phase 3 research prototype."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.model.cvae import CVAEConditioner
 from src.model.decoder import NATDecoder
-from src.model.encoder import BertEncoder, MockEncoder
+from src.model.encoder import BertEncoder, MockEncoder, SmallEncoder
+
+
+@dataclass(frozen=True)
+class CTCNATPreset:
+    name: str
+    hidden_size: int
+    encoder_layers: int
+    decoder_layers: int
+    num_heads: int
+    ffn_size: int
+    max_positions: int
+
+
+PRESETS: dict[str, CTCNATPreset] = {
+    "phase3_20m": CTCNATPreset(
+        name="phase3_20m",
+        hidden_size=320,
+        encoder_layers=5,
+        decoder_layers=5,
+        num_heads=4,
+        ffn_size=1280,
+        max_positions=128,
+    ),
+    "phase3_30m": CTCNATPreset(
+        name="phase3_30m",
+        hidden_size=384,
+        encoder_layers=6,
+        decoder_layers=6,
+        num_heads=6,
+        ffn_size=1536,
+        max_positions=128,
+    ),
+    "phase3_90m": CTCNATPreset(
+        name="phase3_90m",
+        hidden_size=640,
+        encoder_layers=8,
+        decoder_layers=8,
+        num_heads=8,
+        ffn_size=2560,
+        max_positions=128,
+    ),
+}
 
 
 class CTCHead(nn.Module):
-    """Linear projection from hidden states to vocabulary logits.
+    """Projection from decoder hidden states to vocabulary logits."""
 
-    Includes the CTC blank token at index 0.
-    """
-
-    def __init__(self, hidden_size: int, vocab_size: int):
+    def __init__(
+        self,
+        hidden_size: int,
+        vocab_size: int,
+        tied_embedding: nn.Embedding | None = None,
+    ):
         super().__init__()
-        # +1 for CTC blank token (index 0 in CTC convention)
-        # But our tokenizer already includes BLANK at index 4.
-        # We output over the full vocab (which includes BLANK).
-        self.projection = nn.Linear(hidden_size, vocab_size)
+        self.projection = nn.Linear(hidden_size, vocab_size, bias=False)
+        if tied_embedding is not None:
+            if tied_embedding.weight.shape == self.projection.weight.shape:
+                self.projection.weight = tied_embedding.weight
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: (batch, seq_len, hidden_size)
-        Returns:
-            Logits: (batch, seq_len, vocab_size)
-        """
         return self.projection(x)
 
 
 class CTCNAT(nn.Module):
-    """CTC-based Non-Autoregressive Transformer for kana-kanji conversion.
-
-    Training:
-        1. Encode [context + kana] → hidden states
-        2. Decode (parallel) → features
-        3. Project → logits
-        4. CTC loss against target surface text
-
-    Inference:
-        1-3 same as training
-        4. CTC greedy/beam decode → candidates
-    """
+    """CTC-based non-autoregressive Transformer for kana-kanji conversion."""
 
     def __init__(
         self,
-        encoder: BertEncoder | MockEncoder,
+        encoder: BertEncoder | MockEncoder | SmallEncoder,
         output_vocab_size: int,
         decoder_layers: int = 6,
         decoder_heads: int = 8,
         decoder_ffn_size: int = 3072,
         dropout: float = 0.1,
-        blank_id: int = 4,  # BLANK_ID from tokenizer
+        blank_id: int = 4,
+        max_positions: int = 128,
+        use_cvae: bool = False,
+        latent_size: int = 64,
+        tie_output_projection: bool = True,
     ):
         super().__init__()
         self.encoder = encoder
@@ -80,11 +101,82 @@ class CTCNAT(nn.Module):
             num_heads=decoder_heads,
             ffn_size=decoder_ffn_size,
             dropout=dropout,
+            max_positions=max_positions,
         )
 
-        self.ctc_head = CTCHead(hidden_size, output_vocab_size)
+        tied_embedding = None
+        if tie_output_projection:
+            candidate = encoder.get_input_embedding()
+            if candidate.num_embeddings == output_vocab_size:
+                tied_embedding = candidate
+        self.ctc_head = CTCHead(hidden_size, output_vocab_size, tied_embedding=tied_embedding)
         self.blank_id = blank_id
         self.output_vocab_size = output_vocab_size
+        self.cvae = (
+            CVAEConditioner(hidden_size, decoder_layers, latent_size=latent_size)
+            if use_cvae
+            else None
+        )
+
+    @classmethod
+    def from_preset(
+        cls,
+        preset_name: str,
+        vocab_size: int,
+        dropout: float = 0.1,
+        use_cvae: bool = False,
+        blank_id: int = 4,
+    ) -> CTCNAT:
+        preset = PRESETS[preset_name]
+        encoder = SmallEncoder(
+            vocab_size=vocab_size,
+            hidden_size=preset.hidden_size,
+            num_layers=preset.encoder_layers,
+            num_heads=preset.num_heads,
+            ffn_size=preset.ffn_size,
+            max_positions=preset.max_positions,
+            dropout=dropout,
+        )
+        return cls(
+            encoder=encoder,
+            output_vocab_size=vocab_size,
+            decoder_layers=preset.decoder_layers,
+            decoder_heads=preset.num_heads,
+            decoder_ffn_size=preset.ffn_size,
+            dropout=dropout,
+            blank_id=blank_id,
+            max_positions=preset.max_positions,
+            use_cvae=use_cvae,
+        )
+
+    def _build_cvae_output(
+        self,
+        batch_size: int,
+        device: torch.device,
+        target_ids: torch.Tensor | None,
+        target_padding_mask: torch.Tensor | None,
+        writer_ids: torch.Tensor | None,
+        domain_ids: torch.Tensor | None,
+        source_ids: torch.Tensor | None,
+        sample_posterior: bool,
+    ):
+        if self.cvae is None:
+            return None
+
+        target_embeddings = None
+        if target_ids is not None:
+            target_embeddings = self.encoder.get_input_embedding()(target_ids)
+
+        return self.cvae(
+            target_embeddings=target_embeddings,
+            target_padding_mask=target_padding_mask,
+            writer_ids=writer_ids,
+            domain_ids=domain_ids,
+            source_ids=source_ids,
+            batch_size=batch_size,
+            device=device,
+            sample_posterior=sample_posterior,
+        )
 
     def forward(
         self,
@@ -92,47 +184,52 @@ class CTCNAT(nn.Module):
         attention_mask: torch.Tensor,
         target_ids: torch.Tensor | None = None,
         target_lengths: torch.Tensor | None = None,
+        writer_ids: torch.Tensor | None = None,
+        domain_ids: torch.Tensor | None = None,
+        source_ids: torch.Tensor | None = None,
+        sample_posterior: bool = True,
     ) -> dict[str, torch.Tensor]:
-        """Forward pass.
-
-        Args:
-            input_ids: (batch, src_len) encoder input token IDs
-            attention_mask: (batch, src_len) 1=valid, 0=pad
-            target_ids: (batch, tgt_len) target token IDs (for training)
-            target_lengths: (batch,) actual length of each target (for CTC loss)
-
-        Returns:
-            dict with:
-                "logits": (batch, src_len, vocab_size)
-                "log_probs": (src_len, batch, vocab_size) — CTC format (time-first)
-                "loss": scalar CTC loss (only if target_ids provided)
-        """
-        # Encode
         encoder_out = self.encoder(input_ids, attention_mask)
+        encoder_padding_mask = ~attention_mask.bool()
 
-        # Decode (parallel)
-        encoder_padding_mask = ~attention_mask.bool()  # True=pad for decoder
-        decoder_out = self.decoder(encoder_out, encoder_padding_mask)
+        target_padding_mask = None
+        if target_ids is not None and target_lengths is not None:
+            seq_len = target_ids.shape[1]
+            positions = torch.arange(seq_len, device=target_ids.device).unsqueeze(0)
+            target_padding_mask = positions >= target_lengths.unsqueeze(1)
 
-        # Project to vocab
-        logits = self.ctc_head(decoder_out)  # (batch, src_len, vocab_size)
+        cvae_output = self._build_cvae_output(
+            batch_size=input_ids.shape[0],
+            device=input_ids.device,
+            target_ids=target_ids,
+            target_padding_mask=target_padding_mask,
+            writer_ids=writer_ids,
+            domain_ids=domain_ids,
+            source_ids=source_ids,
+            sample_posterior=sample_posterior,
+        )
 
-        # CTC needs log-probs in (time, batch, vocab) format
-        log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)  # (src_len, batch, vocab)
+        decoder_out = self.decoder(
+            encoder_out,
+            encoder_padding_mask,
+            film_conditioning=cvae_output.film_conditioning if cvae_output else None,
+        )
+        logits = self.ctc_head(decoder_out)
+        log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
 
         result = {
             "logits": logits,
             "log_probs": log_probs,
         }
 
-        # Compute CTC loss if targets provided
-        if target_ids is not None and target_lengths is not None:
-            # Input lengths: actual (non-padded) length of encoder output
-            # = sum of attention_mask per batch element
-            input_lengths = attention_mask.sum(dim=1).long()  # (batch,)
+        if cvae_output is not None:
+            result["latent"] = cvae_output.latent
+            result["kl"] = cvae_output.kl
+            result["posterior_mean"] = cvae_output.mean
+            result["posterior_logvar"] = cvae_output.logvar
 
-            # CTC loss
-            # Reference: NMLA-NAT CTC_loss.py line 141
+        if target_ids is not None and target_lengths is not None:
+            input_lengths = attention_mask.sum(dim=1).long()
             loss = F.ctc_loss(
                 log_probs=log_probs,
                 targets=target_ids,
@@ -151,21 +248,19 @@ class CTCNAT(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        writer_ids: torch.Tensor | None = None,
+        domain_ids: torch.Tensor | None = None,
+        source_ids: torch.Tensor | None = None,
     ) -> list[list[int]]:
-        """CTC greedy decoding: argmax → collapse blanks and repeats.
-
-        Args:
-            input_ids: (batch, src_len)
-            attention_mask: (batch, src_len)
-
-        Returns:
-            List of decoded token ID sequences (one per batch element).
-        """
-        result = self.forward(input_ids, attention_mask)
-        logits = result["logits"]  # (batch, src_len, vocab_size)
-
-        # Argmax
-        predictions = logits.argmax(dim=-1)  # (batch, src_len)
+        result = self.forward(
+            input_ids,
+            attention_mask,
+            writer_ids=writer_ids,
+            domain_ids=domain_ids,
+            source_ids=source_ids,
+            sample_posterior=False,
+        )
+        predictions = result["logits"].argmax(dim=-1)
         input_lengths = attention_mask.sum(dim=1).long()
 
         decoded = []
@@ -178,26 +273,11 @@ class CTCNAT(nn.Module):
                     tokens.append(token)
                 prev_token = token
             decoded.append(tokens)
-
         return decoded
 
 
 class GLATSampler:
-    """Glancing Language Model Training (GLAT) sampling.
-
-    During training:
-    1. First forward pass → get model's current predictions
-    2. Compare predictions to reference → compute Hamming distance
-    3. Reveal a fraction of reference tokens to the decoder
-    4. Train on the remaining (unrevealed) positions
-
-    The fraction revealed = (hamming_distance / length) * sampling_ratio
-    This creates an automatic curriculum: easy→hard as the model improves.
-
-    Reference:
-        DA-Transformer nat_dag_loss.py lines 239-321
-        GLAT paper (Qian et al. 2021)
-    """
+    """Glancing Language Model Training (GLAT) sampling."""
 
     def __init__(
         self,
@@ -212,7 +292,6 @@ class GLATSampler:
 
     @property
     def sampling_ratio(self) -> float:
-        """Current GLAT sampling ratio, linearly annealed."""
         if self.anneal_steps <= 0:
             return self.initial_ratio
         progress = min(self.current_step / self.anneal_steps, 1.0)
@@ -227,54 +306,20 @@ class GLATSampler:
         targets: torch.Tensor,
         target_padding_mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute which target positions to reveal to the decoder.
-
-        Reference: DA-Transformer nat_dag_loss.py glat_function
-
-        Args:
-            predictions: (batch, seq_len) model's predicted token IDs
-            targets: (batch, seq_len) reference token IDs
-            target_padding_mask: (batch, seq_len) True=pad
-
-        Returns:
-            reveal_mask: (batch, seq_len) True=reveal this position to decoder
-        """
-        # Hamming distance: count positions where prediction != target
         valid_mask = ~target_padding_mask
         correct = (predictions == targets) & valid_mask
-        target_lengths = valid_mask.sum(dim=1).float()  # (batch,)
-        correct_count = correct.sum(dim=1).float()  # (batch,)
-
-        # Fraction to reveal = (errors / length) * sampling_ratio
-        # More errors → reveal more (easier task)
+        target_lengths = valid_mask.sum(dim=1).float()
+        correct_count = correct.sum(dim=1).float()
         error_fraction = (target_lengths - correct_count) / target_lengths.clamp(min=1)
-        reveal_fraction = error_fraction * self.sampling_ratio  # (batch,)
+        reveal_fraction = error_fraction * self.sampling_ratio
 
-        # Sample positions to reveal
         rand = torch.rand_like(targets.float())
-        rand = rand.masked_fill(target_padding_mask, 1.0)  # Never reveal padding
-
-        # Reveal positions where rand < reveal_fraction
-        reveal_mask = rand < reveal_fraction.unsqueeze(1)
-
-        return reveal_mask
+        rand = rand.masked_fill(target_padding_mask, 1.0)
+        return rand < reveal_fraction.unsqueeze(1)
 
 
 class MaskCTCRefiner(nn.Module):
-    """Mask-CTC refinement: re-predict low-confidence CTC output positions.
-
-    After CTC greedy/beam decode:
-    1. Identify positions with low confidence (below threshold)
-    2. Replace those positions with [MASK]
-    3. Run decoder again to re-predict masked positions
-    4. Combine with original predictions
-
-    This is a single refinement pass (not iterative).
-
-    Reference:
-        Higuchi et al. 2021 — Mask-CTC
-        fairseq cmlm_transformer.py _skeptical_unmasking (line 18-24)
-    """
+    """Single-pass Mask-CTC refinement."""
 
     def __init__(self, mask_id: int = 5, confidence_threshold: float = 0.5):
         super().__init__()
@@ -287,25 +332,9 @@ class MaskCTCRefiner(nn.Module):
         predictions: torch.Tensor,
         input_lengths: torch.Tensor,
     ) -> torch.Tensor:
-        """Find positions where the model is not confident.
-
-        Args:
-            logits: (batch, seq_len, vocab_size)
-            predictions: (batch, seq_len) argmax token IDs
-            input_lengths: (batch,) valid lengths
-
-        Returns:
-            mask: (batch, seq_len) True = should be re-predicted
-        """
-        # Softmax confidence
         probs = torch.softmax(logits, dim=-1)
-        max_probs = probs.max(dim=-1).values  # (batch, seq_len)
-
-        # Mark low-confidence positions
+        max_probs = probs.max(dim=-1).values
         low_conf = max_probs < self.confidence_threshold
-
-        # Don't mask padding
         for b in range(logits.shape[0]):
-            low_conf[b, input_lengths[b]:] = False
-
+            low_conf[b, input_lengths[b] :] = False
         return low_conf

@@ -3,8 +3,9 @@
 import torch
 
 from src.model.ctc_nat import CTCNAT, CTCHead, GLATSampler, MaskCTCRefiner
+from src.model.cvae import CVAEConditioner
 from src.model.decoder import NATDecoder, NATDecoderLayer
-from src.model.encoder import MockEncoder
+from src.model.encoder import MockEncoder, SmallEncoder
 
 BATCH = 2
 SRC_LEN = 16
@@ -31,6 +32,15 @@ class TestNATDecoderLayer:
         out = layer(x, enc, self_attn_padding_mask=pad_mask, cross_attn_padding_mask=pad_mask)
         assert out.shape == (BATCH, SRC_LEN, HIDDEN)
 
+    def test_with_film_condition(self):
+        layer = NATDecoderLayer(hidden_size=HIDDEN, num_heads=4, ffn_size=HIDDEN * 4)
+        x = torch.randn(BATCH, SRC_LEN, HIDDEN)
+        enc = torch.randn(BATCH, SRC_LEN, HIDDEN)
+        gamma = torch.ones(BATCH, 1, HIDDEN)
+        beta = torch.zeros(BATCH, 1, HIDDEN)
+        out = layer(x, enc, film_condition=(gamma, beta))
+        assert out.shape == (BATCH, SRC_LEN, HIDDEN)
+
 
 class TestNATDecoder:
     def test_forward_shape(self):
@@ -45,6 +55,32 @@ class TestNATDecoder:
         pad_mask = torch.zeros(BATCH, SRC_LEN, dtype=torch.bool)
         pad_mask[0, -3:] = True  # First sample has 3 padding tokens
         out = decoder(enc, encoder_padding_mask=pad_mask)
+        assert out.shape == (BATCH, SRC_LEN, HIDDEN)
+
+    def test_with_film_conditioning_list(self):
+        decoder = NATDecoder(hidden_size=HIDDEN, num_layers=2, num_heads=4, ffn_size=HIDDEN * 4)
+        enc = torch.randn(BATCH, SRC_LEN, HIDDEN)
+        conditioning = [
+            (torch.ones(BATCH, 1, HIDDEN), torch.zeros(BATCH, 1, HIDDEN)),
+            (torch.ones(BATCH, 1, HIDDEN), torch.zeros(BATCH, 1, HIDDEN)),
+        ]
+        out = decoder(enc, film_conditioning=conditioning)
+        assert out.shape == (BATCH, SRC_LEN, HIDDEN)
+
+
+class TestSmallEncoder:
+    def test_forward_shape(self):
+        encoder = SmallEncoder(
+            vocab_size=256,
+            hidden_size=HIDDEN,
+            num_layers=2,
+            num_heads=4,
+            ffn_size=HIDDEN * 4,
+            max_positions=32,
+        )
+        input_ids = torch.randint(0, 256, (BATCH, SRC_LEN))
+        attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        out = encoder(input_ids, attention_mask)
         assert out.shape == (BATCH, SRC_LEN, HIDDEN)
 
 
@@ -145,6 +181,33 @@ class TestCTCNAT:
         result = self.model(input_ids, attention_mask, target_ids, target_lengths)
         assert not torch.isnan(result["loss"])
 
+    def test_from_preset_30m(self):
+        model = CTCNAT.from_preset("phase3_30m", vocab_size=1024, use_cvae=False)
+        assert model.encoder.hidden_size == 384
+        assert model.decoder.num_layers == 6
+
+    def test_with_cvae(self):
+        model = CTCNAT.from_preset("phase3_30m", vocab_size=1024, use_cvae=True)
+        input_ids = torch.randint(0, 1024, (BATCH, SRC_LEN))
+        attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        target_ids = torch.randint(6, 1024, (BATCH, 8))
+        target_lengths = torch.tensor([8, 6])
+        writer_ids = torch.tensor([1, 2])
+        domain_ids = torch.tensor([1, 1])
+        source_ids = torch.tensor([1, 0])
+        result = model(
+            input_ids,
+            attention_mask,
+            target_ids=target_ids,
+            target_lengths=target_lengths,
+            writer_ids=writer_ids,
+            domain_ids=domain_ids,
+            source_ids=source_ids,
+        )
+        assert "kl" in result
+        assert result["latent"].shape == (BATCH, 64)
+        assert result["kl"].dim() == 0
+
 
 class TestGLATSampler:
     def test_sampling_ratio_initial(self):
@@ -198,3 +261,24 @@ class TestMaskCTCRefiner:
         assert mask.shape == (BATCH, SRC_LEN)
         # First position of first batch should NOT be masked (high confidence)
         assert not mask[0, 0]
+
+
+class TestCVAEConditioner:
+    def test_forward_shapes(self):
+        conditioner = CVAEConditioner(hidden_size=HIDDEN, num_decoder_layers=2, latent_size=16)
+        target_embeddings = torch.randn(BATCH, SRC_LEN, HIDDEN)
+        padding_mask = torch.zeros(BATCH, SRC_LEN, dtype=torch.bool)
+        out = conditioner(
+            target_embeddings=target_embeddings,
+            target_padding_mask=padding_mask,
+            writer_ids=torch.tensor([1, 2]),
+            domain_ids=torch.tensor([1, 0]),
+            source_ids=torch.tensor([0, 1]),
+            batch_size=BATCH,
+            device=target_embeddings.device,
+        )
+        assert out.latent.shape == (BATCH, 16)
+        assert len(out.film_conditioning) == 2
+        gamma, beta = out.film_conditioning[0]
+        assert gamma.shape == (BATCH, 1, HIDDEN)
+        assert beta.shape == (BATCH, 1, HIDDEN)

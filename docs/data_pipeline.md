@@ -1,4 +1,11 @@
+---
+status: current
+last_updated: 2026-04-18
+---
+
 # データパイプライン設計メモ
+
+現状の処理フローとデータ特性。MeCab feature は `features[17]` (仮名形出現形) を使用 (確定)。
 
 ## 処理フロー
 

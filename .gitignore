@@ -18,6 +18,15 @@ build/
 build_test/
 cmake-build-*/
 compile_commands.json
+engine/win32/*.obj
+engine/win32/*.exe
+engine/win32/*.dll
+engine/win32/*.exp
+engine/win32/*.lib
+engine/win32/*.pdb
+
+# Claude local state
+.claude/scheduled_tasks.lock
 
 # Rust build
 tools/*/target/

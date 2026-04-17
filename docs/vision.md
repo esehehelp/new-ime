@@ -1,4 +1,12 @@
-# new-ime: 最善構成ビジョン (工数度外視)
+---
+status: current
+last_updated: 2026-04-18
+supersedes: docs/architecture_decisions.md
+---
+
+# new-ime: 最終構成ビジョン
+
+v1.0 最終到達点の設計文書。Phase 2 AR ベースラインを教師として Phase 3 以降で実現する。
 
 ## 設計原則
 
@@ -8,12 +16,30 @@
 
 ## アーキテクチャ: CTC-NAT Encoder-Decoder
 
-| コンポーネント | 構成 |
-|---------------|------|
-| Encoder | Transformer 12層, hidden 512, BERT-japanese-char 初期化 |
-| Decoder | NAT Transformer 8層, hidden 512, 双方向 self-attention |
-| CTC Head | 並列出力 + Mask-CTC iterative refinement (2-3回) |
-| 合計 | 40-60M params |
+```
+[左文脈 + ひらがな入力]
+    │
+    ▼ Encoder (BERT 85M, cl-tohoku/bert-base-japanese-char-v3 初期化)
+    │
+    ▼ Decoder (NAT 6層, 双方向 self-attention + cross-attention)
+    │
+    ▼ CTC Head → CTC collapse / beam search + KenLM shallow fusion
+    │
+    ▼ Mask-CTC refinement (2-3回, オプション)
+    │
+    ▼ ユーザ辞書ハード制約 + ユーザ学習スコア加算
+    │
+    漢字かな混じり出力 (top-K, K=10)
+```
+
+### 規模
+
+| コンポーネント | 構成 | パラメータ |
+|---------------|------|-----------|
+| Encoder | Transformer 12層, hidden 768, BERT-japanese-char 初期化 | ~85M |
+| Decoder | NAT Transformer 6-8層, hidden 768, 双方向 self-attention | ~45M |
+| CTC Head | Linear(768, ~6000+1) | ~5M |
+| 合計 | | **~135M (拡張想定 200M)** |
 
 ### CTC-NAT を選ぶ理由
 
@@ -33,14 +59,15 @@
 
 ### 最終サイズ
 
-- 40-60M × 1.58-bit ≈ **10-15MB** (モデル本体)
-- Activation + KV cache 込みで **30-40MB** (実メモリ)
+- 135-200M × 1.58-bit ≈ **15-40MB** (モデル本体)
+- Activation + KV cache 込みで **30-60MB** (実メモリ)
 
 ### 根拠
 
 - Nielsen 2024 "BitNet b1.58 Reloaded": 100K-48M で検証済み
 - encoder-decoder (BERT/T5系) でも検証済み
 - 暗黙的正則化効果で fp16 を超える場合もあり
+- Hidden 512 → 1024 で fp16 同等性能確保の見込み
 
 ## ユーザ適応: 階層的 CVAE
 
@@ -51,7 +78,7 @@ z = (z_writer[32], z_domain[16], z_session[16]) = 64次元
 ```
 
 - **z_writer**: 書き手の文体・語彙選好 (ユーザ固有、オンライン更新)
-- **z_domain**: ビジネス/カジュアル/技術 (アプリ別に推定)
+- **z_domain**: ビジネス/カジュアル/技術 (アプリ別に推定、fcitx5 からアプリ名取得可)
 - **z_session**: 直近入力の傾向 (セッション内で動的更新)
 
 ### 推論時の適応
@@ -62,25 +89,36 @@ z = (z_writer[32], z_domain[16], z_session[16]) = 64次元
 
 ## データ戦略
 
-### 目標: 100-200億トークン
+### 目標: 100-200億トークン (長期)
 
-| ソース | 推定規模 | 特徴 |
-|--------|---------|------|
-| Wikipedia v3 | 2012万文 | 百科事典 |
-| 青空文庫 | 242万文 | 文学・文体多様性 |
-| Swallow Corpus v3 | 数億トークン | 大規模 Web コーパス |
-| 日本語日常対話コーパス | 口語補強 | 会話体 |
-| おーぷん2ちゃんねる | ネット口語 | 非標準表記含む |
-| 国会議事録 | 公文書 | フォーマル |
-| Qiita/Zenn 抜粋 | 技術文書 | IT用語 |
-| Livedoor + ニュース | ニュース | 報道体 |
-| チャンクデータ | 1億+ | 文節単位の短文 |
-| ゴールドデータ | 10-20K | 人手検証済み |
+**現状 (2026-04-18):**
+
+| ソース | フィルタ後ペア | 品質 (監査) |
+|--------|---------------|------------|
+| Wikipedia JA | 18.4M | 87.8% clean |
+| 青空文庫 | 2.4M | 92.0% clean |
+| Livedoor News | 84K | - |
+| Tatoeba JP | 228K | - |
+| 合計 | **~20.8M** | |
+
+さらに `tools/chunk-generator` (Rust) で文節チャンク **100M 件**を生成。詳細は `data_pipeline.md`。
+
+**将来追加候補 (MIT 互換のみ、詳細は `dataset_candidates.md`):**
+
+| ソース | 規模 | 用途 |
+|--------|------|------|
+| zenz-v2.5-dataset (llm-jp-corpus v3 サブセット, ODC-BY) | 32.4GB | 最小工数で即投入可 |
+| CulturaX ja / FineWeb-2 jpn_Jpan | 100B+ tokens | 大規模 Web |
+| HPLT v2/v3 ja (CC0) | 901B chars | クリーンな Web |
+| おーぷん2ちゃんねる (Apache-2.0) | 8.14M 対話 | 口語 |
+| 政府白書 (政府標準利用規約 2.0) | 数百MB | 硬文 |
+| 国会会議録 (著作権法 40 条 1 項) | 数十GB | 政治演説 |
+| 青空文庫 | 17,000 作品 | 文学 |
 
 ### 読み付与の精緻化
 
-- UniDic features[17] (仮名形出現形) を基本
-- NEologd 併用でクロスバリデーション
+- MeCab unidic-lite `features[17]` (仮名形出現形) を使用
+  - features[6/7/8/9] ではなく 17。Phase 2 v1/v2 の失敗を経て確定 (詳細は phase2_results.md)
 - 青空文庫のルビ情報を教師信号に
 - 数万文の人手検証サブセット
 
@@ -102,6 +140,42 @@ z = (z_writer[32], z_domain[16], z_session[16]) = 64次元
     最終 top-K 候補 (K=10)
 ```
 
+### 候補ランキングパイプライン (Phase 5)
+
+モデル内部の N-best 生成とは独立に、以下を**別機構**で扱う:
+
+```
+CTC beam search (beam=20, KenLM fusion)
+    ↓ top-20 候補
+ユーザ辞書ルックアップ (ハード制約)
+    ↓
+ユーザ学習スコア加算 (SQLite, 指数減衰)
+    ↓
+最終 top-K (K=10)
+```
+
+最終スコア:
+```
+final_score(y) = model_score(y) + α·user_freq(y) + β·recency(y)
+```
+
+**SQLite スキーマ案:**
+```sql
+CREATE TABLE user_history (
+    reading TEXT, context_hash INTEGER, candidate TEXT,
+    count INTEGER DEFAULT 1, last_used TIMESTAMP,
+    PRIMARY KEY (reading, context_hash, candidate)
+);
+CREATE TABLE user_dict (
+    reading TEXT, candidate TEXT, priority INTEGER DEFAULT 0,
+    PRIMARY KEY (reading, candidate)
+);
+```
+
+- ユーザ学習: (読み, 文脈hash, 候補) → (count, last_used)
+- アプリ別学習データ分離 (fcitx5 で取得可能)
+- CVAE は v2 送り、まずはアプリ別分離のみ
+
 ### 目標速度
 
 | 入力長 | 目標レイテンシ |
@@ -110,16 +184,26 @@ z = (z_writer[32], z_domain[16], z_session[16]) = 64次元
 | 中文 (15文字) | < 30ms |
 | 長文 (30文字) | < 50ms |
 
+## 推論基盤
+
+- ONNX Runtime (C++) — encoder/decoder 別 ONNX ファイル
+- CTC beam search: C++ 実装 (`tools/chunk-generator` の CTCDecoder を流用)
+- KenLM shallow fusion: beam search のスコアに n-gram LM を加算
+- fcitx5 統合: クライアント・サーバー方式 (Hazkey パターン)
+- Windows TSF 統合: mozc フォーク + DLL 差し替え
+
 ## 配布プラットフォーム
 
 | プラットフォーム | 方式 | 状態 |
 |----------------|------|------|
-| Linux (fcitx5) | エンジンプラグイン | 設計済み |
-| Windows (TSF) | mozc フォーク + DLL 差し替え | **DLL 動作確認済み** |
+| Windows (TSF) | mozc フォーク + DLL 差し替え | **DLL 動作確認済み** (engine/win32/) |
+| Linux (fcitx5) | エンジンプラグイン | 設計済み、未ビルド |
 | macOS (IMKit) | 将来拡張 | |
 | モバイル (iOS/Android) | 将来拡張 | |
 
 ## 学習ロードマップ
+
+詳細は `roadmap.md`。概要:
 
 ### Phase 3a: CTC-NAT fp16
 
@@ -151,21 +235,39 @@ z = (z_writer[32], z_domain[16], z_session[16]) = 64次元
 | gold_1k EM | 0.660 | 0.900+ |
 | eval_v3 EM | 0.412 | 0.500+ |
 
+比較ベースラインは `benchmark_comparison.md` 参照。
+
 ## 撤退経路
 
 | リスク | 撤退先 |
 |--------|--------|
-| CTC-NAT 精度不足 | AR + 投機的デコード |
+| CTC-NAT 精度不足 (AR との差 3pt 以上) | AR + 投機的デコード |
+| CTC-NAT 精度不足 (AR との差 2-3pt) | DAT (DAG 構造、`thu-coai/DA-Transformer` 流用) |
 | 1.58-bit 品質劣化 | int8 量子化 (30-40MB) |
 | CVAE posterior collapse | 条件付きモデル (非変分版) |
 | KenLM 効果薄 | ユーザ辞書強化のみ |
+
+## 採用しない選択と理由
+
+### llama.cpp
+- Decoder-only 前提、encoder-decoder 非対応
+- zenz-v1 では使えるが CTC-NAT では使えない
+
+### 1.58-bit を初期から
+- Phase 3 fp16 → CQAT で 1.58-bit の段階的移行が安全
+- QAT 再学習のコストは fp16 学習後にのみ発生
+
+### Beam search (AR)
+- 40-60x の速度ペナルティ (実装依存)
+- Length normalization + repetition penalty でも改善限定的
+- CTC beam search が構造的に優れている
 
 ## この構成の独自価値
 
 既存 IME (mozc, zenz, Google, ATOK) のどれも持っていない組み合わせ:
 
 - **小型だが高性能** (zenz-v2.5-small 水準)
-- **極小サイズ** (1.58-bit で 15MB)
+- **極小サイズ** (1.58-bit で 15-40MB)
 - **ユーザ適応可能** (CVAE)
 - **並列生成で高速** (CTC-NAT)
 - **多ドメイン対応** (100-200億トークン)
