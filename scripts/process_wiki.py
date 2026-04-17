@@ -113,13 +113,13 @@ def _get_reading(tagger, text: str, jaconv) -> str | None:
             return None
 
         # unidic-lite feature layout:
-        #   [6] = 書字形出現形 (katakana for kana words, kanji for kanji words)
-        #   [7] = 書字形基本形 (NOT a reading — can be kanji!)
-        #   [9] = 発音形出現形 (actual pronunciation — this is what we want)
+        #   [6] = 書字形出現形 (katakana orthographic form — IME-compatible)
+        #   [7] = 書字形基本形 (can be kanji — DO NOT USE as reading)
+        #   [9] = 発音形出現形 (phonetic: う→ー, は→わ — NOT IME input)
+        #
+        # Use [6] for IME: ヨホウ→よほう (correct), not ヨホー→よほー
         reading = None
-        if len(features) >= 10 and features[9] != "*":
-            reading = features[9]
-        elif len(features) >= 7 and features[6] != "*":
+        if len(features) >= 7 and features[6] != "*":
             reading = features[6]
 
         if reading:
