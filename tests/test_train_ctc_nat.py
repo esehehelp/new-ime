@@ -66,6 +66,7 @@ def test_validate_resume_compatibility_ok():
         use_cvae=False,
         max_seq_len=128,
         max_kanji=6000,
+        blank_logit_bias=0.0,
         tokenizer_path="",
     )
     checkpoint = {
@@ -73,6 +74,7 @@ def test_validate_resume_compatibility_ok():
         "use_cvae": False,
         "max_seq_len": 128,
         "max_kanji": 6000,
+        "blank_logit_bias": 0.0,
         "vocab_size": 256,
     }
     tokenizer = SharedCharTokenizer(vocab={"[PAD]": 0, "[UNK]": 1, "[SEP]": 2, "[CLS]": 3, "[BLANK]": 4, "[MASK]": 5} | {f"<0x{b:02X}>": 6 + b for b in range(250)})
@@ -85,6 +87,7 @@ def test_validate_resume_compatibility_raises_on_mismatch():
         use_cvae=False,
         max_seq_len=128,
         max_kanji=6000,
+        blank_logit_bias=0.0,
         tokenizer_path="",
     )
     checkpoint = {
@@ -92,6 +95,7 @@ def test_validate_resume_compatibility_raises_on_mismatch():
         "use_cvae": False,
         "max_seq_len": 128,
         "max_kanji": 6000,
+        "blank_logit_bias": 0.0,
     }
     with pytest.raises(ValueError):
         validate_resume_compatibility(checkpoint, args)
@@ -104,6 +108,7 @@ def test_validate_resume_compatibility_raises_on_kd_drift():
         use_cvae=False,
         max_seq_len=128,
         max_kanji=6000,
+        blank_logit_bias=0.0,
         tokenizer_path="",
         kd_teacher_path="checkpoints/ar_v3_vast/best.pt",
         kd_teacher_vocab="",
@@ -120,6 +125,7 @@ def test_validate_resume_compatibility_raises_on_kd_drift():
         "use_cvae": False,
         "max_seq_len": 128,
         "max_kanji": 6000,
+        "blank_logit_bias": 0.0,
         "kd": {
             "teacher_path": "checkpoints/ar_baseline/best.pt",  # different teacher
             "teacher_vocab": "",
@@ -142,6 +148,7 @@ def test_validate_resume_compatibility_accepts_matching_kd():
         use_cvae=False,
         max_seq_len=128,
         max_kanji=6000,
+        blank_logit_bias=0.0,
         tokenizer_path="",
         kd_teacher_path="checkpoints/ar_v3_vast/best.pt",
         kd_teacher_vocab="",
@@ -158,6 +165,7 @@ def test_validate_resume_compatibility_accepts_matching_kd():
         "use_cvae": False,
         "max_seq_len": 128,
         "max_kanji": 6000,
+        "blank_logit_bias": 0.0,
         "kd": {
             "teacher_path": "checkpoints/ar_v3_vast/best.pt",
             "teacher_vocab": "",
@@ -179,6 +187,7 @@ def test_validate_resume_compatibility_raises_on_kd_gate_mode_drift():
         use_cvae=False,
         max_seq_len=128,
         max_kanji=6000,
+        blank_logit_bias=0.0,
         tokenizer_path="",
         kd_teacher_path="checkpoints/ar_v3_vast/best.pt",
         kd_teacher_vocab="",
@@ -195,6 +204,7 @@ def test_validate_resume_compatibility_raises_on_kd_gate_mode_drift():
         "use_cvae": False,
         "max_seq_len": 128,
         "max_kanji": 6000,
+        "blank_logit_bias": 0.0,
         "kd": {
             "teacher_path": "checkpoints/ar_v3_vast/best.pt",
             "teacher_vocab": "",
@@ -208,6 +218,35 @@ def test_validate_resume_compatibility_raises_on_kd_gate_mode_drift():
         },
     }
     with pytest.raises(ValueError, match="kd.gate_mode"):
+        validate_resume_compatibility(checkpoint, args)
+
+
+def test_validate_resume_compatibility_raises_on_blank_bias_drift():
+    args = argparse.Namespace(
+        preset="phase3_20m",
+        use_cvae=False,
+        max_seq_len=128,
+        max_kanji=6000,
+        blank_logit_bias=0.3,
+        tokenizer_path="",
+        kd_teacher_path="",
+        kd_teacher_vocab="",
+        kd_alpha=0.0,
+        kd_hard_threshold=0.6,
+        kd_gate_mode="low_conf",
+        kd_start_step=0,
+        kd_warmup_steps=0,
+        kd_every=1,
+        kd_max_new_tokens=0,
+    )
+    checkpoint = {
+        "preset": "phase3_20m",
+        "use_cvae": False,
+        "max_seq_len": 128,
+        "max_kanji": 6000,
+        "blank_logit_bias": 0.0,
+    }
+    with pytest.raises(ValueError, match="blank_logit_bias"):
         validate_resume_compatibility(checkpoint, args)
 
 

@@ -75,7 +75,17 @@
       "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe -m pip install zstandard)",
       "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe -m uv pip install zstandard)",
       "Bash(uv add *)",
-      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/audit_pools.py --pools datasets/aozora_clean.jsonl datasets/livedoor_clean_v3.jsonl --limit 5000 --eval-limit 500)"
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/audit_pools.py --pools datasets/aozora_clean.jsonl datasets/livedoor_clean_v3.jsonl --limit 5000 --eval-limit 500)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/download_zenz_subset.py --out datasets/src/zenz_llmjp/)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/download_hplt3_ja.py --out datasets/src/hplt3_ja/ --tiers 10)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/download_fineweb2_ja.py --out datasets/src/fineweb2_ja/ --num-shards 3)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/process_zenz_subset.py --input datasets/src/zenz_llmjp/train_llm-jp-corpus-v3.jsonl --output datasets/zenz_llmjp_clean.jsonl --contamination-ref datasets/eval_v3/test.jsonl --progress-every 1000000)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe -u scripts/process_hplt.py --input datasets/src/hplt3_ja/10_1.jsonl.zst --output datasets/hplt3_ja_clean.jsonl --contamination-ref datasets/eval_v3/test.jsonl --lang-prob 0.9 --progress-every 20000)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/audit_pools.py --pools datasets/zenz_llmjp_clean.jsonl datasets/fineweb2_ja_clean.jsonl --limit 100000 --eval-limit 2000 --json datasets/audit_zenz_fineweb2.json)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe scripts/audit_pools.py --pools datasets/zenz_llmjp_clean.jsonl datasets/fineweb2_ja_clean.jsonl datasets/hplt3_ja_clean.jsonl datasets/wiki_clean_v3.jsonl datasets/aozora_clean.jsonl --limit 100000 --eval-limit 2000 --json datasets/audit_all_pools.json)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe -m pytest tests/test_dataset_reservoir.py -v)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe -m pytest tests/test_train_ctc_nat.py)",
+      "Bash(D:/Dev/new-ime/.venv/Scripts/python.exe -m pytest tests/)"
     ]
   }
 }

@@ -90,6 +90,7 @@ class CTCNAT(nn.Module):
         use_cvae: bool = False,
         latent_size: int = 64,
         tie_output_projection: bool = True,
+        blank_logit_bias: float = 0.0,
     ):
         super().__init__()
         self.encoder = encoder
@@ -112,6 +113,7 @@ class CTCNAT(nn.Module):
         self.ctc_head = CTCHead(hidden_size, output_vocab_size, tied_embedding=tied_embedding)
         self.blank_id = blank_id
         self.output_vocab_size = output_vocab_size
+        self.blank_logit_bias = float(blank_logit_bias)
         self.cvae = (
             CVAEConditioner(hidden_size, decoder_layers, latent_size=latent_size)
             if use_cvae
@@ -126,6 +128,7 @@ class CTCNAT(nn.Module):
         dropout: float = 0.1,
         use_cvae: bool = False,
         blank_id: int = 4,
+        blank_logit_bias: float = 0.0,
     ) -> CTCNAT:
         preset = PRESETS[preset_name]
         encoder = SmallEncoder(
@@ -147,7 +150,15 @@ class CTCNAT(nn.Module):
             blank_id=blank_id,
             max_positions=preset.max_positions,
             use_cvae=use_cvae,
+            blank_logit_bias=blank_logit_bias,
         )
+
+    def _apply_blank_logit_bias(self, logits: torch.Tensor) -> torch.Tensor:
+        if self.blank_logit_bias <= 0.0:
+            return logits
+        logits = logits.clone()
+        logits[..., self.blank_id] = logits[..., self.blank_id] - self.blank_logit_bias
+        return logits
 
     def _build_cvae_output(
         self,
@@ -215,6 +226,7 @@ class CTCNAT(nn.Module):
             film_conditioning=cvae_output.film_conditioning if cvae_output else None,
         )
         logits = self.ctc_head(decoder_out)
+        logits = self._apply_blank_logit_bias(logits)
         log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
 
         result = {

@@ -23,6 +23,13 @@ class KanaKanjiDataset(Dataset):
     """Dataset for kana-kanji conversion from JSONL files.
 
     Each line: {"reading": "...", "surface": "...", "context": "..."}
+
+    Loading strategy:
+    - If ``max_samples`` is 0 (default): full load into memory. Suitable for
+      small files (eval splits, legacy train.jsonl at 20M rows).
+    - If ``max_samples > 0``: reservoir sampling during a single stream pass
+      (Knuth's Algorithm R). RAM stays bounded at ``max_samples`` regardless
+      of source file size. Required for Phase 3 train.jsonl (up to 1B rows).
     """
 
     def __init__(
@@ -35,13 +42,31 @@ class KanaKanjiDataset(Dataset):
         self.data: list[dict] = []
         self.max_seq_len = max_seq_len
 
-        with open(jsonl_path, encoding="utf-8") as f:
-            for line in f:
-                self.data.append(json.loads(line))
-
-        if max_samples and max_samples < len(self.data):
+        if max_samples and max_samples > 0:
             rng = random.Random(seed)
-            self.data = rng.sample(self.data, max_samples)
+            reservoir: list[dict] = []
+            seen = 0
+            with open(jsonl_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    seen += 1
+                    if len(reservoir) < max_samples:
+                        reservoir.append(row)
+                    else:
+                        j = rng.randrange(seen)
+                        if j < max_samples:
+                            reservoir[j] = row
+            self.data = reservoir
+        else:
+            with open(jsonl_path, encoding="utf-8") as f:
+                for line in f:
+                    self.data.append(json.loads(line))
 
     def __len__(self) -> int:
         return len(self.data)
