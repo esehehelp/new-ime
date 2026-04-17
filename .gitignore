@@ -19,6 +19,9 @@ build_test/
 cmake-build-*/
 compile_commands.json
 
+# Rust build
+tools/*/target/
+
 # ML artifacts
 *.gguf
 *.bin
