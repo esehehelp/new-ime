@@ -36,5 +36,12 @@ echo === Copying ONNX Runtime DLL ===
 copy "%ORT_DIR%\lib\onnxruntime.dll" . >nul 2>&1
 copy "%ORT_DIR%\lib\onnxruntime_providers_shared.dll" . >nul 2>&1
 
+echo === Building interactive demo ===
+cl /EHsc /std:c++17 /O2 /utf-8 ^
+    interactive.cpp ^
+    /Fe:interactive.exe ^
+    /link
+
 echo === Ready ===
-echo Run: test_ffi.exe
+echo Run: test_ffi.exe (automated test)
+echo Run: interactive.exe (interactive demo)
