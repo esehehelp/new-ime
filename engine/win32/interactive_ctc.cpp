@@ -457,35 +457,44 @@ int main(int argc, char** argv) {
         }
     }
 
-    // One kana run -> best surface via dict + CTC. Greedy longest-prefix
-    // dict scan consumes matching prefix bytes; the remainder (if any)
-    // goes through CTC with the consumed dict surface prepended as left
-    // context so the model sees a coherent prior.
-    auto convert_kana_run = [&](const std::string& kana_in,
-                                const std::string& left_ctx_in,
-                                double& ms_onnx, double& ms_decode) -> std::string {
+    constexpr int TOP_K = 3;
+
+    // A "chunk" is a contiguous piece of a kana run that becomes a single
+    // decision point in the final top-N composition: either a fixed dict
+    // match (one alternative) or a CTC decode (up to TOP_K alternatives).
+    struct Chunk {
+        // Parallel arrays: alt_texts[i] has score alt_scores[i]. For dict
+        // hits both vectors hold one entry with score 0. For CTC chunks the
+        // scores come from the fused CTC+LM+length ranking.
+        std::vector<std::string> alt_texts;
+        std::vector<float> alt_scores;
+    };
+
+    // One kana run -> list of Chunks. Each chunk is either a dict hit
+    // (single-alt) or a CTC decode (TOP_K alts). The caller composes final
+    // top-N strings by cross-product over chunks.
+    auto chunk_kana_run = [&](const std::string& kana_in,
+                              const std::string& left_ctx_in,
+                              double& ms_onnx, double& ms_decode) -> std::vector<Chunk> {
         std::string kana = kana_in;
         std::string left_ctx = left_ctx_in;
-        std::string surface_out;
+        std::vector<Chunk> chunks;
         while (!kana.empty()) {
             auto [hit, n] = dict.entries.empty()
                 ? std::make_pair(std::string{}, size_t{0})
                 : dict.match_prefix(kana, 0);
             if (n > 0) {
-                surface_out += hit;
+                Chunk c;
+                c.alt_texts.push_back(hit);
+                c.alt_scores.push_back(0.0f);
+                chunks.push_back(std::move(c));
                 left_ctx += hit;
                 kana.erase(0, n);
                 continue;
             }
-            // Take whatever remains as one CTC chunk. If more dict hits
-            // appear later in the run they're handled on the next loop
-            // only when they're at the prefix — to find mid-run matches,
-            // we scan one codepoint at a time.
             auto [cp, cp_n] = utf8_decode_one(kana, 0);
             if (cp_n == 0) break;
 
-            // Accumulate codepoints until we hit a dict-prefixed suffix
-            // or end of run.
             size_t take = cp_n;
             while (take < kana.size()) {
                 auto [hit2, n2] = dict.entries.empty()
@@ -497,8 +506,8 @@ int main(int argc, char** argv) {
                 take += cp2_n;
             }
 
-            std::string chunk = kana.substr(0, take);
-            auto enc = encode(tokenizer, left_ctx, chunk, args.seq_len, args.max_context);
+            std::string chunk_kana = kana.substr(0, take);
+            auto enc = encode(tokenizer, left_ctx, chunk_kana, args.seq_len, args.max_context);
             std::array<int64_t, 2> shape{1, args.seq_len};
             Ort::MemoryInfo mem_info = Ort::MemoryInfo::CreateCpu(
                 OrtArenaAllocator, OrtMemTypeDefault);
@@ -527,12 +536,21 @@ int main(int argc, char** argv) {
             ms_onnx += std::chrono::duration<double, std::milli>(t_b - t_a).count();
             ms_decode += std::chrono::duration<double, std::milli>(t_c - t_b).count();
 
-            std::string best = candidates.empty() ? std::string{} : candidates[0].text;
-            surface_out += best;
-            left_ctx += best;
+            Chunk c;
+            int take_k = std::min<int>(TOP_K, static_cast<int>(candidates.size()));
+            for (int i = 0; i < take_k; ++i) {
+                c.alt_texts.push_back(candidates[i].text);
+                c.alt_scores.push_back(candidates[i].score);
+            }
+            if (c.alt_texts.empty()) {
+                c.alt_texts.push_back("");
+                c.alt_scores.push_back(0.0f);
+            }
+            left_ctx += c.alt_texts[0];
+            chunks.push_back(std::move(c));
             kana.erase(0, take);
         }
-        return surface_out;
+        return chunks;
     };
 
     std::cout << "\nType kana to convert (empty line to quit).\n"
@@ -553,30 +571,61 @@ int main(int argc, char** argv) {
 
         // Segment into alternating kana / non-kana runs. Non-kana (digits,
         // punctuation, latin, already-mixed text) passes through verbatim;
-        // kana runs go through the dict + CTC pipeline. This covers the
-        // practical IME cases the model can't emit on its own: raw numbers,
-        // SI-prefix loanwords pinned by the dict, model-name spelling.
+        // kana runs produce a list of Chunks each carrying up to TOP_K
+        // alternatives. A final top-N is assembled by cross-product.
         auto segs = segment_by_kana(line);
-        std::string surface;
+        std::vector<Chunk> all_chunks;
         std::string left_ctx = context;
         double ms_onnx = 0.0, ms_decode = 0.0;
         for (auto& seg : segs) {
             if (!seg.is_kana) {
-                surface += seg.text;
+                Chunk c;
+                c.alt_texts.push_back(seg.text);
+                c.alt_scores.push_back(0.0f);
+                all_chunks.push_back(std::move(c));
                 left_ctx += seg.text;
                 continue;
             }
-            std::string piece = convert_kana_run(seg.text, left_ctx, ms_onnx, ms_decode);
-            surface += piece;
-            left_ctx += piece;
+            auto run_chunks = chunk_kana_run(seg.text, left_ctx, ms_onnx, ms_decode);
+            for (auto& c : run_chunks) {
+                left_ctx += c.alt_texts[0];
+                all_chunks.push_back(std::move(c));
+            }
         }
         auto t_end = std::chrono::steady_clock::now();
 
-        // Compatibility bridge for the ？/！ tail echo block below — it
-        // used to operate on the CTC beam's candidate list, now there's
-        // just one composed surface.
+        // Cross-product over chunk alternatives, scored by sum of per-chunk
+        // scores. Beam-prune during assembly so we never materialize more
+        // than BEAM_PRUNE partial strings. For up to ~6 chunks with TOP_K=3
+        // the full product is manageable, but the prune keeps it cheap
+        // when the user pastes a long mixed input.
+        constexpr int BEAM_PRUNE = 16;
+        struct PartialCand { std::string text; float score; };
+        std::vector<PartialCand> partials{{"", 0.0f}};
+        for (const auto& ch : all_chunks) {
+            std::vector<PartialCand> next;
+            next.reserve(partials.size() * ch.alt_texts.size());
+            for (const auto& p : partials) {
+                for (size_t i = 0; i < ch.alt_texts.size(); ++i) {
+                    next.push_back({p.text + ch.alt_texts[i], p.score + ch.alt_scores[i]});
+                }
+            }
+            std::sort(next.begin(), next.end(),
+                      [](const PartialCand& a, const PartialCand& b) {
+                          return a.score > b.score;
+                      });
+            if (static_cast<int>(next.size()) > BEAM_PRUNE) next.resize(BEAM_PRUNE);
+            partials = std::move(next);
+        }
+
         std::vector<newime::DecodedCandidate> candidates;
-        if (!surface.empty()) candidates.push_back({surface, 0.0f});
+        for (const auto& p : partials) {
+            bool dup = false;
+            for (const auto& existing : candidates) {
+                if (existing.text == p.text) { dup = true; break; }
+            }
+            if (!dup) candidates.push_back({p.text, p.score});
+        }
 
         // Training corpus underrepresents ？ ！ at sentence endings — Wiki
         // uses 。 overwhelmingly. The CTC path + LM prior converge onto
