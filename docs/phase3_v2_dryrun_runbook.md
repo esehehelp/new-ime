@@ -120,7 +120,7 @@ wc -l datasets/mixes/train_v2_20m.jsonl
     --tokenizer-path models/checkpoints/ctc_nat_90m/checkpoint_step_27500_tokenizer.json `
     --batch-size 32 `
     --grad-accum 4 `
-    --max-seq-len 256 `
+    --max-seq-len 128 `
     --max-context 40 `
     --fp16 `
     --num-workers 8 `
@@ -151,19 +151,25 @@ wc -l datasets/mixes/train_v2_20m.jsonl
     --output models/checkpoints/ctc_nat_30m_v2_dryrun
 ```
 
-### VRAM 見積もり (3060 12GB、batch 32)
+### VRAM 見積もり (3060 12GB、batch 32、seq 128)
 
 | 区分 | 推定 |
 |---|---:|
 | 30M student params + opt/grad | ~0.4 GB |
-| 30M student activation (batch 32, seq 256) | ~1.2 GB |
+| 30M student activation (batch 32, seq 128) | ~0.6 GB |
 | 90M CTC teacher params fp16 | ~0.2 GB |
-| 90M CTC teacher forward activation (batch 32, seq 256) | ~1.2 GB |
-| **peak 合計** | **~3-5 GB (25-40% VRAM)** |
+| 90M CTC teacher forward activation (batch 32, seq 128) | ~0.6 GB |
+| **peak 合計** | **~1.8-2.5 GB (15-20% VRAM)** |
 
-3060 12GB の 30-40% 程度で動く見込み。50% 以下なら OOM は起きない想定。
-万一 OOM の場合は `--batch-size 24`、さらに不足なら `--batch-size 16`
-で調整 (grad_accum 4 は維持して effective batch 変動を吸収)。
+3060 12GB の 15-20% 程度。余裕大。万一 OOM の場合は `--batch-size 24` or `16`。
+
+**seq 128 に下げた背景**: teacher (90M step27500) の pos_embedding が
+max_positions=128 で学習済み。student 側を 256 に拡張しても teacher 側で
+CUDA assert が発生する。将来 teacher を seq_len=256 で再学習するまで、
+当面 student と teacher は max_positions=128 で揃える。
+
+**影響**: 長文 sentence (120 字 + context 40) は一部トリムされる可能性。
+bunsetsu/synth (大半 < 30 字) は影響なし。
 
 ## Step 3: 評価
 
@@ -195,7 +201,7 @@ uv run python -m tools.probe.run_cvae_probe \
 | LR peak | 3e-4 | **1.5e-4** |
 | LR schedule | warmup→flat | **warmup→cosine→0** |
 | max-steps | 50000 | **16000** |
-| seq_len | 128 | **256** |
+| seq_len | 128 | 128 (teacher 90M の max_positions が 128 のため一致) |
 | max-context | 32 | **40** |
 | train 形式 | eval_v3/train.jsonl (2M) | **mixes/train_v2_20m.jsonl (20M)** |
 | checkpoint-every | 2000 | **1000** |

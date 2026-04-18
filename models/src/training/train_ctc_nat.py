@@ -165,12 +165,14 @@ def should_run_kd_microbatch(
     return is_optimizer_boundary and kd_config.active(step)
 
 
-def build_model(preset: str, vocab_size: int, use_cvae: bool) -> CTCNAT:
+def build_model(preset: str, vocab_size: int, use_cvae: bool,
+                max_positions: int | None = None) -> CTCNAT:
     return CTCNAT.from_preset(
         preset,
         vocab_size=vocab_size,
         use_cvae=use_cvae,
         blank_id=BLANK_ID,
+        max_positions=max_positions,
     )
 
 
@@ -613,7 +615,7 @@ def train_local(args: argparse.Namespace) -> None:
     num_workers = resolve_num_workers(args.num_workers, device)
     pin_memory = device.type == "cuda"
     tokenizer = build_tokenizer(args)
-    model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae).to(device)
+    model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae, max_positions=args.max_seq_len).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # LR schedule: warmup then optional decay. `flat` (default, legacy) holds
     # at peak after warmup (the source of the "LR plateau" seen in earlier 30M
@@ -1165,7 +1167,7 @@ def main() -> None:
         args.max_kanji = args.small_vocab_max_kanji
 
     tokenizer = build_tokenizer(args)
-    model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae)
+    model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae, max_positions=args.max_seq_len)
     estimate = estimate_training_memory(
         model,
         preset_name=args.preset,

@@ -126,15 +126,17 @@ class CTCNAT(nn.Module):
         dropout: float = 0.1,
         use_cvae: bool = False,
         blank_id: int = 4,
+        max_positions: int | None = None,
     ) -> CTCNAT:
         preset = PRESETS[preset_name]
+        pos = max_positions if max_positions is not None else preset.max_positions
         encoder = SmallEncoder(
             vocab_size=vocab_size,
             hidden_size=preset.hidden_size,
             num_layers=preset.encoder_layers,
             num_heads=preset.num_heads,
             ffn_size=preset.ffn_size,
-            max_positions=preset.max_positions,
+            max_positions=pos,
             dropout=dropout,
         )
         return cls(
@@ -145,7 +147,7 @@ class CTCNAT(nn.Module):
             decoder_ffn_size=preset.ffn_size,
             dropout=dropout,
             blank_id=blank_id,
-            max_positions=preset.max_positions,
+            max_positions=pos,
             use_cvae=use_cvae,
         )
 
