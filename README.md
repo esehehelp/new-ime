@@ -300,14 +300,21 @@ uv run python -m tools.eval.run_all_evals --manual 100 --evalv3 300 --ajimee 100
 
 ## ライセンス
 
-このリポジトリでは、コードとモデル/データ成果物でライセンスが異なる。
+本リポジトリ (GitHub) は **コード + docs のみ**。モデル重み・学習データは
+`.gitignore` 済、将来 HuggingFace / Release 経由で配布する想定。
 
-- コード (`models/src/`, `engine/`, `tools/` など): [MIT](LICENSE)
-- モデル重み・学習チェックポイント・混合学習 JSONL・蒸留成果物: [CC BY-SA 4.0](MODEL_LICENSE)
-- データソースごとの注意と帰属: [DATA_LICENSES.md](DATA_LICENSES.md), [ATTRIBUTION.md](ATTRIBUTION.md)
+- **コード** (`models/src/`, `engine/`, `tools/` 等): [MIT](LICENSE)
+- **モデル重み・学習 JSONL・蒸留成果物** (HF / Release 配布物):
+  [CC BY-SA 4.0](MODEL_LICENSE)
+- **上流データソースごとの注意と帰属**:
+  [DATA_LICENSES.md](DATA_LICENSES.md), [ATTRIBUTION.md](ATTRIBUTION.md)
+- **3rd-party ライブラリ依存** (KenLM LGPL 等):
+  [LICENSE_NOTICES.md](LICENSE_NOTICES.md)
 
 重要:
 
-- `checkpoints/`, `datasets/`, `results/` 以下の成果物は、内容に応じて MIT ではなく追加条件が付く
-- 特に Wikipedia 由来データや、それを含む派生成果物は ShareAlike 条件の影響を受けうる
-- 配布や再学習に使う前に、必ず `MODEL_LICENSE`, `DATA_LICENSES.md`, `ATTRIBUTION.md` を確認すること
+- Wikipedia 由来データや、それを含む派生成果物は ShareAlike 条件の影響を受ける
+- KenLM は LGPL 2.1 — 本リポジトリには source 不在だが、binary 再配布時は
+  LGPL 義務発生。詳細 `LICENSE_NOTICES.md`
+- 配布や再学習に使う前に、必ず `MODEL_LICENSE`, `DATA_LICENSES.md`,
+  `ATTRIBUTION.md`, `LICENSE_NOTICES.md` を確認すること
