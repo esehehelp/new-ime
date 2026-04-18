@@ -1,0 +1,958 @@
+PS D:\Dev\new-ime> .\.venv\Scripts\python.exe -m src.training.train_ctc_nat `
+>>     --train datasets/eval_v3/train.jsonl `
+>>     --dev datasets/eval_v3/dev.jsonl `
+>>     --preset phase3_30m `
+>>     --tokenizer-path datasets/tokenizers/eval_v3_shared_4k.json `
+>>     --batch-size 32 `
+>>     --grad-accum 4 `
+>>     --fp16 `
+>>     --max-context 32 `
+>>     --warmup-short-sample-steps 1000 `
+>>     --warmup-short-sample-max-chars 24 `
+>>     --num-workers 8 `
+>>     --checkpoint-every 2000 `
+>>     --eval-every 500 `
+>>     --log-every 100 `
+>>     --max-train-samples 2000000 `
+>>     --max-dev-samples 2000 `
+>>     --max-steps 50000 `
+>>     --epochs 12 `
+>>     --kd-teacher-path checkpoints/ar_v3_vast/best.pt `
+>>     --kd-teacher-hidden 512 `
+>>     --kd-teacher-layers 8 `
+>>     --kd-teacher-heads 8 `
+>>     --kd-alpha 0.075 `
+>>     --kd-hard-threshold 0.95 `
+>>     --kd-start-step 6000 `
+>>     --kd-warmup-steps 1500 `
+>>     --kd-every 32 `
+>>     --kd-max-new-tokens 48 `
+>>     --kd-gate-mode low_conf `
+>>     --kd-alpha-final 0.1 `
+>>     --kd-alpha-decay-start 9000 `
+>>     --kd-alpha-decay-steps 8000 `
+>>     --output checkpoints/ctc_nat_local_30m_fast_kd
+params:        26.79M
+param mem:     0.05 GB
+opt+grad mem:  0.35 GB
+activation:    0.63 GB
+total est:     1.03 GB
+cuda peak:     2.36 GB
+D:\Dev\new-ime\.venv\Lib\site-packages\torch\nn\modules\transformer.py:385: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+KD teacher loaded: checkpoints/ar_v3_vast/best.pt (vocab=6997, fp16=True) α=0.075, threshold=0.95, mode=low_conf, start=6000, warmup=1500, alpha_final=0.1, decay_start=9000, decay_steps=8000, every=32
+params:        26.79M
+param mem:     0.05 GB
+opt+grad mem:  0.35 GB
+activation:    0.63 GB
+total est:     1.03 GB
+dataloader: workers=8 pin_memory=True persistent_workers=True
+short-sample warmup: steps=1000 max_chars=24
+[step 100] loss=29.9577 avg100=76.0958 lr=0.000030 rate=0.90 steps/s
+[step 200] loss=26.3687 avg100=27.5653 lr=0.000060 rate=3.83 steps/s
+[step 300] loss=19.7308 avg100=21.7357 lr=0.000090 rate=3.48 steps/s
+[step 400] loss=14.6108 avg100=15.5893 lr=0.000120 rate=3.37 steps/s
+[step 500] loss=9.5916 avg100=9.4878 lr=0.000150 rate=3.50 steps/s
+D:\Dev\new-ime\.venv\Lib\site-packages\torch\nn\modules\transformer.py:508: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\NestedTensorImpl.cpp:182.)
+  output = torch._nested_tensor_from_mask(
+[eval 500] loss=8.5010 EM=0.0000 CharAcc=0.2772 blank=0.813 pred_len=11.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=のもードは、がメみぎでジさド、
+  sample2: ref=転送 東ティモールの言語状況 pred=ィールの女
+  sample3: ref=講習会・イベント pred=・と
+[step 600] loss=6.0705 avg100=6.5998 lr=0.000180 rate=3.56 steps/s
+[step 700] loss=5.1445 avg100=5.0740 lr=0.000210 rate=3.40 steps/s
+[step 800] loss=3.5320 avg100=4.0578 lr=0.000240 rate=4.11 steps/s
+[step 900] loss=3.0911 avg100=3.5458 lr=0.000270 rate=4.52 steps/s
+[step 1000] loss=3.1813 avg100=3.0949 lr=0.000300 rate=4.48 steps/s
+[eval 1000] loss=3.7723 EM=0.0187 CharAcc=0.4348 blank=0.541 pred_len=27.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中ュは、がメンみぎエでおジさン画親ドリ語ドフィバエイ奈ー
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 ヒがシティモールのゲン語場局
+  sample3: ref=講習会・イベント pred=交手会イ・イベント
+[step 1100] loss=3.4278 avg100=3.3121 lr=0.000300 rate=0.57 steps/s
+[step 1200] loss=3.1670 avg100=2.7437 lr=0.000300 rate=2.61 steps/s
+[step 1300] loss=2.2123 avg100=2.4653 lr=0.000300 rate=2.59 steps/s
+[step 1400] loss=2.0677 avg100=2.3396 lr=0.000300 rate=2.56 steps/s
+[step 1500] loss=1.5052 avg100=2.1398 lr=0.000300 rate=2.57 steps/s
+[eval 1500] loss=2.0561 EM=0.0187 CharAcc=0.6341 blank=0.546 pred_len=27.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、がメ技上でお産がドり、ゴールドフィーバーにわえて下のよなボーなス
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東しティモールの現語上響
+  sample3: ref=講習会・イベント pred=公州会・イベント
+[step 1600] loss=1.7991 avg100=1.7937 lr=0.000300 rate=2.73 steps/s
+[step 1700] loss=1.5106 avg100=1.6963 lr=0.000300 rate=2.79 steps/s
+[step 1800] loss=1.3464 avg100=1.5649 lr=0.000300 rate=2.80 steps/s
+[step 1900] loss=1.0644 avg100=1.4487 lr=0.000300 rate=2.81 steps/s
+[step 2000] loss=1.4283 avg100=1.4386 lr=0.000300 rate=2.77 steps/s
+[eval 2000] loss=1.5794 EM=0.0500 CharAcc=0.7181 blank=0.508 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔地さが踊り、ゴールドフィーバーに加え定下のようなボー
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東シティモールの原語上京
+  sample3: ref=講習会・イベント pred=公州会・イベント
+[step 2100] loss=1.2852 avg100=1.3376 lr=0.000300 rate=2.67 steps/s
+[step 2200] loss=1.2452 avg100=1.2930 lr=0.000300 rate=2.75 steps/s
+[step 2300] loss=1.0644 avg100=1.2407 lr=0.000300 rate=2.72 steps/s
+[step 2400] loss=1.0081 avg100=1.2439 lr=0.000300 rate=2.66 steps/s
+[step 2500] loss=1.3895 avg100=1.1975 lr=0.000300 rate=2.63 steps/s
+[eval 2500] loss=1.4028 EM=0.0563 CharAcc=0.7468 blank=0.529 pred_len=28.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔父さが踊り、ゴールドフィーバーに加えて以下のようなボ
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 ひティモールの言語上況
+  sample3: ref=講習会・イベント pred=公衆海・イベント
+[step 2600] loss=1.3718 avg100=1.1197 lr=0.000300 rate=2.51 steps/s
+[step 2700] loss=1.0845 avg100=1.0934 lr=0.000300 rate=2.67 steps/s
+[step 2800] loss=0.9876 avg100=1.0756 lr=0.000300 rate=2.68 steps/s
+[step 2900] loss=1.0741 avg100=1.0779 lr=0.000300 rate=2.72 steps/s
+[step 3000] loss=0.9341 avg100=1.0860 lr=0.000300 rate=2.71 steps/s
+[eval 3000] loss=1.2443 EM=0.1125 CharAcc=0.7686 blank=0.501 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面ン右上で叔じさんが踊り、ゴールドフィーバーに加えて以下のよう
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東シティモールの言語状況
+  sample3: ref=講習会・イベント pred=公州会・イベント
+[step 3100] loss=1.1184 avg100=1.0219 lr=0.000300 rate=2.60 steps/s
+[step 3200] loss=1.0902 avg100=0.9620 lr=0.000300 rate=2.63 steps/s
+[step 3300] loss=0.8058 avg100=0.9445 lr=0.000300 rate=2.28 steps/s
+[step 3400] loss=1.1269 avg100=0.9813 lr=0.000300 rate=2.31 steps/s
+[step 3500] loss=1.2299 avg100=0.9677 lr=0.000300 rate=2.53 steps/s
+[eval 3500] loss=1.1353 EM=0.1313 CharAcc=0.7918 blank=0.496 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお地さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東シティモールの源語状況
+  sample3: ref=講習会・イベント pred=講週会イ・イベント
+[step 3600] loss=0.9811 avg100=0.9050 lr=0.000300 rate=2.62 steps/s
+[step 3700] loss=0.7679 avg100=0.9257 lr=0.000300 rate=2.63 steps/s
+[step 3800] loss=1.1105 avg100=0.8931 lr=0.000300 rate=2.41 steps/s
+[step 3900] loss=0.8588 avg100=0.8948 lr=0.000300 rate=2.62 steps/s
+[step 4000] loss=1.2431 avg100=0.9138 lr=0.000300 rate=2.73 steps/s
+[eval 4000] loss=1.0521 EM=0.1187 CharAcc=0.8025 blank=0.504 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールのゲ語状況
+  sample3: ref=講習会・イベント pred=公習会・イベント
+[step 4100] loss=1.4067 avg100=0.8907 lr=0.000300 rate=2.62 steps/s
+[step 4200] loss=1.0631 avg100=0.8571 lr=0.000300 rate=2.74 steps/s
+[step 4300] loss=0.7824 avg100=0.8670 lr=0.000300 rate=2.58 steps/s
+[step 4400] loss=0.6714 avg100=0.8460 lr=0.000300 rate=2.56 steps/s
+[step 4500] loss=0.9791 avg100=0.8433 lr=0.000300 rate=2.52 steps/s
+[eval 4500] loss=1.0205 EM=0.1313 CharAcc=0.8105 blank=0.510 pred_len=28.4/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔じさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=公州会・イベント
+[step 4600] loss=1.0156 avg100=0.8157 lr=0.000300 rate=2.44 steps/s
+[step 4700] loss=0.8256 avg100=0.7684 lr=0.000300 rate=2.58 steps/s
+[step 4800] loss=0.7900 avg100=0.8167 lr=0.000300 rate=2.64 steps/s
+[step 4900] loss=0.6231 avg100=0.7972 lr=0.000300 rate=2.62 steps/s
+[step 5000] loss=0.7473 avg100=0.8104 lr=0.000300 rate=2.63 steps/s
+[eval 5000] loss=0.9811 EM=0.1187 CharAcc=0.8112 blank=0.499 pred_len=28.6/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=公州会・イベント
+[step 5100] loss=0.9043 avg100=0.7798 lr=0.000300 rate=2.57 steps/s
+[step 5200] loss=0.6191 avg100=0.7996 lr=0.000300 rate=2.61 steps/s
+[step 5300] loss=0.8223 avg100=0.8036 lr=0.000300 rate=2.62 steps/s
+[step 5400] loss=1.1603 avg100=0.7656 lr=0.000300 rate=2.65 steps/s
+[step 5500] loss=1.0822 avg100=0.7673 lr=0.000300 rate=2.73 steps/s
+[eval 5500] loss=0.9434 EM=0.1375 CharAcc=0.8173 blank=0.494 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=公州会・イベント
+[step 5600] loss=0.6003 avg100=0.7758 lr=0.000300 rate=2.63 steps/s
+[step 5700] loss=0.9494 avg100=0.7253 lr=0.000300 rate=2.70 steps/s
+[step 5800] loss=0.7774 avg100=0.7291 lr=0.000300 rate=2.76 steps/s
+[step 5900] loss=0.7777 avg100=0.7575 lr=0.000300 rate=2.74 steps/s
+[step 6000] loss=0.8053 avg100=0.7621 lr=0.000300 rate=2.76 steps/s
+[eval 6000] loss=0.9413 EM=0.1562 CharAcc=0.8205 blank=0.500 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=杭州会・イベント
+D:\Dev\new-ime\.venv\Lib\site-packages\torch\nn\functional.py:5962: UserWarning: Support for mismatched src_key_padding_mask and mask is deprecated. Use same type for both instead.
+  warnings.warn(
+D:\Dev\new-ime\.venv\Lib\site-packages\torch\nn\functional.py:5962: UserWarning: Support for mismatched src_key_padding_mask and src_mask is deprecated. Use same type for both instead.
+  warnings.warn(
+D:\Dev\new-ime\.venv\Lib\site-packages\torch\nn\functional.py:5962: UserWarning: Support for mismatched key_padding_mask and attn_mask is deprecated. Use same type for both instead.
+  warnings.warn(
+[step 6100] loss=0.6893 avg100=0.7671 lr=0.000300 rate=2.30 steps/s kd_loss=1.6296 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.005
+[step 6200] loss=0.5810 avg100=0.7681 lr=0.000300 rate=2.39 steps/s kd_loss=1.2514 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.010
+[step 6300] loss=1.0907 avg100=0.7131 lr=0.000300 rate=2.43 steps/s kd_loss=1.1512 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.015
+[step 6400] loss=0.6293 avg100=0.7408 lr=0.000300 rate=2.25 steps/s kd_loss=0.9867 kd_hard=0.21 kd_conf=0.96 kd_alpha=0.020
+[step 6500] loss=0.7000 avg100=0.7275 lr=0.000300 rate=2.25 steps/s kd_loss=1.6204 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.025
+[eval 6500] loss=0.9230 EM=0.1625 CharAcc=0.8255 blank=0.495 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 6600] loss=1.1095 avg100=0.7417 lr=0.000300 rate=2.16 steps/s kd_loss=0.9628 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.030
+[step 6700] loss=0.4213 avg100=0.7244 lr=0.000300 rate=2.07 steps/s kd_loss=1.2812 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.035
+[step 6800] loss=0.9198 avg100=0.7098 lr=0.000300 rate=2.36 steps/s kd_loss=1.3997 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.040
+[step 6900] loss=0.6118 avg100=0.7018 lr=0.000300 rate=2.19 steps/s kd_loss=1.1907 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.045
+[step 7000] loss=0.4653 avg100=0.7213 lr=0.000300 rate=2.24 steps/s kd_loss=1.1658 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.050
+[eval 7000] loss=0.8842 EM=0.1625 CharAcc=0.8346 blank=0.500 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=杭州回・イベント
+[step 7100] loss=0.7171 avg100=0.6994 lr=0.000300 rate=2.19 steps/s kd_loss=2.0292 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.055
+[step 7200] loss=0.5727 avg100=0.7065 lr=0.000300 rate=2.29 steps/s kd_loss=0.9764 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.060
+[step 7300] loss=0.7432 avg100=0.7088 lr=0.000300 rate=2.20 steps/s kd_loss=1.2626 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.065
+[step 7400] loss=0.6390 avg100=0.6870 lr=0.000300 rate=2.25 steps/s kd_loss=0.7284 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.070
+[step 7500] loss=0.4445 avg100=0.7167 lr=0.000300 rate=2.24 steps/s kd_loss=1.2535 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.075
+[eval 7500] loss=0.8582 EM=0.1500 CharAcc=0.8328 blank=0.494 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=公習会・イベント
+[step 7600] loss=1.0407 avg100=0.6977 lr=0.000300 rate=2.31 steps/s kd_loss=0.8166 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.075
+[step 7700] loss=0.7609 avg100=0.7037 lr=0.000300 rate=2.26 steps/s kd_loss=1.7798 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.075
+[step 7800] loss=0.7917 avg100=0.6976 lr=0.000300 rate=2.34 steps/s kd_loss=1.3959 kd_hard=0.16 kd_conf=0.98 kd_alpha=0.075
+[step 7900] loss=0.3217 avg100=0.6857 lr=0.000300 rate=2.29 steps/s kd_loss=0.9939 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.075
+[step 8000] loss=0.3860 avg100=0.6905 lr=0.000300 rate=2.34 steps/s kd_loss=1.1214 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.075
+[eval 8000] loss=0.8597 EM=0.1750 CharAcc=0.8386 blank=0.510 pred_len=28.6/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=広習会・イベント
+[step 8100] loss=0.6965 avg100=0.7027 lr=0.000300 rate=1.96 steps/s kd_loss=1.2340 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.075
+[step 8200] loss=1.0053 avg100=0.6781 lr=0.000300 rate=2.06 steps/s kd_loss=1.5731 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.075
+[step 8300] loss=0.6762 avg100=0.6808 lr=0.000300 rate=2.05 steps/s kd_loss=1.1813 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.075
+[step 8400] loss=0.5862 avg100=0.6999 lr=0.000300 rate=2.06 steps/s kd_loss=0.6340 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.075
+[step 8500] loss=0.7393 avg100=0.6885 lr=0.000300 rate=2.08 steps/s kd_loss=1.6670 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.075
+[eval 8500] loss=0.8094 EM=0.2000 CharAcc=0.8466 blank=0.492 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 8600] loss=0.7859 avg100=0.7028 lr=0.000300 rate=2.02 steps/s kd_loss=1.3742 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.075
+[step 8700] loss=0.6451 avg100=0.7046 lr=0.000300 rate=2.08 steps/s kd_loss=1.4800 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.075
+[step 8800] loss=0.5866 avg100=0.6630 lr=0.000300 rate=2.07 steps/s kd_loss=1.8187 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.075
+[step 8900] loss=0.6403 avg100=0.6902 lr=0.000300 rate=1.99 steps/s kd_loss=1.1678 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.075
+[step 9000] loss=0.7948 avg100=0.6892 lr=0.000300 rate=2.03 steps/s kd_loss=1.2688 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.075
+[eval 9000] loss=0.8181 EM=0.1812 CharAcc=0.8456 blank=0.489 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講週会・イベント
+[step 9100] loss=0.5025 avg100=0.6856 lr=0.000300 rate=1.98 steps/s kd_loss=1.0919 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.075
+[step 9200] loss=0.6738 avg100=0.6622 lr=0.000300 rate=1.98 steps/s kd_loss=1.3964 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.076
+[step 9300] loss=0.5094 avg100=0.6747 lr=0.000300 rate=1.55 steps/s kd_loss=1.1059 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.076
+[step 9400] loss=0.6280 avg100=0.6580 lr=0.000300 rate=1.34 steps/s kd_loss=0.8360 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.076
+[step 9500] loss=0.3911 avg100=0.6474 lr=0.000300 rate=1.85 steps/s kd_loss=0.9559 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.077
+[eval 9500] loss=0.8018 EM=0.1875 CharAcc=0.8520 blank=0.505 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 9600] loss=0.8550 avg100=0.6529 lr=0.000300 rate=2.22 steps/s kd_loss=1.3059 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.077
+[step 9700] loss=0.3636 avg100=0.6180 lr=0.000300 rate=2.21 steps/s kd_loss=0.9441 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.077
+[step 9800] loss=0.3385 avg100=0.6409 lr=0.000300 rate=2.31 steps/s kd_loss=1.1470 kd_hard=0.26 kd_conf=0.97 kd_alpha=0.077
+[step 9900] loss=0.7851 avg100=0.6540 lr=0.000300 rate=2.24 steps/s kd_loss=1.3809 kd_hard=0.17 kd_conf=0.96 kd_alpha=0.078
+[step 10000] loss=0.6597 avg100=0.6558 lr=0.000300 rate=2.01 steps/s kd_loss=1.5883 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.078
+[eval 10000] loss=0.8010 EM=0.2062 CharAcc=0.8515 blank=0.485 pred_len=29.3/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 日ガシティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習回・イベント
+[step 10100] loss=0.6955 avg100=0.6302 lr=0.000300 rate=2.19 steps/s kd_loss=0.7394 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.078
+[step 10200] loss=0.7167 avg100=0.6425 lr=0.000300 rate=2.28 steps/s kd_loss=1.2846 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.079
+[step 10300] loss=0.9138 avg100=0.6428 lr=0.000300 rate=2.12 steps/s kd_loss=1.6360 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.079
+[step 10400] loss=0.8163 avg100=0.6337 lr=0.000300 rate=2.08 steps/s kd_loss=0.8272 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.079
+[step 10500] loss=0.5492 avg100=0.6275 lr=0.000300 rate=2.07 steps/s kd_loss=0.9701 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.080
+[eval 10500] loss=0.8031 EM=0.2062 CharAcc=0.8463 blank=0.490 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東シティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 10600] loss=0.7795 avg100=0.6348 lr=0.000300 rate=2.03 steps/s kd_loss=1.3493 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.080
+[step 10700] loss=0.5991 avg100=0.6260 lr=0.000300 rate=2.26 steps/s kd_loss=0.9620 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.080
+[step 10800] loss=0.2218 avg100=0.6518 lr=0.000300 rate=2.10 steps/s kd_loss=1.4147 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.081
+[step 10900] loss=0.4769 avg100=0.5868 lr=0.000300 rate=2.09 steps/s kd_loss=1.1487 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.081
+[step 11000] loss=0.5061 avg100=0.6300 lr=0.000300 rate=2.19 steps/s kd_loss=1.6210 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.081
+[eval 11000] loss=0.7617 EM=0.1875 CharAcc=0.8565 blank=0.498 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東シティモールの言語状況
+  sample3: ref=講習会・イベント pred=杭集会・イベント
+[step 11100] loss=0.4374 avg100=0.6200 lr=0.000300 rate=2.06 steps/s kd_loss=1.1790 kd_hard=0.22 kd_conf=0.96 kd_alpha=0.082
+[step 11200] loss=0.5721 avg100=0.6033 lr=0.000300 rate=2.10 steps/s kd_loss=0.8900 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.082
+[step 11300] loss=0.6415 avg100=0.6586 lr=0.000300 rate=2.03 steps/s kd_loss=1.0432 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.082
+[step 11400] loss=0.6837 avg100=0.6179 lr=0.000300 rate=2.14 steps/s kd_loss=1.4347 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.083
+[step 11500] loss=0.8144 avg100=0.6337 lr=0.000300 rate=2.08 steps/s kd_loss=1.0926 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.083
+[eval 11500] loss=0.7862 EM=0.2313 CharAcc=0.8566 blank=0.487 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 11600] loss=1.1684 avg100=0.6123 lr=0.000300 rate=2.03 steps/s kd_loss=1.1948 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.083
+[step 11700] loss=0.5149 avg100=0.6449 lr=0.000300 rate=2.11 steps/s kd_loss=0.8867 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.083
+[step 11800] loss=0.5575 avg100=0.6280 lr=0.000300 rate=2.13 steps/s kd_loss=2.2612 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.084
+[step 11900] loss=0.8053 avg100=0.6094 lr=0.000300 rate=2.08 steps/s kd_loss=0.8558 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.084
+[step 12000] loss=0.8053 avg100=0.6337 lr=0.000300 rate=2.05 steps/s kd_loss=1.0846 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.084
+[eval 12000] loss=0.7402 EM=0.2313 CharAcc=0.8604 blank=0.498 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講集会・イベント
+[step 12100] loss=0.9028 avg100=0.6366 lr=0.000300 rate=1.88 steps/s kd_loss=0.8233 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.085
+[step 12200] loss=0.4034 avg100=0.6098 lr=0.000300 rate=2.03 steps/s kd_loss=1.0792 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.085
+[step 12300] loss=0.5155 avg100=0.6345 lr=0.000300 rate=2.07 steps/s kd_loss=0.7838 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.085
+[step 12400] loss=0.5931 avg100=0.6195 lr=0.000300 rate=2.10 steps/s kd_loss=1.2091 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.086
+[step 12500] loss=0.4106 avg100=0.6111 lr=0.000300 rate=2.11 steps/s kd_loss=0.8703 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.086
+[eval 12500] loss=0.7617 EM=0.1688 CharAcc=0.8545 blank=0.492 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=広習会・イベント
+[step 12600] loss=0.8053 avg100=0.6511 lr=0.000300 rate=2.05 steps/s kd_loss=2.1959 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.086
+[step 12700] loss=0.3693 avg100=0.6027 lr=0.000300 rate=2.09 steps/s kd_loss=1.2892 kd_hard=0.10 kd_conf=0.98 kd_alpha=0.087
+[step 12800] loss=0.6501 avg100=0.6080 lr=0.000300 rate=2.20 steps/s kd_loss=1.1721 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.087
+[step 12900] loss=0.3384 avg100=0.6010 lr=0.000300 rate=2.06 steps/s kd_loss=1.3532 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.087
+[step 13000] loss=0.6238 avg100=0.6101 lr=0.000300 rate=1.33 steps/s kd_loss=1.3108 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.087
+[eval 13000] loss=0.7558 EM=0.1938 CharAcc=0.8537 blank=0.502 pred_len=28.6/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中ュは、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のよう
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講集会・イベント
+[step 13100] loss=0.7951 avg100=0.5666 lr=0.000300 rate=1.60 steps/s kd_loss=0.9394 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.088
+[step 13200] loss=0.8281 avg100=0.5986 lr=0.000300 rate=2.44 steps/s kd_loss=0.8853 kd_hard=0.31 kd_conf=0.96 kd_alpha=0.088
+[step 13300] loss=0.4050 avg100=0.5710 lr=0.000300 rate=2.43 steps/s kd_loss=1.3630 kd_hard=0.20 kd_conf=0.96 kd_alpha=0.088
+[step 13400] loss=0.7636 avg100=0.5958 lr=0.000300 rate=2.42 steps/s kd_loss=0.8575 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.089
+[step 13500] loss=0.4425 avg100=0.6084 lr=0.000300 rate=1.79 steps/s kd_loss=1.3225 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.089
+[eval 13500] loss=0.7531 EM=0.2250 CharAcc=0.8595 blank=0.495 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=広習会・イベント
+[step 13600] loss=0.5343 avg100=0.6095 lr=0.000300 rate=1.94 steps/s kd_loss=0.7605 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.089
+[step 13700] loss=0.6815 avg100=0.5676 lr=0.000300 rate=2.24 steps/s kd_loss=0.9057 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.090
+[step 13800] loss=0.2915 avg100=0.5940 lr=0.000300 rate=2.46 steps/s kd_loss=1.0495 kd_hard=0.29 kd_conf=0.96 kd_alpha=0.090
+[step 13900] loss=0.5332 avg100=0.6092 lr=0.000300 rate=2.48 steps/s kd_loss=0.9302 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.090
+[step 14000] loss=0.4220 avg100=0.6162 lr=0.000300 rate=2.39 steps/s kd_loss=1.3196 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.091
+[eval 14000] loss=0.7300 EM=0.2250 CharAcc=0.8556 blank=0.490 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状京
+  sample3: ref=講習会・イベント pred=広集会・イベント
+[step 14100] loss=0.3934 avg100=0.5989 lr=0.000300 rate=1.76 steps/s kd_loss=0.8877 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.091
+[step 14200] loss=0.6006 avg100=0.5917 lr=0.000300 rate=2.04 steps/s kd_loss=0.6146 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.091
+[step 14300] loss=0.8056 avg100=0.5958 lr=0.000300 rate=2.36 steps/s kd_loss=1.5104 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.092
+[step 14400] loss=0.5192 avg100=0.6016 lr=0.000300 rate=2.29 steps/s kd_loss=0.5634 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.092
+[step 14500] loss=0.3675 avg100=0.5804 lr=0.000300 rate=2.22 steps/s kd_loss=1.2744 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.092
+[eval 14500] loss=0.7395 EM=0.2437 CharAcc=0.8635 blank=0.502 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが躍り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=広習会・イベント
+[step 14600] loss=0.5251 avg100=0.5955 lr=0.000300 rate=2.17 steps/s kd_loss=1.0190 kd_hard=0.22 kd_conf=0.96 kd_alpha=0.092
+[step 14700] loss=0.5893 avg100=0.6006 lr=0.000300 rate=2.25 steps/s kd_loss=2.5355 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.093
+[step 14800] loss=0.7589 avg100=0.5881 lr=0.000300 rate=2.29 steps/s kd_loss=0.9737 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.093
+[step 14900] loss=0.4869 avg100=0.5758 lr=0.000300 rate=2.23 steps/s kd_loss=0.8132 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.093
+[step 15000] loss=0.4530 avg100=0.5381 lr=0.000300 rate=2.14 steps/s kd_loss=0.9352 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.094
+[eval 15000] loss=0.6980 EM=0.2500 CharAcc=0.8644 blank=0.498 pred_len=28.6/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 15100] loss=0.5123 avg100=0.5739 lr=0.000300 rate=2.10 steps/s kd_loss=1.1248 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.094
+[step 15200] loss=0.5569 avg100=0.5717 lr=0.000300 rate=2.16 steps/s kd_loss=0.9827 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.094
+[step 15300] loss=0.4165 avg100=0.5643 lr=0.000300 rate=2.25 steps/s kd_loss=1.4031 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.095
+[step 15400] loss=0.3034 avg100=0.5768 lr=0.000300 rate=2.36 steps/s kd_loss=1.0856 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.095
+[step 15500] loss=0.4411 avg100=0.5766 lr=0.000300 rate=2.13 steps/s kd_loss=1.3077 kd_hard=0.27 kd_conf=0.97 kd_alpha=0.095
+[eval 15500] loss=0.7084 EM=0.2750 CharAcc=0.8584 blank=0.487 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 15600] loss=0.7615 avg100=0.5826 lr=0.000300 rate=2.41 steps/s kd_loss=1.3262 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.096
+[step 15700] loss=0.4041 avg100=0.5849 lr=0.000300 rate=2.46 steps/s kd_loss=0.7443 kd_hard=0.30 kd_conf=0.96 kd_alpha=0.096
+[step 15800] loss=0.3793 avg100=0.5795 lr=0.000300 rate=2.27 steps/s kd_loss=0.9237 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.096
+[step 15900] loss=0.5244 avg100=0.5811 lr=0.000300 rate=2.24 steps/s kd_loss=0.9929 kd_hard=0.12 kd_conf=0.97 kd_alpha=0.097
+[step 16000] loss=0.5083 avg100=0.5950 lr=0.000300 rate=2.35 steps/s kd_loss=1.5254 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.097
+[eval 16000] loss=0.7001 EM=0.2062 CharAcc=0.8609 blank=0.493 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で伯じさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語上況
+  sample3: ref=講習会・イベント pred=杭州会・イベント
+[step 16100] loss=0.2945 avg100=0.5786 lr=0.000300 rate=2.23 steps/s kd_loss=0.8594 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.097
+[step 16200] loss=0.8352 avg100=0.5809 lr=0.000300 rate=2.48 steps/s kd_loss=1.2313 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.098
+[step 16300] loss=0.7960 avg100=0.5745 lr=0.000300 rate=2.32 steps/s kd_loss=1.2724 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.098
+[step 16400] loss=0.6190 avg100=0.5920 lr=0.000300 rate=2.23 steps/s kd_loss=1.0695 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.098
+[step 16500] loss=0.5110 avg100=0.5829 lr=0.000300 rate=2.42 steps/s kd_loss=1.2525 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.098
+[eval 16500] loss=0.7224 EM=0.2437 CharAcc=0.8729 blank=0.500 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=公習回・イベント
+[step 16600] loss=0.4159 avg100=0.5428 lr=0.000300 rate=2.28 steps/s kd_loss=0.6152 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.099
+[step 16700] loss=1.1176 avg100=0.7826 lr=0.000300 rate=2.25 steps/s kd_loss=1.3884 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.099
+[step 16800] loss=0.6854 avg100=0.7717 lr=0.000300 rate=2.24 steps/s kd_loss=1.1550 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.099
+[step 16900] loss=0.7898 avg100=0.7501 lr=0.000300 rate=2.03 steps/s kd_loss=1.7443 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 17000] loss=0.7306 avg100=0.6998 lr=0.000300 rate=2.10 steps/s kd_loss=1.3663 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[eval 17000] loss=0.7487 EM=0.2313 CharAcc=0.8533 blank=0.494 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=甲衆会・イベント
+[step 17100] loss=0.4604 avg100=0.5367 lr=0.000300 rate=2.10 steps/s kd_loss=0.9985 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.100
+[step 17200] loss=0.4183 avg100=0.5884 lr=0.000300 rate=2.20 steps/s kd_loss=1.2629 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 17300] loss=0.6131 avg100=0.5128 lr=0.000300 rate=2.14 steps/s kd_loss=0.7590 kd_hard=0.12 kd_conf=0.98 kd_alpha=0.100
+[step 17400] loss=0.3385 avg100=0.5136 lr=0.000300 rate=2.19 steps/s kd_loss=1.0226 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 17500] loss=0.5725 avg100=0.5571 lr=0.000300 rate=2.14 steps/s kd_loss=0.7490 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[eval 17500] loss=0.6735 EM=0.2000 CharAcc=0.8634 blank=0.490 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講州会・イベント
+[step 17600] loss=0.6559 avg100=0.5233 lr=0.000300 rate=2.13 steps/s kd_loss=0.9633 kd_hard=0.32 kd_conf=0.96 kd_alpha=0.100
+[step 17700] loss=0.5361 avg100=0.5210 lr=0.000300 rate=2.16 steps/s kd_loss=1.3008 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 17800] loss=0.4426 avg100=0.5424 lr=0.000300 rate=2.26 steps/s kd_loss=1.4316 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 17900] loss=0.5102 avg100=0.5491 lr=0.000300 rate=2.29 steps/s kd_loss=1.1592 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 18000] loss=0.5773 avg100=0.5409 lr=0.000300 rate=2.28 steps/s kd_loss=1.0622 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[eval 18000] loss=0.7090 EM=0.2562 CharAcc=0.8686 blank=0.497 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 18100] loss=0.4234 avg100=0.5281 lr=0.000300 rate=2.18 steps/s kd_loss=1.1067 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 18200] loss=0.6052 avg100=0.5400 lr=0.000300 rate=2.33 steps/s kd_loss=0.9533 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 18300] loss=0.3028 avg100=0.6804 lr=0.000300 rate=2.37 steps/s kd_loss=1.3669 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 18400] loss=0.8849 avg100=0.5237 lr=0.000300 rate=2.36 steps/s kd_loss=1.2845 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 18500] loss=0.3132 avg100=0.5323 lr=0.000300 rate=2.23 steps/s kd_loss=0.9534 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 18500] loss=0.6696 EM=0.2500 CharAcc=0.8768 blank=0.505 pred_len=28.6/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 18600] loss=0.3675 avg100=0.5279 lr=0.000300 rate=2.27 steps/s kd_loss=0.8272 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.100
+[step 18700] loss=0.3199 avg100=0.5262 lr=0.000300 rate=2.35 steps/s kd_loss=0.8697 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 18800] loss=0.3628 avg100=0.5288 lr=0.000300 rate=2.26 steps/s kd_loss=1.0575 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 18900] loss=0.5238 avg100=0.5226 lr=0.000300 rate=2.44 steps/s kd_loss=0.8646 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 19000] loss=0.4861 avg100=0.5396 lr=0.000300 rate=2.36 steps/s kd_loss=1.5045 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 19000] loss=0.6872 EM=0.2437 CharAcc=0.8654 blank=0.495 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 19100] loss=0.4534 avg100=0.5398 lr=0.000300 rate=2.25 steps/s kd_loss=0.7453 kd_hard=0.28 kd_conf=0.96 kd_alpha=0.100
+[step 19200] loss=0.5393 avg100=0.5152 lr=0.000300 rate=2.42 steps/s kd_loss=0.7140 kd_hard=0.26 kd_conf=0.97 kd_alpha=0.100
+[step 19300] loss=0.3061 avg100=0.5411 lr=0.000300 rate=2.24 steps/s kd_loss=0.9502 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 19400] loss=0.3456 avg100=0.5451 lr=0.000300 rate=2.19 steps/s kd_loss=1.2086 kd_hard=0.12 kd_conf=0.97 kd_alpha=0.100
+[step 19500] loss=0.3242 avg100=0.5269 lr=0.000300 rate=2.07 steps/s kd_loss=0.7266 kd_hard=0.23 kd_conf=0.96 kd_alpha=0.100
+[eval 19500] loss=0.6907 EM=0.2437 CharAcc=0.8640 blank=0.493 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 19600] loss=0.5120 avg100=0.5071 lr=0.000300 rate=2.15 steps/s kd_loss=1.0070 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 19700] loss=0.4443 avg100=0.5527 lr=0.000300 rate=2.14 steps/s kd_loss=1.2058 kd_hard=0.10 kd_conf=0.98 kd_alpha=0.100
+[step 19800] loss=0.5170 avg100=0.5214 lr=0.000300 rate=1.26 steps/s kd_loss=1.4959 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 19900] loss=0.6135 avg100=0.5227 lr=0.000300 rate=1.38 steps/s kd_loss=1.4730 kd_hard=0.29 kd_conf=0.96 kd_alpha=0.100
+[step 20000] loss=0.3233 avg100=0.5510 lr=0.000300 rate=1.57 steps/s kd_loss=1.0615 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[eval 20000] loss=0.6686 EM=0.2500 CharAcc=0.8718 blank=0.490 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 20100] loss=0.3244 avg100=0.5526 lr=0.000300 rate=1.41 steps/s kd_loss=1.0128 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 20200] loss=0.3640 avg100=0.5241 lr=0.000300 rate=1.42 steps/s kd_loss=1.2557 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[step 20300] loss=0.6206 avg100=0.5304 lr=0.000300 rate=1.83 steps/s kd_loss=0.5322 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 20400] loss=0.3161 avg100=0.5389 lr=0.000300 rate=2.15 steps/s kd_loss=0.7168 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 20500] loss=0.6555 avg100=0.5327 lr=0.000300 rate=2.37 steps/s kd_loss=1.0959 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[eval 20500] loss=0.6635 EM=0.2500 CharAcc=0.8668 blank=0.496 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=甲周回・イベント
+[step 20600] loss=0.3041 avg100=0.5355 lr=0.000300 rate=2.19 steps/s kd_loss=1.3695 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 20700] loss=0.5909 avg100=0.5232 lr=0.000300 rate=2.17 steps/s kd_loss=1.7586 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 20800] loss=0.6216 avg100=0.5192 lr=0.000300 rate=2.29 steps/s kd_loss=0.8481 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 20900] loss=0.3811 avg100=0.5369 lr=0.000300 rate=2.19 steps/s kd_loss=0.9999 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 21000] loss=0.2677 avg100=0.5468 lr=0.000300 rate=2.21 steps/s kd_loss=1.0258 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 21000] loss=0.6822 EM=0.2437 CharAcc=0.8655 blank=0.488 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの源五状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 21100] loss=0.4077 avg100=0.5411 lr=0.000300 rate=2.10 steps/s kd_loss=1.0239 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 21200] loss=0.6146 avg100=0.5269 lr=0.000300 rate=2.23 steps/s kd_loss=1.0951 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 21300] loss=0.3588 avg100=0.5060 lr=0.000300 rate=2.26 steps/s kd_loss=1.0390 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 21400] loss=0.6185 avg100=0.5275 lr=0.000300 rate=2.23 steps/s kd_loss=1.0308 kd_hard=0.23 kd_conf=0.96 kd_alpha=0.100
+[step 21500] loss=0.3241 avg100=0.5091 lr=0.000300 rate=2.21 steps/s kd_loss=0.8113 kd_hard=0.15 kd_conf=0.98 kd_alpha=0.100
+[eval 21500] loss=0.6614 EM=0.2687 CharAcc=0.8768 blank=0.497 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 21600] loss=0.3262 avg100=0.5267 lr=0.000300 rate=2.22 steps/s kd_loss=1.2991 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 21700] loss=0.3967 avg100=0.5127 lr=0.000300 rate=2.16 steps/s kd_loss=1.2833 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 21800] loss=0.6368 avg100=0.5349 lr=0.000300 rate=2.17 steps/s kd_loss=0.7395 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 21900] loss=0.7824 avg100=0.5300 lr=0.000300 rate=2.28 steps/s kd_loss=0.6530 kd_hard=0.14 kd_conf=0.98 kd_alpha=0.100
+[step 22000] loss=0.2924 avg100=0.4858 lr=0.000300 rate=2.25 steps/s kd_loss=1.0105 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 22000] loss=0.6577 EM=0.2250 CharAcc=0.8748 blank=0.489 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 22100] loss=0.5683 avg100=0.5503 lr=0.000300 rate=2.22 steps/s kd_loss=0.7551 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[step 22200] loss=0.3149 avg100=0.5114 lr=0.000300 rate=2.23 steps/s kd_loss=1.0405 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 22300] loss=0.6081 avg100=0.5388 lr=0.000300 rate=2.30 steps/s kd_loss=1.4075 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 22400] loss=0.3106 avg100=0.5156 lr=0.000300 rate=2.28 steps/s kd_loss=0.8211 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 22500] loss=0.5961 avg100=0.5049 lr=0.000300 rate=2.24 steps/s kd_loss=1.0926 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[eval 22500] loss=0.6586 EM=0.2562 CharAcc=0.8816 blank=0.492 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 22600] loss=0.8418 avg100=0.4999 lr=0.000300 rate=2.25 steps/s kd_loss=0.9478 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 22700] loss=0.5817 avg100=0.5166 lr=0.000300 rate=2.26 steps/s kd_loss=0.9367 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 22800] loss=0.6530 avg100=0.5057 lr=0.000300 rate=2.30 steps/s kd_loss=0.7853 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 22900] loss=0.5618 avg100=0.5017 lr=0.000300 rate=2.36 steps/s kd_loss=1.4349 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[step 23000] loss=0.7322 avg100=0.5187 lr=0.000300 rate=2.35 steps/s kd_loss=1.4480 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 23000] loss=0.6563 EM=0.2375 CharAcc=0.8717 blank=0.490 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 23100] loss=0.5730 avg100=0.5154 lr=0.000300 rate=2.25 steps/s kd_loss=0.8668 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[step 23200] loss=0.3120 avg100=0.5058 lr=0.000300 rate=2.31 steps/s kd_loss=0.8656 kd_hard=0.28 kd_conf=0.96 kd_alpha=0.100
+[step 23300] loss=0.5813 avg100=0.5024 lr=0.000300 rate=2.31 steps/s kd_loss=0.7013 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 23400] loss=0.5958 avg100=0.5086 lr=0.000300 rate=2.45 steps/s kd_loss=0.8531 kd_hard=0.32 kd_conf=0.96 kd_alpha=0.100
+[step 23500] loss=0.3086 avg100=0.5044 lr=0.000300 rate=2.44 steps/s kd_loss=0.6776 kd_hard=0.26 kd_conf=0.96 kd_alpha=0.100
+[eval 23500] loss=0.6721 EM=0.2062 CharAcc=0.8670 blank=0.494 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 23600] loss=0.6800 avg100=0.4894 lr=0.000300 rate=2.44 steps/s kd_loss=0.9231 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 23700] loss=0.4443 avg100=0.5158 lr=0.000300 rate=2.35 steps/s kd_loss=0.9064 kd_hard=0.20 kd_conf=0.96 kd_alpha=0.100
+[step 23800] loss=0.3166 avg100=0.4974 lr=0.000300 rate=2.33 steps/s kd_loss=1.0056 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 23900] loss=0.3778 avg100=0.5410 lr=0.000300 rate=2.28 steps/s kd_loss=1.5057 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 24000] loss=0.7065 avg100=0.5334 lr=0.000300 rate=2.43 steps/s kd_loss=1.2004 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[eval 24000] loss=0.6485 EM=0.2250 CharAcc=0.8749 blank=0.491 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 24100] loss=0.4242 avg100=0.4967 lr=0.000300 rate=2.16 steps/s kd_loss=0.7957 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 24200] loss=0.3428 avg100=0.4826 lr=0.000300 rate=2.18 steps/s kd_loss=0.8249 kd_hard=0.29 kd_conf=0.96 kd_alpha=0.100
+[step 24300] loss=0.5321 avg100=0.5156 lr=0.000300 rate=2.02 steps/s kd_loss=1.0055 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 24400] loss=0.4940 avg100=0.5287 lr=0.000300 rate=1.94 steps/s kd_loss=0.8987 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[step 24500] loss=0.3937 avg100=0.5006 lr=0.000300 rate=2.35 steps/s kd_loss=1.1324 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[eval 24500] loss=0.6445 EM=0.2625 CharAcc=0.8723 blank=0.496 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 24600] loss=0.5116 avg100=0.5063 lr=0.000300 rate=2.25 steps/s kd_loss=0.6901 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 24700] loss=0.4390 avg100=0.5201 lr=0.000300 rate=2.28 steps/s kd_loss=0.7346 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[step 24800] loss=0.3567 avg100=0.4904 lr=0.000300 rate=2.21 steps/s kd_loss=1.0790 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 24900] loss=0.2932 avg100=0.5320 lr=0.000300 rate=2.18 steps/s kd_loss=1.2091 kd_hard=0.21 kd_conf=0.96 kd_alpha=0.100
+[step 25000] loss=0.4808 avg100=0.4944 lr=0.000300 rate=2.31 steps/s kd_loss=0.6558 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 25000] loss=0.6566 EM=0.2375 CharAcc=0.8644 blank=0.486 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 25100] loss=0.5011 avg100=0.4984 lr=0.000300 rate=2.25 steps/s kd_loss=1.0542 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 25200] loss=0.6105 avg100=0.4753 lr=0.000300 rate=2.29 steps/s kd_loss=0.6869 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 25300] loss=0.4901 avg100=0.5024 lr=0.000300 rate=2.29 steps/s kd_loss=0.5442 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 25400] loss=0.5197 avg100=0.5222 lr=0.000300 rate=2.27 steps/s kd_loss=0.8943 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 25500] loss=0.4535 avg100=0.5146 lr=0.000300 rate=2.28 steps/s kd_loss=1.4488 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[eval 25500] loss=0.6609 EM=0.2875 CharAcc=0.8784 blank=0.489 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 25600] loss=0.4275 avg100=0.5055 lr=0.000300 rate=2.38 steps/s kd_loss=1.3638 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 25700] loss=0.5239 avg100=0.5022 lr=0.000300 rate=2.37 steps/s kd_loss=0.7289 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 25800] loss=0.5022 avg100=0.4824 lr=0.000300 rate=2.45 steps/s kd_loss=1.1905 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 25900] loss=0.2871 avg100=0.5166 lr=0.000300 rate=2.48 steps/s kd_loss=0.7120 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 26000] loss=0.7916 avg100=0.4835 lr=0.000300 rate=2.46 steps/s kd_loss=0.7369 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[eval 26000] loss=0.6402 EM=0.2562 CharAcc=0.8685 blank=0.478 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 26100] loss=0.3156 avg100=0.5039 lr=0.000300 rate=2.45 steps/s kd_loss=0.8556 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 26200] loss=0.6534 avg100=0.5151 lr=0.000300 rate=2.46 steps/s kd_loss=0.6043 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 26300] loss=0.2997 avg100=0.5412 lr=0.000300 rate=2.48 steps/s kd_loss=1.2558 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 26400] loss=0.4174 avg100=0.4972 lr=0.000300 rate=2.49 steps/s kd_loss=1.1328 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 26500] loss=0.6207 avg100=0.5017 lr=0.000300 rate=2.39 steps/s kd_loss=0.9858 kd_hard=0.33 kd_conf=0.96 kd_alpha=0.100
+[eval 26500] loss=0.6655 EM=0.2687 CharAcc=0.8707 blank=0.498 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 26600] loss=0.6381 avg100=0.4735 lr=0.000300 rate=2.51 steps/s kd_loss=0.7006 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[step 26700] loss=0.5509 avg100=0.4777 lr=0.000300 rate=2.47 steps/s kd_loss=0.4727 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 26800] loss=0.5649 avg100=0.4979 lr=0.000300 rate=2.50 steps/s kd_loss=0.9738 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 26900] loss=0.6324 avg100=0.4975 lr=0.000300 rate=2.48 steps/s kd_loss=0.8731 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 27000] loss=0.6564 avg100=0.5016 lr=0.000300 rate=2.52 steps/s kd_loss=0.9530 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[eval 27000] loss=0.6339 EM=0.2875 CharAcc=0.8806 blank=0.487 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 27100] loss=0.9553 avg100=0.4889 lr=0.000300 rate=2.45 steps/s kd_loss=0.6088 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 27200] loss=0.5124 avg100=0.5168 lr=0.000300 rate=2.47 steps/s kd_loss=0.8780 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 27300] loss=0.5989 avg100=0.5407 lr=0.000300 rate=2.40 steps/s kd_loss=0.8182 kd_hard=0.26 kd_conf=0.97 kd_alpha=0.100
+[step 27400] loss=0.3098 avg100=0.5167 lr=0.000300 rate=2.50 steps/s kd_loss=1.2530 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 27500] loss=0.5832 avg100=0.5140 lr=0.000300 rate=2.45 steps/s kd_loss=0.9694 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[eval 27500] loss=0.6270 EM=0.2875 CharAcc=0.8802 blank=0.491 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 27600] loss=0.9640 avg100=0.5228 lr=0.000300 rate=2.46 steps/s kd_loss=0.9908 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 27700] loss=0.5286 avg100=0.5099 lr=0.000300 rate=2.49 steps/s kd_loss=0.9898 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 27800] loss=0.5302 avg100=0.4659 lr=0.000300 rate=2.53 steps/s kd_loss=0.6094 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 27900] loss=0.3659 avg100=0.4979 lr=0.000300 rate=2.49 steps/s kd_loss=0.7061 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 28000] loss=0.8747 avg100=0.4757 lr=0.000300 rate=2.48 steps/s kd_loss=0.8767 kd_hard=0.23 kd_conf=0.96 kd_alpha=0.100
+[eval 28000] loss=0.6292 EM=0.2938 CharAcc=0.8738 blank=0.492 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 28100] loss=0.4533 avg100=0.5077 lr=0.000300 rate=2.32 steps/s kd_loss=1.0899 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 28200] loss=0.8677 avg100=0.4829 lr=0.000300 rate=2.48 steps/s kd_loss=0.8968 kd_hard=0.26 kd_conf=0.96 kd_alpha=0.100
+[step 28300] loss=0.3027 avg100=0.5076 lr=0.000300 rate=2.50 steps/s kd_loss=1.0175 kd_hard=0.28 kd_conf=0.96 kd_alpha=0.100
+[step 28400] loss=0.4637 avg100=0.5223 lr=0.000300 rate=2.48 steps/s kd_loss=0.9883 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 28500] loss=0.3779 avg100=0.4915 lr=0.000300 rate=2.49 steps/s kd_loss=0.9242 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 28500] loss=0.6278 EM=0.2812 CharAcc=0.8769 blank=0.493 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右えでおじさんが踊り、ゴルドフィーバーに加えて以下のようなボ
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 28600] loss=0.5761 avg100=0.4824 lr=0.000300 rate=2.43 steps/s kd_loss=0.9209 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 28700] loss=0.8361 avg100=0.5152 lr=0.000300 rate=2.49 steps/s kd_loss=0.7303 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 28800] loss=0.5100 avg100=0.4644 lr=0.000300 rate=2.50 steps/s kd_loss=0.8846 kd_hard=0.27 kd_conf=0.97 kd_alpha=0.100
+[step 28900] loss=0.4380 avg100=0.4815 lr=0.000300 rate=2.29 steps/s kd_loss=0.9949 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[step 29000] loss=0.6042 avg100=0.4633 lr=0.000300 rate=2.40 steps/s kd_loss=1.0453 kd_hard=0.26 kd_conf=0.97 kd_alpha=0.100
+[eval 29000] loss=0.6272 EM=0.2875 CharAcc=0.8824 blank=0.488 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 29100] loss=0.6219 avg100=0.4952 lr=0.000300 rate=2.26 steps/s kd_loss=0.8499 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 29200] loss=0.3478 avg100=0.4822 lr=0.000300 rate=2.22 steps/s kd_loss=0.8328 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 29300] loss=0.3489 avg100=0.4936 lr=0.000300 rate=2.13 steps/s kd_loss=1.3657 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 29400] loss=0.3886 avg100=0.5011 lr=0.000300 rate=2.35 steps/s kd_loss=1.0673 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 29500] loss=0.7915 avg100=0.5172 lr=0.000300 rate=2.35 steps/s kd_loss=1.1266 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[eval 29500] loss=0.6435 EM=0.2313 CharAcc=0.8777 blank=0.494 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語上況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 29600] loss=0.5371 avg100=0.5003 lr=0.000300 rate=2.20 steps/s kd_loss=0.6444 kd_hard=0.26 kd_conf=0.96 kd_alpha=0.100
+[step 29700] loss=0.8433 avg100=0.5023 lr=0.000300 rate=2.13 steps/s kd_loss=1.0681 kd_hard=0.23 kd_conf=0.96 kd_alpha=0.100
+[step 29800] loss=0.2930 avg100=0.4905 lr=0.000300 rate=2.14 steps/s kd_loss=1.4804 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 29900] loss=0.6363 avg100=0.5324 lr=0.000300 rate=2.23 steps/s kd_loss=1.0963 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 30000] loss=0.5770 avg100=0.4695 lr=0.000300 rate=2.25 steps/s kd_loss=0.6303 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[eval 30000] loss=0.6393 EM=0.2687 CharAcc=0.8767 blank=0.492 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上で叔じさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 30100] loss=0.6019 avg100=0.5099 lr=0.000300 rate=2.20 steps/s kd_loss=1.0883 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.100
+[step 30200] loss=0.5264 avg100=0.4790 lr=0.000300 rate=2.30 steps/s kd_loss=0.9907 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 30300] loss=0.4337 avg100=0.4856 lr=0.000300 rate=2.34 steps/s kd_loss=0.6547 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 30400] loss=0.3806 avg100=0.4761 lr=0.000300 rate=2.25 steps/s kd_loss=0.9307 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 30500] loss=0.3666 avg100=0.4586 lr=0.000300 rate=2.11 steps/s kd_loss=1.1582 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 30500] loss=0.6129 EM=0.3125 CharAcc=0.8859 blank=0.491 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でオジさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 30600] loss=0.4923 avg100=0.5023 lr=0.000300 rate=2.13 steps/s kd_loss=1.1574 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 30700] loss=0.2394 avg100=0.4907 lr=0.000300 rate=2.22 steps/s kd_loss=0.8008 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 30800] loss=0.4633 avg100=0.4859 lr=0.000300 rate=2.23 steps/s kd_loss=1.2201 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 30900] loss=0.3554 avg100=0.4841 lr=0.000300 rate=2.27 steps/s kd_loss=0.6716 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[step 31000] loss=0.6189 avg100=0.4952 lr=0.000300 rate=2.26 steps/s kd_loss=0.5651 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 31000] loss=0.6465 EM=0.2625 CharAcc=0.8792 blank=0.496 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講周会・イベント
+[step 31100] loss=0.9068 avg100=0.4739 lr=0.000300 rate=2.29 steps/s kd_loss=0.7627 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 31200] loss=0.5002 avg100=0.4910 lr=0.000300 rate=2.36 steps/s kd_loss=0.9509 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 31300] loss=0.3992 avg100=0.4755 lr=0.000300 rate=2.25 steps/s kd_loss=0.8254 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 31400] loss=0.3556 avg100=0.4876 lr=0.000300 rate=2.33 steps/s kd_loss=0.8476 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.100
+[step 31500] loss=0.4530 avg100=0.4819 lr=0.000300 rate=2.28 steps/s kd_loss=0.8578 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 31500] loss=0.6203 EM=0.2812 CharAcc=0.8779 blank=0.497 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおジさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 31600] loss=0.6618 avg100=0.4903 lr=0.000300 rate=2.29 steps/s kd_loss=0.6667 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 31700] loss=0.4157 avg100=0.4743 lr=0.000300 rate=2.47 steps/s kd_loss=0.7695 kd_hard=0.27 kd_conf=0.97 kd_alpha=0.100
+[step 31800] loss=0.3588 avg100=0.5146 lr=0.000300 rate=2.44 steps/s kd_loss=0.5772 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 31900] loss=0.4602 avg100=0.4843 lr=0.000300 rate=2.49 steps/s kd_loss=1.0394 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 32000] loss=0.5110 avg100=0.4973 lr=0.000300 rate=2.45 steps/s kd_loss=0.8931 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[eval 32000] loss=0.6027 EM=0.2750 CharAcc=0.8893 blank=0.489 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお父さんが躍り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 32100] loss=0.4933 avg100=0.5059 lr=0.000300 rate=2.35 steps/s kd_loss=0.7601 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 32200] loss=0.4778 avg100=0.4995 lr=0.000300 rate=2.48 steps/s kd_loss=0.7754 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 32300] loss=1.0571 avg100=0.6021 lr=0.000300 rate=2.41 steps/s kd_loss=1.3072 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 32400] loss=0.7318 avg100=0.7069 lr=0.000300 rate=2.29 steps/s kd_loss=1.8587 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 32500] loss=0.8452 avg100=0.6839 lr=0.000300 rate=2.30 steps/s kd_loss=1.2457 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[eval 32500] loss=0.6466 EM=0.2500 CharAcc=0.8765 blank=0.488 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 32600] loss=0.4271 avg100=0.4402 lr=0.000300 rate=2.41 steps/s kd_loss=0.5757 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 32700] loss=0.4178 avg100=0.4687 lr=0.000300 rate=2.47 steps/s kd_loss=0.7877 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 32800] loss=0.4618 avg100=0.4567 lr=0.000300 rate=2.48 steps/s kd_loss=1.2532 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 32900] loss=0.3410 avg100=0.4281 lr=0.000300 rate=2.36 steps/s kd_loss=1.1084 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 33000] loss=0.4690 avg100=0.4542 lr=0.000300 rate=2.31 steps/s kd_loss=1.3614 kd_hard=0.23 kd_conf=0.96 kd_alpha=0.100
+[eval 33000] loss=0.6066 EM=0.2875 CharAcc=0.8838 blank=0.493 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 33100] loss=0.2993 avg100=0.4476 lr=0.000300 rate=2.38 steps/s kd_loss=0.6598 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 33200] loss=0.4458 avg100=0.4300 lr=0.000300 rate=2.50 steps/s kd_loss=1.2246 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 33300] loss=0.1956 avg100=0.4608 lr=0.000300 rate=2.49 steps/s kd_loss=0.6424 kd_hard=0.21 kd_conf=0.96 kd_alpha=0.100
+[step 33400] loss=0.4850 avg100=0.4624 lr=0.000300 rate=2.49 steps/s kd_loss=1.2251 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.100
+[step 33500] loss=0.3734 avg100=0.4379 lr=0.000300 rate=2.48 steps/s kd_loss=0.8952 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 33500] loss=0.6314 EM=0.2500 CharAcc=0.8803 blank=0.490 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=広週会・イベント
+[step 33600] loss=0.5631 avg100=0.4730 lr=0.000300 rate=2.42 steps/s kd_loss=0.8979 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 33700] loss=0.5074 avg100=0.4820 lr=0.000300 rate=2.32 steps/s kd_loss=1.0341 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 33800] loss=0.4813 avg100=0.4587 lr=0.000300 rate=2.39 steps/s kd_loss=0.7542 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 33900] loss=0.2667 avg100=0.4536 lr=0.000300 rate=2.48 steps/s kd_loss=0.7709 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 34000] loss=0.3331 avg100=0.4358 lr=0.000300 rate=2.41 steps/s kd_loss=0.7255 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[eval 34000] loss=0.6060 EM=0.2875 CharAcc=0.8828 blank=0.479 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 34100] loss=0.4964 avg100=0.4616 lr=0.000300 rate=2.40 steps/s kd_loss=0.7460 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 34200] loss=0.1774 avg100=0.4637 lr=0.000300 rate=2.42 steps/s kd_loss=1.1677 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 34300] loss=0.3309 avg100=0.4683 lr=0.000300 rate=2.38 steps/s kd_loss=1.2615 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 34400] loss=0.7395 avg100=0.4418 lr=0.000300 rate=2.45 steps/s kd_loss=0.6950 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 34500] loss=0.2986 avg100=0.4807 lr=0.000300 rate=2.36 steps/s kd_loss=1.0950 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[eval 34500] loss=0.5885 EM=0.2750 CharAcc=0.8856 blank=0.490 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 34600] loss=0.4974 avg100=0.4697 lr=0.000300 rate=2.35 steps/s kd_loss=1.0941 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 34700] loss=0.3329 avg100=0.4458 lr=0.000300 rate=2.47 steps/s kd_loss=0.8275 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[step 34800] loss=0.2898 avg100=0.4547 lr=0.000300 rate=2.34 steps/s kd_loss=0.8436 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 34900] loss=0.3932 avg100=0.4497 lr=0.000300 rate=2.32 steps/s kd_loss=0.7969 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 35000] loss=0.4218 avg100=0.4347 lr=0.000300 rate=2.22 steps/s kd_loss=0.9221 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 35000] loss=0.6118 EM=0.3000 CharAcc=0.8834 blank=0.492 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 35100] loss=0.6787 avg100=0.4433 lr=0.000300 rate=2.20 steps/s kd_loss=0.4285 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 35200] loss=0.2145 avg100=0.4409 lr=0.000300 rate=2.27 steps/s kd_loss=0.6729 kd_hard=0.28 kd_conf=0.96 kd_alpha=0.100
+[step 35300] loss=0.2941 avg100=0.4748 lr=0.000300 rate=2.18 steps/s kd_loss=1.2204 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 35400] loss=0.2156 avg100=0.4688 lr=0.000300 rate=2.22 steps/s kd_loss=0.8025 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 35500] loss=0.3061 avg100=0.4655 lr=0.000300 rate=2.26 steps/s kd_loss=0.7901 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[eval 35500] loss=0.6067 EM=0.2938 CharAcc=0.8822 blank=0.485 pred_len=29.2/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 35600] loss=0.2954 avg100=0.4761 lr=0.000300 rate=2.13 steps/s kd_loss=1.1281 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 35700] loss=0.4865 avg100=0.4354 lr=0.000300 rate=2.21 steps/s kd_loss=0.8069 kd_hard=0.12 kd_conf=0.97 kd_alpha=0.100
+[step 35800] loss=0.2894 avg100=0.4446 lr=0.000300 rate=2.17 steps/s kd_loss=1.0818 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[step 35900] loss=0.2603 avg100=0.4561 lr=0.000300 rate=2.23 steps/s kd_loss=1.1254 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 36000] loss=0.3170 avg100=0.4314 lr=0.000300 rate=2.24 steps/s kd_loss=0.6815 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[eval 36000] loss=0.5928 EM=0.2687 CharAcc=0.8826 blank=0.497 pred_len=28.6/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおジさんが躍り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 36100] loss=0.2496 avg100=0.4432 lr=0.000300 rate=2.11 steps/s kd_loss=1.4763 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 36200] loss=0.2675 avg100=0.4418 lr=0.000300 rate=2.24 steps/s kd_loss=0.8127 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 36300] loss=0.4789 avg100=0.4556 lr=0.000300 rate=2.11 steps/s kd_loss=0.9370 kd_hard=0.23 kd_conf=0.96 kd_alpha=0.100
+[step 36400] loss=0.3184 avg100=0.4486 lr=0.000300 rate=2.27 steps/s kd_loss=0.9264 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[step 36500] loss=0.6534 avg100=0.4849 lr=0.000300 rate=2.24 steps/s kd_loss=1.3824 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[eval 36500] loss=0.6039 EM=0.3000 CharAcc=0.8840 blank=0.486 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講集会・イベント
+[step 36600] loss=0.4389 avg100=0.4300 lr=0.000300 rate=2.06 steps/s kd_loss=1.1879 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 36700] loss=0.3870 avg100=0.4618 lr=0.000300 rate=2.40 steps/s kd_loss=0.5519 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 36800] loss=0.3394 avg100=0.4553 lr=0.000300 rate=2.44 steps/s kd_loss=1.1405 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 36900] loss=0.4121 avg100=0.4548 lr=0.000300 rate=2.36 steps/s kd_loss=0.8017 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 37000] loss=0.3251 avg100=0.4594 lr=0.000300 rate=2.44 steps/s kd_loss=1.0673 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[eval 37000] loss=0.6047 EM=0.2875 CharAcc=0.8855 blank=0.484 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 37100] loss=0.7127 avg100=0.4323 lr=0.000300 rate=2.43 steps/s kd_loss=1.0130 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 37200] loss=0.3439 avg100=0.4805 lr=0.000300 rate=2.46 steps/s kd_loss=0.8562 kd_hard=0.30 kd_conf=0.96 kd_alpha=0.100
+[step 37300] loss=0.5270 avg100=0.4518 lr=0.000300 rate=2.45 steps/s kd_loss=0.6276 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 37400] loss=0.5824 avg100=0.4590 lr=0.000300 rate=2.42 steps/s kd_loss=1.1787 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 37500] loss=0.7098 avg100=0.4505 lr=0.000300 rate=2.44 steps/s kd_loss=0.8986 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[eval 37500] loss=0.5862 EM=0.3187 CharAcc=0.8844 blank=0.490 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 37600] loss=0.3812 avg100=0.4508 lr=0.000300 rate=2.38 steps/s kd_loss=0.6097 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 37700] loss=0.3573 avg100=0.4439 lr=0.000300 rate=2.42 steps/s kd_loss=0.8510 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 37800] loss=0.7915 avg100=0.4651 lr=0.000300 rate=2.53 steps/s kd_loss=1.0046 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 37900] loss=0.4392 avg100=0.4615 lr=0.000300 rate=2.55 steps/s kd_loss=0.6128 kd_hard=0.29 kd_conf=0.96 kd_alpha=0.100
+[step 38000] loss=0.5286 avg100=0.4629 lr=0.000300 rate=2.54 steps/s kd_loss=0.7296 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 38000] loss=0.5822 EM=0.3000 CharAcc=0.8872 blank=0.483 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=公習会・イベント
+[step 38100] loss=0.5960 avg100=0.4460 lr=0.000300 rate=2.45 steps/s kd_loss=0.8183 kd_hard=0.26 kd_conf=0.96 kd_alpha=0.100
+[step 38200] loss=0.4468 avg100=0.4706 lr=0.000300 rate=2.52 steps/s kd_loss=1.0170 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 38300] loss=0.5167 avg100=0.4630 lr=0.000300 rate=2.53 steps/s kd_loss=0.7471 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[step 38400] loss=0.8239 avg100=0.4437 lr=0.000300 rate=2.51 steps/s kd_loss=1.2270 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 38500] loss=0.6025 avg100=0.4674 lr=0.000300 rate=2.44 steps/s kd_loss=0.9963 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[eval 38500] loss=0.5685 EM=0.3063 CharAcc=0.8881 blank=0.484 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 38600] loss=0.4505 avg100=0.4558 lr=0.000300 rate=2.43 steps/s kd_loss=1.4007 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 38700] loss=0.6551 avg100=0.4324 lr=0.000300 rate=2.53 steps/s kd_loss=0.6990 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 38800] loss=0.4191 avg100=0.4502 lr=0.000300 rate=2.53 steps/s kd_loss=0.9647 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 38900] loss=0.5353 avg100=0.4623 lr=0.000300 rate=2.48 steps/s kd_loss=0.8585 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 39000] loss=0.2542 avg100=0.4645 lr=0.000300 rate=2.49 steps/s kd_loss=0.9736 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[eval 39000] loss=0.5718 EM=0.3250 CharAcc=0.8946 blank=0.491 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 39100] loss=0.4994 avg100=0.4429 lr=0.000300 rate=2.43 steps/s kd_loss=0.6296 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 39200] loss=0.4513 avg100=0.4397 lr=0.000300 rate=2.54 steps/s kd_loss=1.0799 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 39300] loss=0.3236 avg100=0.4668 lr=0.000300 rate=2.34 steps/s kd_loss=1.1147 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 39400] loss=0.6766 avg100=0.4232 lr=0.000300 rate=2.40 steps/s kd_loss=0.6653 kd_hard=0.10 kd_conf=0.98 kd_alpha=0.100
+[step 39500] loss=0.3023 avg100=0.4508 lr=0.000300 rate=2.38 steps/s kd_loss=0.7654 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[eval 39500] loss=0.5675 EM=0.3000 CharAcc=0.8871 blank=0.490 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 39600] loss=0.4160 avg100=0.4551 lr=0.000300 rate=2.28 steps/s kd_loss=1.0377 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 39700] loss=0.2810 avg100=0.4409 lr=0.000300 rate=2.35 steps/s kd_loss=0.5625 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 39800] loss=0.2812 avg100=0.4366 lr=0.000300 rate=2.38 steps/s kd_loss=0.7035 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 39900] loss=0.4153 avg100=0.4518 lr=0.000300 rate=2.35 steps/s kd_loss=2.0972 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 40000] loss=0.2890 avg100=0.4488 lr=0.000300 rate=2.34 steps/s kd_loss=0.8895 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 40000] loss=0.5748 EM=0.3125 CharAcc=0.8876 blank=0.490 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが躍り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 40100] loss=0.4988 avg100=0.4459 lr=0.000300 rate=2.19 steps/s kd_loss=0.8788 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 40200] loss=0.2716 avg100=0.4582 lr=0.000300 rate=2.35 steps/s kd_loss=0.7318 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 40300] loss=0.4113 avg100=0.4183 lr=0.000300 rate=2.36 steps/s kd_loss=0.7513 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 40400] loss=0.3588 avg100=0.4335 lr=0.000300 rate=2.36 steps/s kd_loss=0.9994 kd_hard=0.29 kd_conf=0.96 kd_alpha=0.100
+[step 40500] loss=0.4809 avg100=0.4542 lr=0.000300 rate=2.35 steps/s kd_loss=0.7501 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 40500] loss=0.5875 EM=0.2812 CharAcc=0.8858 blank=0.485 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講集会・イベント
+[step 40600] loss=0.4436 avg100=0.4294 lr=0.000300 rate=2.31 steps/s kd_loss=0.9257 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 40700] loss=0.3649 avg100=0.4531 lr=0.000300 rate=2.40 steps/s kd_loss=0.6588 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 40800] loss=0.4346 avg100=0.4243 lr=0.000300 rate=2.39 steps/s kd_loss=1.0637 kd_hard=0.26 kd_conf=0.97 kd_alpha=0.100
+[step 40900] loss=0.7826 avg100=0.4430 lr=0.000300 rate=2.27 steps/s kd_loss=0.8951 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 41000] loss=0.3389 avg100=0.4767 lr=0.000300 rate=2.37 steps/s kd_loss=1.6154 kd_hard=0.12 kd_conf=0.97 kd_alpha=0.100
+[eval 41000] loss=0.5776 EM=0.2938 CharAcc=0.8811 blank=0.484 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でお父さんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 41100] loss=0.5894 avg100=0.4574 lr=0.000300 rate=2.28 steps/s kd_loss=1.1275 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 41200] loss=0.4570 avg100=0.4350 lr=0.000300 rate=2.37 steps/s kd_loss=1.4396 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 41300] loss=0.5604 avg100=0.4830 lr=0.000300 rate=2.40 steps/s kd_loss=0.7373 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 41400] loss=0.2479 avg100=0.4476 lr=0.000300 rate=2.36 steps/s kd_loss=1.0503 kd_hard=0.11 kd_conf=0.98 kd_alpha=0.100
+[step 41500] loss=0.5481 avg100=0.4332 lr=0.000300 rate=2.39 steps/s kd_loss=1.1010 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[eval 41500] loss=0.5815 EM=0.3000 CharAcc=0.8856 blank=0.485 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 41600] loss=0.2526 avg100=0.4305 lr=0.000300 rate=2.32 steps/s kd_loss=0.8493 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 41700] loss=0.5025 avg100=0.4634 lr=0.000300 rate=2.27 steps/s kd_loss=1.3035 kd_hard=0.13 kd_conf=0.97 kd_alpha=0.100
+[step 41800] loss=0.5540 avg100=0.4514 lr=0.000300 rate=2.35 steps/s kd_loss=0.7294 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 41900] loss=0.2601 avg100=0.4724 lr=0.000300 rate=2.37 steps/s kd_loss=0.7073 kd_hard=0.25 kd_conf=0.96 kd_alpha=0.100
+[step 42000] loss=0.3433 avg100=0.4502 lr=0.000300 rate=2.39 steps/s kd_loss=0.8929 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 42000] loss=0.5784 EM=0.2938 CharAcc=0.8869 blank=0.488 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 42100] loss=0.3527 avg100=0.4358 lr=0.000300 rate=2.31 steps/s kd_loss=1.6432 kd_hard=0.12 kd_conf=0.98 kd_alpha=0.100
+[step 42200] loss=0.4086 avg100=0.4527 lr=0.000300 rate=2.39 steps/s kd_loss=0.6966 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 42300] loss=0.2613 avg100=0.4587 lr=0.000300 rate=2.38 steps/s kd_loss=0.6922 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 42400] loss=0.5581 avg100=0.4484 lr=0.000300 rate=2.37 steps/s kd_loss=0.9492 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 42500] loss=0.8951 avg100=0.4684 lr=0.000300 rate=2.29 steps/s kd_loss=0.9114 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[eval 42500] loss=0.5811 EM=0.3125 CharAcc=0.8879 blank=0.494 pred_len=28.6/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 42600] loss=0.1942 avg100=0.4612 lr=0.000300 rate=2.33 steps/s kd_loss=1.3044 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 42700] loss=0.5015 avg100=0.4401 lr=0.000300 rate=2.43 steps/s kd_loss=0.7941 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 42800] loss=0.5788 avg100=0.4466 lr=0.000300 rate=2.39 steps/s kd_loss=0.6769 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 42900] loss=0.5601 avg100=0.4620 lr=0.000300 rate=2.43 steps/s kd_loss=0.9300 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 43000] loss=0.3540 avg100=0.4635 lr=0.000300 rate=2.38 steps/s kd_loss=1.3085 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 43000] loss=0.5815 EM=0.3063 CharAcc=0.8820 blank=0.492 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 43100] loss=0.4007 avg100=0.4277 lr=0.000300 rate=2.33 steps/s kd_loss=0.7770 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 43200] loss=0.3892 avg100=0.4392 lr=0.000300 rate=2.41 steps/s kd_loss=0.7870 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 43300] loss=0.3299 avg100=0.4606 lr=0.000300 rate=2.31 steps/s kd_loss=1.1102 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 43400] loss=0.3696 avg100=0.4557 lr=0.000300 rate=2.39 steps/s kd_loss=1.1847 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 43500] loss=0.3611 avg100=0.4212 lr=0.000300 rate=2.36 steps/s kd_loss=0.8038 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 43500] loss=0.5823 EM=0.2938 CharAcc=0.8822 blank=0.491 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 43600] loss=0.4747 avg100=0.4411 lr=0.000300 rate=2.35 steps/s kd_loss=0.4058 kd_hard=0.11 kd_conf=0.97 kd_alpha=0.100
+[step 43700] loss=0.2458 avg100=0.4321 lr=0.000300 rate=2.41 steps/s kd_loss=1.0374 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 43800] loss=0.7059 avg100=0.4433 lr=0.000300 rate=2.43 steps/s kd_loss=0.8447 kd_hard=0.21 kd_conf=0.96 kd_alpha=0.100
+[step 43900] loss=0.8915 avg100=0.4495 lr=0.000300 rate=2.43 steps/s kd_loss=1.1969 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[step 44000] loss=0.2532 avg100=0.4395 lr=0.000300 rate=2.40 steps/s kd_loss=0.7280 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[eval 44000] loss=0.5614 EM=0.3187 CharAcc=0.8904 blank=0.490 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 44100] loss=0.3921 avg100=0.4469 lr=0.000300 rate=2.21 steps/s kd_loss=0.9586 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 44200] loss=0.3281 avg100=0.4310 lr=0.000300 rate=2.40 steps/s kd_loss=0.6340 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[step 44300] loss=0.2808 avg100=0.4346 lr=0.000300 rate=2.39 steps/s kd_loss=0.7864 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 44400] loss=0.5799 avg100=0.4405 lr=0.000300 rate=2.41 steps/s kd_loss=0.7906 kd_hard=0.27 kd_conf=0.97 kd_alpha=0.100
+[step 44500] loss=0.1945 avg100=0.4350 lr=0.000300 rate=2.44 steps/s kd_loss=0.5122 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 44500] loss=0.5938 EM=0.2938 CharAcc=0.8870 blank=0.490 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 44600] loss=0.5344 avg100=0.4564 lr=0.000300 rate=2.33 steps/s kd_loss=0.8356 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.100
+[step 44700] loss=0.2330 avg100=0.4650 lr=0.000300 rate=2.40 steps/s kd_loss=1.1723 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[step 44800] loss=0.6066 avg100=0.4252 lr=0.000300 rate=2.42 steps/s kd_loss=0.3653 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 44900] loss=0.3691 avg100=0.4841 lr=0.000300 rate=2.30 steps/s kd_loss=0.7862 kd_hard=0.30 kd_conf=0.96 kd_alpha=0.100
+[step 45000] loss=0.3420 avg100=0.4338 lr=0.000300 rate=2.41 steps/s kd_loss=1.1575 kd_hard=0.26 kd_conf=0.96 kd_alpha=0.100
+[eval 45000] loss=0.5789 EM=0.3125 CharAcc=0.8835 blank=0.485 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 45100] loss=0.2493 avg100=0.4288 lr=0.000300 rate=2.34 steps/s kd_loss=0.8217 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 45200] loss=0.2344 avg100=0.4323 lr=0.000300 rate=2.42 steps/s kd_loss=0.9699 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 45300] loss=0.3313 avg100=0.4476 lr=0.000300 rate=2.42 steps/s kd_loss=0.7566 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 45400] loss=0.3207 avg100=0.4447 lr=0.000300 rate=2.41 steps/s kd_loss=1.4050 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 45500] loss=0.4678 avg100=0.4661 lr=0.000300 rate=2.37 steps/s kd_loss=0.8543 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 45500] loss=0.5805 EM=0.2562 CharAcc=0.8846 blank=0.484 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言五状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 45600] loss=0.3934 avg100=0.4524 lr=0.000300 rate=2.34 steps/s kd_loss=0.9433 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 45700] loss=0.6142 avg100=0.4215 lr=0.000300 rate=2.30 steps/s kd_loss=1.1525 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 45800] loss=0.4886 avg100=0.4241 lr=0.000300 rate=2.42 steps/s kd_loss=0.7696 kd_hard=0.24 kd_conf=0.96 kd_alpha=0.100
+[step 45900] loss=0.4748 avg100=0.4667 lr=0.000300 rate=2.39 steps/s kd_loss=0.6540 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 46000] loss=0.4194 avg100=0.4437 lr=0.000300 rate=2.42 steps/s kd_loss=0.7071 kd_hard=0.26 kd_conf=0.96 kd_alpha=0.100
+[eval 46000] loss=0.5839 EM=0.3125 CharAcc=0.8857 blank=0.489 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 46100] loss=0.3468 avg100=0.4571 lr=0.000300 rate=2.33 steps/s kd_loss=1.2764 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 46200] loss=0.3394 avg100=0.4230 lr=0.000300 rate=2.41 steps/s kd_loss=0.5849 kd_hard=0.28 kd_conf=0.96 kd_alpha=0.100
+[step 46300] loss=0.3128 avg100=0.4101 lr=0.000300 rate=2.42 steps/s kd_loss=0.4796 kd_hard=0.12 kd_conf=0.97 kd_alpha=0.100
+[step 46400] loss=0.3163 avg100=0.4444 lr=0.000300 rate=2.38 steps/s kd_loss=0.7275 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 46500] loss=0.4030 avg100=0.4564 lr=0.000300 rate=2.31 steps/s kd_loss=1.0076 kd_hard=0.22 kd_conf=0.96 kd_alpha=0.100
+[eval 46500] loss=0.5787 EM=0.3250 CharAcc=0.8844 blank=0.481 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習回・イベント
+[step 46600] loss=0.2149 avg100=0.4811 lr=0.000300 rate=2.29 steps/s kd_loss=1.1619 kd_hard=0.33 kd_conf=0.96 kd_alpha=0.100
+[step 46700] loss=0.6969 avg100=0.4582 lr=0.000300 rate=2.40 steps/s kd_loss=1.0908 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 46800] loss=0.3238 avg100=0.4674 lr=0.000300 rate=2.40 steps/s kd_loss=0.7972 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 46900] loss=0.3059 avg100=0.4203 lr=0.000300 rate=2.42 steps/s kd_loss=0.8712 kd_hard=0.23 kd_conf=0.97 kd_alpha=0.100
+[step 47000] loss=0.4672 avg100=0.4557 lr=0.000300 rate=2.41 steps/s kd_loss=1.0742 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[eval 47000] loss=0.5649 EM=0.3500 CharAcc=0.8929 blank=0.494 pred_len=28.8/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 47100] loss=0.2972 avg100=0.4380 lr=0.000300 rate=2.31 steps/s kd_loss=0.4653 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 47200] loss=0.2787 avg100=0.4072 lr=0.000300 rate=2.39 steps/s kd_loss=0.6247 kd_hard=0.26 kd_conf=0.97 kd_alpha=0.100
+[step 47300] loss=0.4244 avg100=0.4452 lr=0.000300 rate=2.31 steps/s kd_loss=0.9815 kd_hard=0.27 kd_conf=0.96 kd_alpha=0.100
+[step 47400] loss=0.3244 avg100=0.4564 lr=0.000300 rate=2.45 steps/s kd_loss=0.5518 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 47500] loss=0.4124 avg100=0.4528 lr=0.000300 rate=2.39 steps/s kd_loss=1.1633 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 47500] loss=0.5656 EM=0.3125 CharAcc=0.8864 blank=0.487 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 47600] loss=0.7353 avg100=0.4528 lr=0.000300 rate=2.34 steps/s kd_loss=0.6373 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 47700] loss=0.5263 avg100=0.4270 lr=0.000300 rate=2.41 steps/s kd_loss=0.7525 kd_hard=0.30 kd_conf=0.96 kd_alpha=0.100
+[step 47800] loss=0.3033 avg100=0.4289 lr=0.000300 rate=2.39 steps/s kd_loss=0.8587 kd_hard=0.17 kd_conf=0.97 kd_alpha=0.100
+[step 47900] loss=0.9783 avg100=0.5047 lr=0.000300 rate=2.39 steps/s kd_loss=0.4770 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 48000] loss=0.4616 avg100=0.6904 lr=0.000300 rate=2.30 steps/s kd_loss=1.0777 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[eval 48000] loss=0.5991 EM=0.3438 CharAcc=0.8844 blank=0.484 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 48100] loss=0.3740 avg100=0.4361 lr=0.000300 rate=2.22 steps/s kd_loss=0.6900 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 48200] loss=0.4264 avg100=0.4143 lr=0.000300 rate=2.39 steps/s kd_loss=0.8545 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 48300] loss=0.5078 avg100=0.3788 lr=0.000300 rate=2.41 steps/s kd_loss=0.9756 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 48400] loss=0.3508 avg100=0.3908 lr=0.000300 rate=2.42 steps/s kd_loss=0.7034 kd_hard=0.24 kd_conf=0.97 kd_alpha=0.100
+[step 48500] loss=0.4161 avg100=0.4042 lr=0.000300 rate=2.38 steps/s kd_loss=0.7225 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 48500] loss=0.5745 EM=0.3000 CharAcc=0.8864 blank=0.487 pred_len=28.7/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 48600] loss=0.3072 avg100=0.4025 lr=0.000300 rate=2.36 steps/s kd_loss=0.3800 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 48700] loss=0.3763 avg100=0.4025 lr=0.000300 rate=2.40 steps/s kd_loss=1.0215 kd_hard=0.12 kd_conf=0.97 kd_alpha=0.100
+[step 48800] loss=0.3880 avg100=0.4176 lr=0.000300 rate=2.41 steps/s kd_loss=0.8424 kd_hard=0.22 kd_conf=0.97 kd_alpha=0.100
+[step 48900] loss=0.4190 avg100=0.3887 lr=0.000300 rate=2.35 steps/s kd_loss=0.9453 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[step 49000] loss=0.6014 avg100=0.4121 lr=0.000300 rate=2.43 steps/s kd_loss=0.4383 kd_hard=0.20 kd_conf=0.97 kd_alpha=0.100
+[eval 49000] loss=0.5689 EM=0.2812 CharAcc=0.8900 blank=0.483 pred_len=29.1/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 49100] loss=0.3817 avg100=0.3868 lr=0.000300 rate=2.34 steps/s kd_loss=1.0170 kd_hard=0.21 kd_conf=0.97 kd_alpha=0.100
+[step 49200] loss=0.4760 avg100=0.4078 lr=0.000300 rate=2.40 steps/s kd_loss=1.1504 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[step 49300] loss=0.4163 avg100=0.4205 lr=0.000300 rate=2.42 steps/s kd_loss=1.4844 kd_hard=0.15 kd_conf=0.97 kd_alpha=0.100
+[step 49400] loss=0.5216 avg100=0.3897 lr=0.000300 rate=2.41 steps/s kd_loss=1.1216 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[step 49500] loss=0.5730 avg100=0.3925 lr=0.000300 rate=2.46 steps/s kd_loss=0.8263 kd_hard=0.19 kd_conf=0.97 kd_alpha=0.100
+[eval 49500] loss=0.5653 EM=0.3312 CharAcc=0.8913 blank=0.490 pred_len=29.0/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加え低以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語状況
+  sample3: ref=講習会・イベント pred=講習会・イベント
+[step 49600] loss=0.5255 avg100=0.4018 lr=0.000300 rate=2.36 steps/s kd_loss=0.8327 kd_hard=0.25 kd_conf=0.97 kd_alpha=0.100
+[step 49700] loss=0.3561 avg100=0.4331 lr=0.000300 rate=2.31 steps/s kd_loss=0.7751 kd_hard=0.16 kd_conf=0.97 kd_alpha=0.100
+[step 49800] loss=0.5009 avg100=0.4032 lr=0.000300 rate=2.39 steps/s kd_loss=0.9400 kd_hard=0.18 kd_conf=0.97 kd_alpha=0.100
+[step 49900] loss=0.4979 avg100=0.4218 lr=0.000300 rate=2.36 steps/s kd_loss=0.7568 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[step 50000] loss=0.2003 avg100=0.3804 lr=0.000300 rate=2.41 steps/s kd_loss=0.3235 kd_hard=0.14 kd_conf=0.97 kd_alpha=0.100
+[eval 50000] loss=0.5766 EM=0.3438 CharAcc=0.8850 blank=0.488 pred_len=28.9/30.6
+  sample1: ref=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような pred=このモード中は、画面右上でおじさんが踊り、ゴールドフィーバーに加えて以下のような
+  sample2: ref=転送 東ティモールの言語状況 pred=転送 東ティモールの言語上況
+  sample3: ref=講習会・イベント pred=講習会・イベント

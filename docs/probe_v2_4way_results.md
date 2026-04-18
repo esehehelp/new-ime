@@ -1,89 +1,101 @@
-# probe_v2 4-way 評価 (句単位, 50 項目)
+# probe_v2 4-way 評価
 
-句単位 (bunsetsu) の変換評価、パイロット版 50 項目 × 7 カテゴリ。
-corpus_v2 + phase3 統合計画の Step 4 にあたる。
+`datasets/eval/probe_v2.tsv` (**467 項目、7 category**) による句単位 (bunsetsu)
+の 4-way 比較。canonical 数字はこの 467 項目版。
 
 ## 比較の前提
 
-new-ime は **mozc 置き換えの neural IME** プロジェクトであり、用途は IME (短文・
-高頻度・個人差大)。zenz-v2.5 は **AzooKey 内部の LLM 変換器**であり用途が異なる
-(詳細: `docs/vision.md` の「プロジェクトの目的と位置付け」)。したがって主比較は
-**同サイズ帯 (zenz-small 91M) での句レベル性能**に絞る。
+new-ime は **mozc 置き換えの neural IME** プロジェクト、zenz-v2.5 は **AzooKey
+内部の LLM 変換器**で用途が異なる (詳細: `vision.md`)。**主比較は同サイズ帯
+(zenz-small 91M) での句レベル性能**。medium (310M) 比較は参考値。
 
-- zenz-medium (310M) との比較は参考値に留める。超えることを目標にしない。
-- 評価単位は文ではなく **句 (bunsetsu)**。IME の実使用に合わせた評価。
-- ゴール: 句レベル EM で zenz-small を追い抜き、かつ**レイテンシで明確に優位**であること。
+評価単位は **句 (bunsetsu)**。IME の実使用に合わせた評価で、文脈ゼロの変換。
 
-## 結果
+## 結果 (probe_v2, 467 項目)
 
-| モデル | EM1 | EM5 | edge | general | homophone | names | numeric | particle | tech | p50 ms |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| zenz-v2.5-small | **0.880** | **1.000** | 0.83 | 0.75 | 0.86 | 1.00 | 0.71 | 1.00 | 1.00 | 57 |
-| zenz-v3.1-small | 0.860 | 0.980 | 0.83 | **1.00** | 0.57 | 1.00 | 0.57 | 1.00 | 1.00 | 54 |
-| ctc_nat_90m step27500 + KenLM α=0.2 β=0.0 beam=5 | 0.820 | 0.820 | 0.83 | 1.00 | **0.86** | 1.00 | 0.00 | 1.00 | 1.00 | 19 |
-| ctc_nat_90m step27500 (greedy, no LM) | 0.800 | 0.800 | 0.83 | 0.88 | **0.86** | 1.00 | 0.14 | 1.00 | 0.88 | **12** |
-| ctc_nat_30m step50000 / final | 0.580 | 0.580 | 0.67 | 0.62 | 0.43 | 0.57 | 0.00 | 1.00 | 0.75 | 8 |
-| ctc_nat_30m best | 0.440 | 0.440 | 0.50 | 0.62 | 0.14 | 0.43 | 0.00 | 1.00 | 0.38 | **10** |
-| ar_v3_vast beam5 | 0.360 | 0.540 | 0.67 | 0.25 | 0.00 | 0.14 | 0.00 | 1.00 | 0.50 | 104 |
+| モデル | 設定 | EM1 | EM5 | p50 ms (WSL CPU) |
+|---|---|---:|---:|---:|
+| **zenz-v3.1-small** | beam=5 | **0.715** | 0.925 | 274 |
+| **zenz-v2.5-small** | beam=5 | **0.700** | 0.916 | 266 |
+| CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | **0.612** | 0.612 | 21 |
+| CTC-NAT 30M step50000 | α=0.4, β=0.3, beam=5 + KenLM | 0.499 | 0.499 | 26 |
+| CTC-NAT 90M step27500 | greedy (no LM) | 0.580 | 0.580 | 12 |
+| ar_v3_vast | beam=5 | 0.360 | 0.540 | 104 |
+
+カテゴリ分布: general 80, tech 26, names 60, homophone 73, edge 71, numeric 117,
+particle 40。
+
+## カテゴリ別 (CTC-NAT 90M best vs zenz-v3.1)
+
+| カテゴリ | 90M | v3.1 | 差 |
+|---|---:|---:|---:|
+| numeric | 0.02 | 0.39 | **-37pt** ← 支配的 |
+| edge | 0.68 | 0.78 | -10pt |
+| names | 0.90 | 0.92 | -2pt |
+| particle | 0.93 | 0.93 | 0 |
+| general | 0.96 | 0.95 | +1pt |
+| tech | 0.92 | 0.89 | **+3pt** (CTC 勝ち) |
+| homophone | 0.60 | 0.57 | **+3pt** (CTC 勝ち) |
+
+全体差 -10.3pt のうち **numeric だけで -10pt 相当** (117 項目 × 37pt 差 = 43
+items 相当のロス)。numeric を半分解決すれば 90M は zenz と並ぶ計算。
+
+## KenLM shallow fusion (sweep)
+
+CTC-NAT 90M step27500 に対し beam=5 + KenLM
+(`models/kenlm/kenlm_eval_v3_train_4gram_probing.bin`) で α × β grid sweep
+(α ∈ {0.2, 0.4, 0.6}, β ∈ {0.0, 0.3, 0.6})。
+
+| config | EM1 |
+|---|---:|
+| greedy (no LM) | 0.580 |
+| beam=5 (no LM) | 0.580 |
+| **α=0.2, β=0.6** | **0.612** |
+| α=0.4, β=0.6 | 0.600 |
+| α=0.6, β=0.6 | 0.600 |
+
+**KenLM gain +3.2pt**、α=0.2 β=0.6 が最適。50 項目 pilot では β=0 が最適と誤判定
+していたが、467 項目で β=0.6 が優位と確定。**モデル規模で最適 α/β が変わる**:
+90M は α=0.2、30M は α=0.4。
+
+## CTC-NAT 30M sweep
+
+同 sweep を CTC-NAT 30M step50000 にも実施。
+
+| config | EM1 |
+|---|---:|
+| greedy | 0.375 |
+| **α=0.4, β=0.3** | **0.499** |
+
+**KenLM gain +12.4pt** (90M の 4 倍)。小規模モデルの soft logit に LM が強く効く。
+30M + LM 0.499 でも 90M greedy 0.580 に届かず、**規模の壁は LM では埋まらない**。
 
 ## 観察
 
 ### new-ime model vs zenz
 
-- **CTC-NAT 90M は zenz から 8pt 差** (0.80 vs 0.86-0.88) かつ **レイテンシは 4-5 倍速**
-  (12ms vs 54-57ms)。句単位 IME 用途では実用競争圏内。
-- **CTC-NAT 30M は step 50000 / final で EM1 0.58**。best.pt (step 不明、学習中の
-  eval metric で拾われた早期 ckpt) は 0.44 だが、学習完走後の weights は 14pt 高い。
-  句レベル評価では best.pt の選別基準と適合していなかったことを示す。それでも 30M と
-  90M の差は 22pt あり、90M と zenz の差 (8pt) より大きい。**小規模はプロダクション
-  候補から除外**。
-- **AR は 0.36 で最下位**。AR は文脈付き文単位で学習しているため、文脈ゼロの句単位では
-  性能が崩壊。CTC-NAT 方向の妥当性を裏付ける一方、AR 再学習の優先度は下がる。
+- CTC-NAT 90M は zenz から 10-11pt 差、**レイテンシは 13x 速** (CPU 比較)
+- **zenz-v3.1 は v2.5 より +1.5pt** (ほぼ同等)
+- **CTC-NAT は homophone と tech で zenz に勝つ** — モデル構造の強みは既にある
+- **numeric 以外で総合すると 90M はほぼ zenz 並み**
 
-### カテゴリ別の弱点
+### 弱点
 
-| カテゴリ | 最弱 | 全体傾向 |
-|---|---|---|
-| **numeric** | ctc_nat (0.14) | zenz ですら 0.57-0.71 — **SI接頭語、数詞+助数詞は全モデル共通の弱点**。学習データに「さんじ→3時」「ひゃくみりの→100ミリの」が不足 |
-| **homophone** | ar (0.00) | ctc_nat 90M は zenz-v2.5 と同等 (0.86)、ただし zenz-v3.1 は 0.57 に劣化 — v3.1 の学習レシピで同音異義語 disambiguation が後退 |
-| **edge (かな保持)** | ctc_nat 30M (0.50) | 他は全て 0.67 以上。かな→かな保持は明示的な学習シグナルが必要 |
-| **names** | ar (0.14) | ctc_nat 90M と両 zenz は満点 (1.00) |
-| **particle** | — | 全モデル満点 (1.00)。完全に解決済 |
+- **numeric が壊滅** (0.02) — 学習データに数詞 + 助数詞 + SI 接頭語 が不足。
+  synth_numeric + synth_numeric_ext で対策中
+- **homophone 0.60** — 文脈条件付けが必要。CVAE / context window で改善余地
+- **CTC-NAT の EM5 == EM1** — prefix beam が同じ collapse に収束。Mask-CTC
+  refinement / 温度サンプリングで候補多様性の改善余地
 
-### top-k 挙動
+## Pilot (50 項目、歴史的記録)
 
-- zenz は beam 出力が多様 → EM5 ≥ EM1 + 0.12
-- CTC-NAT は greedy 実装のため EM5 == EM1 — **beam-5 単独では変化なし** (90M で 0.800 のまま)
-- AR beam-5 は EM5=0.54 vs EM1=0.36 と beam の恩恵が大きい (CTC より AR の方が beam 効果大)
-
-### KenLM shallow fusion (追加計測)
-
-CTC-NAT 90M step27500 に対し beam=5 + KenLM (`models/kenlm_eval_v3_train_4gram_probing.bin`)
-で α × β grid sweep を実施 (α ∈ {0.2, 0.4, 0.6}, β ∈ {0.0, 0.3, 0.6})。
-
-- **ベスト: α=0.2, β=0.0 → EM1 0.820** (greedy から +2pt)
-- **general: 0.88 → 1.00 (+12.5pt)**、**tech: 0.88 → 1.00 (+12.5pt)** — LM が正しく機能
-- **numeric: 0.14 → 0.00 (-14pt)** — KenLM (テキスト学習) は「3時」より「さんじ」のまま残す
-  方を好み、数値化を抑制。corpus 側で数詞カバレッジを増やすまで KenLM は数値で逆効果
-- α を 0.4-0.6 に上げても頭打ち。β (glyph bonus) はほぼ無影響
-- レイテンシ: 12ms (greedy) → 19ms (beam=5 + LM)。それでも zenz の 54-57ms に対し 3 倍速
-
-KenLM 有効化後も **zenz-v2.5-small (0.880) から 6pt 差**。LM だけでは詰め切れず、
-学習データ側の改善 (句単位 corpus + 数詞合成) が必要。
-
-## phase3_v2 設計への示唆
-
-1. **numeric カバレッジが最大のギャップ**。corpus_v2 の追加だけでは埋まらない。
-   合成データ (数詞 × 助数詞の全組み合わせ) が必須。
-2. **CTC-NAT 90M がプロダクション候補として確定**。zenz-small (91M) が 8pt 上にいるだけなので、
-   これ以上の規模拡大は diminishing return。
-3. **AR は再学習しない**。KD teacher として残すのみ。今後の学習リソースは CTC-NAT に集中。
-4. **次ステップ: corpus_v2 を bunsetsu 分割** (Step 3) で句単位学習データを作る。
-   特に names と tech は 90M で既に zenz と同等 → bunsetsu 訓練で更に詰められる。
+初期パイロット 50 項目では 90M EM1 0.800、zenz-small 0.880、差 8pt。467 項目へ
+拡張して noise band を下げたら差が 10-11pt に広がった。pilot はカテゴリ
+あたり 6-8 項目で ±15pt の信頼区間があり、config 間の +2pt 差は noise 内だった。
 
 ## 留意点
 
-- n=50 は小さい。training-mix の方針決定には probe_v2 を 500+ 項目に拡大してから
-  再評価すべき。カテゴリあたり 6-8 項目では ±15pt のノイズ帯。
-- CTC-NAT 90M の step 27500 は崩壊後の回復直後のチェックポイント。best.pt ではない
-  可能性あり。step 25000 や step 20000 も合わせて評価して最良点を確認する必要あり。
+- 467 項目でも 信頼区間は Wilson 95%CI で ±3-5pt。configs 間の 1-2pt 差は
+  有意とは言えない
+- domain n=6 の news は特に noise が大きい
+- CTC-NAT 90M は step27500 (崩壊後の回復直後)、step 20000-25000 も評価すべき

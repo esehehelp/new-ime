@@ -1,126 +1,87 @@
 ---
 status: current
-last_updated: 2026-04-18
+last_updated: 2026-04-19
 ---
 
-# ベンチマーク比較結果 (2026-04-18)
+# ベンチマーク比較 (living doc)
 
-## 追加: CTC-NAT Phase 3 90M + KenLM shallow fusion (2026-04-18 late)
+現状の最良結果を集約。probe_v2 (phrase-level)・cvae_probe (domain)・
+旧 sentence-level bench (参考) の 3 層。新しい測定が出たら更新。
 
-90M CTC-NAT (step 15000, resume from OOM-killed vast.ai run) + 4-gram
-KenLM trained on `datasets/eval_v3/train.jsonl` surface (4.58M 文、
-char-spaced)。`scripts/bench_ctc_nat_fusion.py` 経由 (WSL CPU, torch 2.11)。
+## phrase-level (probe_v2, 467 項目, 7 category)
 
-### α/β sweep, beam=8, 常時 LM (gate=0)
+| モデル | 設定 | EM1 | EM5 | p50 ms (WSL CPU) |
+|---|---|---:|---:|---:|
+| **zenz-v3.1-small** | beam=5 | **0.715** | 0.925 | 274 |
+| **zenz-v2.5-small** | beam=5 | **0.700** | 0.916 | 266 |
+| CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | **0.612** | 0.612 | 21 |
+| CTC-NAT 30M step50000 | α=0.4, β=0.3, beam=5 + KenLM | 0.499 | 0.499 | 26 |
+| CTC-NAT 90M step27500 | greedy (no LM) | 0.580 | 0.580 | 12 |
+| ar_v3_vast | beam=5 | 0.360 | 0.540 | 104 |
 
-CTC baseline = α=β=0。**α=0.80 β=1.0** が 3 bench 全勝。
+- **zenz-small との差**: 90M best で -9pt、speed 13x 有利 (CPU)
+- **KenLM gain**: 90M で +3.2pt、30M で +12.4pt
+- **CTC-NAT EM5==EM1**: beam が候補多様性を出せていない (Mask-CTC / 温度
+  サンプリング未実装)
 
-| bench | baseline EM | best EM | config | Δ | relative |
-|---|---|---|---|---|---|
-| manual_test (100) | 0.7000 | **0.8700** | α=0.80 β∈{0,0.5,1.0} | +17.0pt | +24% |
-| ajimee_jwtd (80) | 0.2250 | **0.4125** | α=0.50 β=0 / α=0.80 β=1.0 | +18.75pt | +83% |
-| eval_v3_dev (200) | 0.1150 | **0.2550** | α=0.80 β=1.0 | +14.0pt | +122% |
+詳細: `docs/probe_v2_4way_results.md`
 
-LM 学習コーパスは eval_v3/train → eval_v3/dev は held out だが同ドメイン。
+## domain-conditional (cvae_probe, 188 項目, 10 domain)
+
+CVAE **未実装** の baseline。47% の reading で domain 間正解分岐あり。
+
+| モデル | 設定 | EM1 |
+|---|---|---:|
+| CTC-NAT 90M step27500 | greedy | 0.585 |
+| CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | 0.574 |
+
+domain 別 (greedy):
+
+| domain | n | EM1 |
+|---|---:|---:|
+| formal | 22 | 0.77 |
+| medical | 11 | 0.73 |
+| general | 40 | 0.70 |
+| casual | 15 | 0.67 |
+| news | 6 | 0.67 |
+| literary | 19 | 0.53 |
+| tech | 21 | 0.52 |
+| business | 14 | 0.50 |
+| academic | 27 | 0.48 |
+| legal | 13 | 0.15 |
+
+理論上限 (z perfect) = 1.00。baseline → 上限で +42pt が**理論最大幅**。CVAE
+実装で実際に取れる gain の期待値は未知 (10-30pt が妥当レンジ、
+下は posterior collapse の 0pt)。
+
+詳細: `docs/cvae_probe_baseline.md`
+
+## 旧 sentence-level (参考値)
+
+2026-04-18 取得。CTC-NAT 90M step15000 + KenLM α=0.80 β=1.0 beam=8 (WSL CPU)。
+
+| bench | CTC baseline EM | best EM | Δ |
+|---|---:|---:|---:|
+| manual_test (100) | 0.700 | **0.870** | +17pt |
+| ajimee_jwtd (80) | 0.225 | **0.413** | +18.75pt |
+| eval_v3_dev (200) | 0.115 | **0.255** | +14pt |
+
+KenLM は eval_v3/train で学習。eval_v3/dev は hold-out 同ドメイン、
 manual/ajimee は LM 未露出ゆえ genuine gain。
 
-### 速度 (CPU)
+### zenz-v2.5-medium (参考)
 
-beam=8 + KenLM @ α=0.80 β=1.0:
+| model | manual_test EM | eval_v3_dev EM |
+|---|---:|---:|
+| zenz-v2.5-medium (310M) | 0.86 | 0.575 |
+| zenz-v2.5-small (91M) | 0.80 | 0.50 |
+| CTC-NAT 90M step15000 + KenLM | 0.87 | 0.26 |
 
-| bench | p50 | p95 | vs beam8 alone |
-|---|---|---|---|
-| manual (≤20字) | 27.9ms | 41.3ms | +1ms / +5ms |
-| ajimee (中文) | 45.4ms | 169.0ms | +8ms / +69ms |
-| eval_v3 (長文) | 86.7ms | 214.5ms | +22ms / +92ms |
+**注**: manual_test で zenz-medium を僅差で超えているが、probe_v2 (phrase-level)
+では逆転している。main 比較指標は probe_v2 に一本化する方針 (vision.md の
+位置付け参照)。
 
-### beam=4 版
+## 更新履歴
 
-精度 -1〜2.5pt で p95 最大 -62ms の短縮:
-
-| bench | beam=8 EM | beam=4 EM | beam=8 p95 | beam=4 p95 |
-|---|---|---|---|---|
-| manual | 0.87 | 0.86 | 41ms | 33ms |
-| ajimee | 0.4125 | 0.3875 | 169ms | 117ms |
-| eval_v3 | 0.2550 | 0.2300 | 214ms | 152ms |
-
-### low-confidence gate 試験 (gate=-N: conf<N でのみ LM 起動)
-
-90M CTC は high-confidence すぎて (mean top-1 logp > -1 が常時)、
-gate=-1〜-5 では LM が全く起動せず baseline に落ちる。閾値は
-0 近傍 (-0.1〜-0.5) で再 sweep が必要。gate 機構自体は二重
-forward 解消済みで正常動作 (manual p50 21ms = greedy 相当)。
-
-### 30M CTC-NAT (phase3_30m, local eval_v3/train) + KenLM
-
-30M は **`datasets/eval_v3/train.jsonl` で学習済** なので eval_v3/dev は
-in-distribution、manual/ajimee は外。beam=4 sweep:
-
-| bench | baseline EM | best EM | config | Δ vs baseline |
-|---|---|---|---|---|
-| manual_test | 0.5100 | **0.7500** | α=0.50 β∈{0,0.5} | +24pt |
-| ajimee_jwtd | 0.2000 | **0.4000** | α=0.50 β=0.5 | +20pt |
-| eval_v3_dev | 0.2250 | **0.3200** | α=0.30-0.50 β=1.0 | +9.5pt |
-
-30M vs 90M (両方 +KenLM、beam=4):
-
-| bench | 30M (28.6M) | 90M (95M) | 勝者 |
-|---|---|---|---|
-| manual | 0.7500 | 0.8700 | **90M +12pt** |
-| ajimee | 0.4000 | 0.4125 | 90M +1.25pt (ほぼ互角) |
-| eval_v3 | **0.3200** | 0.2550 | **30M +6.5pt** (data leakage 効果) |
-
-**Speed (CPU, p50)**:
-
-| bench | 30M beam4+LM | 90M beam4+LM | 倍率 |
-|---|---|---|---|
-| manual | 13ms | 27ms | 2.1x |
-| ajimee | 23ms | 42ms | 1.8x |
-| eval_v3 | 40ms | 87ms | 2.2x |
-
-30M は 90M の約半分の CPU レイテンシ。LM fusion は data-eff 観点で小モデル
-にも大幅な gain を与える (ajimee +20pt, manual +24pt)。
-
-### 暫定結論 (KenLM shallow fusion)
-
-1. **KenLM fusion は絶大** — 90M で ajimee +83% rel, eval_v3 +122% rel
-2. **最適点は α=0.50-0.80, β=0.5-1.0** (モデル規模で shift、30M は小さめ α)
-3. **CPU でも十分実用的** — manual 27ms / eval_v3 87ms p50
-4. **β は長文 (eval_v3) でより効く** — CTC の短め出力傾向を矯正
-5. **low-conf gate は閾値調整待ち** — 現実装は動作するが 0 近傍でないと効かず
-
-## 全9モデル × 3ベンチ
-
-| Model | Params | manual EM | ajimee EM | eval_v3 EM | 最遅p50 |
-|-------|--------|-----------|-----------|------------|---------|
-| zenz-v2.5-medium greedy | 310M | 0.900 | 0.787 | 0.412 | 1853ms |
-| zenz-v2.5-small greedy | 91M | 0.890 | 0.750 | 0.375 | 581ms |
-| zenz-v2.5-xsmall greedy | 26M | 0.880 | 0.588 | 0.312 | 242ms |
-| ar_v3_vast greedy | 32M | 0.800 | 0.450 | 0.412 | 191ms |
-| ar_v3_vast beam10 | 32M | 0.800 | 0.450 | 0.450 | 1082ms |
-| ar_v3_local greedy | 32M | 0.780 | 0.400 | 0.325 | 233ms |
-| ar_v3_local beam10 | 32M | 0.790 | 0.412 | 0.350 | 1095ms |
-| ar_v3_chunks greedy | 30M | 0.590 | 0.212 | 0.013 | 132ms |
-| ar_v3_chunks beam10 | 30M | 0.590 | 0.188 | 0.013 | 1086ms |
-
-## 同規模対決: ar_v3_vast (32M) vs zenz-xsmall (26M)
-
-| ベンチ | ar_v3_vast EM | zenz-xsmall EM | 勝者 |
-|--------|--------------|----------------|------|
-| manual_test | 0.800 | 0.880 | zenz +8pt |
-| ajimee_jwtd | 0.450 | 0.588 | zenz +14pt |
-| eval_v3_dev | **0.412** | 0.312 | **自前 +10pt** |
-
-## 重要な知見
-
-1. **自前分布 (eval_v3) では 310M zenz-medium と互角** (EM 0.412 = 同値)
-2. **汎化ベンチ (AJIMEE) では xsmall にも負ける** → データ多様性不足
-3. **zenz 系列のスケーリング**: manual はサチ (0.88-0.90), AJIMEE は明確にスケール
-4. **CTC-NAT で速度優位を取る戦略は有効**: zenz-xsmall 75-242ms に対し CTC-NAT 10-30ms を狙える
-5. **beam search は EM を改善しない** (greedy とほぼ同等)、ただし CharAcc は微改善
-
-## Phase 3 への示唆
-
-- 精度で zenz-xsmall を超えるには: データ多様性 + モデル規模拡大
-- 速度で差別化するには: CTC-NAT 並列生成
-- 200M CTC-NAT 1.58-bit なら: zenz-small (91M) に精度で並び、速度で 10倍��上高速
+- 2026-04-19: probe_v2 467 項目 4-way + CVAE probe baseline 追加、docs 整理
+- 2026-04-18: CTC-NAT 90M + KenLM sweep、zenz-v2.5 3 sizes 対比 初回取得
