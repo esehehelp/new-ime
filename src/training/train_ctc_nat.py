@@ -722,11 +722,25 @@ def train_local(args: argparse.Namespace) -> None:
 
             if run_kd:
                 with torch.no_grad():
-                    teacher_texts, teacher_conf = teacher.generate(
-                        contexts=contexts,
-                        readings=readings,
-                        max_new_tokens=kd_config.max_new_tokens,
-                    )
+                    kd_chunk = int(getattr(args, "max_kd_batch_size", 0))
+                    n_ctx = len(contexts)
+                    if kd_chunk <= 0 or kd_chunk >= n_ctx:
+                        teacher_texts, teacher_conf = teacher.generate(
+                            contexts=contexts,
+                            readings=readings,
+                            max_new_tokens=kd_config.max_new_tokens,
+                        )
+                    else:
+                        teacher_texts = []
+                        teacher_conf = []
+                        for s in range(0, n_ctx, kd_chunk):
+                            t_texts, t_conf = teacher.generate(
+                                contexts=contexts[s : s + kd_chunk],
+                                readings=readings[s : s + kd_chunk],
+                                max_new_tokens=kd_config.max_new_tokens,
+                            )
+                            teacher_texts.extend(t_texts)
+                            teacher_conf.extend(t_conf)
                 conf_tensor = torch.tensor(teacher_conf, device=device)
                 hard_mask = hard_example_mask(
                     conf_tensor,
@@ -1015,6 +1029,17 @@ def main() -> None:
         ),
     )
     kd_group.add_argument("--kd-max-new-tokens", type=int, default=96)
+    kd_group.add_argument(
+        "--max-kd-batch-size",
+        type=int,
+        default=0,
+        help=(
+            "If >0, split teacher.generate() into chunks of this many samples "
+            "and concatenate outputs. Peak VRAM of the teacher pass scales with "
+            "this chunk size instead of the full student batch; useful when KD "
+            "fires on a large student batch and AR teacher generate spikes VRAM."
+        ),
+    )
 
     args = parser.parse_args()
     if args.small_vocab_max_kanji > 0:
