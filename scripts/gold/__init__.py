@@ -1,0 +1,1 @@
+"""Gold-set generation entrypoints."""

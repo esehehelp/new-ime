@@ -1,0 +1,1 @@
+"""Latency benchmark entrypoints."""

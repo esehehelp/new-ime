@@ -1,88 +1,16 @@
-"""Latency benchmark for AR baseline checkpoints over the manual 100 cases.
-
-Usage:
-    uv run python -m scripts.bench_ar_speed --checkpoint checkpoints/ar_baseline/best.pt
-"""
+"""Compatibility wrapper for scripts.bench.bench_ar_speed."""
 
 from __future__ import annotations
 
-import argparse
-import statistics
 import sys
-import time
 from pathlib import Path
 
-import torch
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from scripts.manual_test import TEST_CASES, load_model, generate
-
-sys.stdout.reconfigure(encoding="utf-8")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--runs", type=int, default=2)
-    args = parser.parse_args()
-
-    device = torch.device(args.device) if args.device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    model, collator, max_pos, step = load_model(args.checkpoint, device)
-    n = sum(p.numel() for p in model.parameters())
-    print(f"checkpoint: {Path(args.checkpoint).name}")
-    print(f"step={step}  vocab={collator.vocab_size}  max_pos={max_pos}  device={device}")
-    print(f"params={n/1e6:.2f}M")
-
-    is_cuda = device.type == "cuda"
-
-    def run_one(ctx, reading):
-        ctx_ids = collator.encode_text(ctx[-40:]) if ctx else []
-        read_ids = collator.encode_text(reading)
-        prefix = ctx_ids + [collator.SEP] + read_ids + [collator.OUT]
-        return generate(model, collator, prefix, device, max_pos)
-
-    for i in range(args.warmup):
-        ctx, reading, _ = TEST_CASES[i % len(TEST_CASES)]
-        _ = run_one(ctx, reading)
-    if is_cuda:
-        torch.cuda.synchronize()
-
-    per_case_all: list[float] = []
-    pass_totals: list[float] = []
-    for r in range(args.runs):
-        if is_cuda:
-            torch.cuda.synchronize()
-        t0_pass = time.perf_counter()
-        per_case: list[float] = []
-        for ctx, reading, _ in TEST_CASES:
-            if is_cuda:
-                torch.cuda.synchronize()
-            t0 = time.perf_counter()
-            _ = run_one(ctx, reading)
-            if is_cuda:
-                torch.cuda.synchronize()
-            per_case.append((time.perf_counter() - t0) * 1000.0)
-        pass_totals.append(time.perf_counter() - t0_pass)
-        per_case_all.extend(per_case)
-        print(
-            f"  run {r+1}: total={pass_totals[-1]*1000:.1f}ms  "
-            f"mean={statistics.mean(per_case):.2f}ms  "
-            f"median={statistics.median(per_case):.2f}ms  "
-            f"p95={sorted(per_case)[int(0.95*len(per_case))-1]:.2f}ms  "
-            f"max={max(per_case):.2f}ms"
-        )
-
-    n = len(per_case_all)
-    sorted_lat = sorted(per_case_all)
-    print()
-    print(f"samples      : {n}  ({args.runs} runs x {len(TEST_CASES)} cases)")
-    print(f"mean         : {statistics.mean(per_case_all):.2f} ms")
-    print(f"median       : {statistics.median(per_case_all):.2f} ms")
-    print(f"p90 / p95/p99: {sorted_lat[int(0.9*n)-1]:.2f} / {sorted_lat[int(0.95*n)-1]:.2f} / {sorted_lat[int(0.99*n)-1]:.2f} ms")
-    print(f"min / max    : {min(per_case_all):.2f} / {max(per_case_all):.2f} ms")
-    print(f"throughput   : {(args.runs * len(TEST_CASES)) / sum(pass_totals):.1f} req/s")
+from scripts.bench.bench_ar_speed import *  # noqa: F401,F403
+from scripts.bench.bench_ar_speed import main
 
 
 if __name__ == "__main__":

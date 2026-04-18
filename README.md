@@ -122,9 +122,9 @@ new-ime/
 │   ├── generate_chunks.py / mecab_to_tsv.py
 │   ├── build_phase3_train.py  # プール混合 + reservoir で train.jsonl 生成
 │   ├── run_all_evals.py / eval_ar_checkpoint.py / eval_gold.py
-│   ├── manual_test.py / manual_test_beam.py / manual_test_ctc_nat.py
-│   ├── gen_gold_extra{,2,3}.py / gen_gold_final.py  # ゴールド拡張
-│   ├── bench_ar_speed.py / bench_ctc_nat_speed.py   # レイテンシ計測
+│   ├── manual/                #   manual_test*.py (旧パス wrapper 互換あり)
+│   ├── bench/                 #   bench_*_speed.py (旧パス wrapper 互換あり)
+│   ├── gold/                  #   gen_gold_*.py (旧パス wrapper 互換あり)
 │   ├── print_comparison.py
 │   └── vast_train.sh          #   Vast.ai 学習スクリプト
 ├── tools/                     # Rust ツール (WSL ビルド、rustc 1.85)
