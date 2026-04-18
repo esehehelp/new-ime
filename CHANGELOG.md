@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-04-18 (later-3): Phase 3 student train.jsonl 生成 (200M rows)
+
+### 実データ build 完了
+
+- `datasets/phase3/train.jsonl`: 200,000,000 rows, **37.5 GB**
+- 混合比 (short-heavy spec、CTC-NAT 生徒向け)
+  | pool | % | rows | oversample |
+  |---|---:|---:|---:|
+  | chunks (surface ≥ 8 chars) | 50% | 100M | 1.3x |
+  | super-short (surface < 8 chars) | 10% | 20M | 0.8x |
+  | zenz_llmjp | 15% | 30M | 0.27x |
+  | wiki + aozora | 10% | 20M | 0.96x |
+  | fineweb2_ja | 10% | 20M | 0.17x |
+  | hplt3_ja | 5% | 10M | 0.48x |
+- `--super-cutoff 8` は **四字熟語が super-short に含まれる** ことを意図 (surface ≤ 7 chars)
+- 汚染フィルタ: chunks + 旧 wiki/aozora に対し `eval_v3/test.jsonl + dev.jsonl` 6-gram で実行
+  (新 web pools は上流で処理済み)
+- weighted-least-served によるストリーム交互書き込み → DataLoader shuffle で混合完成
+
+### Dataset の大規模化対応
+
+- `KanaKanjiDataset` が 37.5GB train.jsonl を全量 RAM 化しようとする問題を回避: `max_samples`
+  指定時に **Algorithm R (Knuth reservoir sampling)** で 1 回のストリームで抽出、RAM は
+  `max_samples` 行分のみ。既存 eval JSONL 小サイズはそのまま全読み (後方互換)。
+- `tests/test_dataset_reservoir.py` 6 件追加、全 suite 128 pass
+
+### 教師モデル向け (予定)
+
+- 200M パラメータ AR 教師用に 400M-row train.jsonl を別途生成予定
+- `--total 400000000` + 別 `--ratio-*` で同 script 流用可能
+
 ## 2026-04-18 (later-2): データソース拡充 (Step C) scaffolding
 
 ### 追加ソース (downloader + processor)
