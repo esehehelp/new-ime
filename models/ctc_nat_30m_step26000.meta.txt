@@ -1,0 +1,5 @@
+preset=phase3_30m
+vocab_size=4801
+blank_id=4
+step=26000
+max_seq_len=128

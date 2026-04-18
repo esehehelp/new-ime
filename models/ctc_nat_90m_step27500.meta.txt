@@ -1,0 +1,5 @@
+preset=phase3_90m
+vocab_size=4801
+blank_id=4
+step=27500
+max_seq_len=128

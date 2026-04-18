@@ -71,3 +71,8 @@ models/*.bin
 tools/onnxruntime-win-x64-*/
 server/third_party/kenlm/
 build/
+
+# Generated mozc/mozc-ut dict artifact (regenerable via scripts/import_mozc_dict.py)
+models/fixed_dict_mozc.tsv
+models/fixed_dict_mozc_ut*.tsv
+tools/mozc_import/

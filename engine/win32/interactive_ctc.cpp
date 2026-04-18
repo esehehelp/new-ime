@@ -291,17 +291,40 @@ struct Args {
     bool help = false;
 };
 
-// Simple longest-prefix-match kana dictionary. Loaded from a TSV of
-//   kana<TAB>surface
-// lines (# comments skipped). Used BEFORE the CTC pass to cover basic
-// vocab gaps — mostly SI prefixes and katakana loanwords the training
-// corpus is thin on.
+// Longest-prefix kana dictionary, multi-surface. A single reading can map
+// to any number of surfaces (homophones). Loaded from a TSV where every
+// line is ``kana<TAB>surface`` — to register multiple homophones, just
+// repeat the kana on separate lines. That format is what mozc's open
+// dictionary already produces, so an import script can dump it directly.
 struct FixedDict {
-    std::vector<std::pair<std::string, std::string>> entries;
+    // All surfaces for one reading, ordered by whatever input order the
+    // TSV had (first entry is treated as the fallback primary).
+    struct Entry {
+        std::string kana;
+        std::vector<std::string> surfaces;
+    };
 
+    // Sorted by descending kana size for longest-prefix matching.
+    std::vector<Entry> entries;
+
+    size_t total_surfaces() const {
+        size_t n = 0;
+        for (const auto& e : entries) n += e.surfaces.size();
+        return n;
+    }
+
+    // Cumulative: every load() call merges into the existing entries.
+    // Earlier-loaded paths (user dict) keep their surface ordering, so
+    // when homophones from a later file overlap they're appended after
+    // the existing ones. The longest-prefix sort is re-done at the end.
     bool load(const std::string& path) {
         std::ifstream f(path);
         if (!f) return false;
+
+        // Bucket existing entries for O(1) kana->index lookup during merge.
+        std::unordered_map<std::string, size_t> index_of;
+        for (size_t i = 0; i < entries.size(); ++i) index_of[entries[i].kana] = i;
+
         std::string line;
         while (std::getline(f, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -311,26 +334,38 @@ struct FixedDict {
             std::string kana = line.substr(0, tab);
             std::string surface = line.substr(tab + 1);
             if (kana.empty() || surface.empty()) continue;
-            entries.emplace_back(std::move(kana), std::move(surface));
+
+            auto it = index_of.find(kana);
+            if (it == index_of.end()) {
+                Entry e;
+                e.kana = kana;
+                e.surfaces.push_back(surface);
+                index_of.emplace(kana, entries.size());
+                entries.push_back(std::move(e));
+            } else {
+                auto& existing = entries[it->second].surfaces;
+                bool dup = false;
+                for (const auto& s : existing) if (s == surface) { dup = true; break; }
+                if (!dup) existing.push_back(surface);
+            }
         }
-        // Longest first so longest-prefix-match is O(entries).
         std::sort(entries.begin(), entries.end(),
-                  [](const auto& a, const auto& b) {
-                      return a.first.size() > b.first.size();
+                  [](const Entry& a, const Entry& b) {
+                      return a.kana.size() > b.kana.size();
                   });
         return true;
     }
 
-    // Returns (surface, bytes_consumed) if a dict entry matches as a
-    // prefix of `kana` starting at offset `at`. 0 consumed means no match.
-    std::pair<std::string, size_t> match_prefix(const std::string& kana, size_t at) const {
-        for (const auto& [k, v] : entries) {
-            if (at + k.size() <= kana.size()
-                && kana.compare(at, k.size(), k) == 0) {
-                return {v, k.size()};
+    // Returns (pointer-to-entry, bytes_consumed) if a dict key matches as
+    // a prefix of `kana` starting at `at`. Null pointer + 0 = no match.
+    std::pair<const Entry*, size_t> match_prefix(const std::string& kana, size_t at) const {
+        for (const auto& e : entries) {
+            if (at + e.kana.size() <= kana.size()
+                && kana.compare(at, e.kana.size(), e.kana) == 0) {
+                return {&e, e.kana.size()};
             }
         }
-        return {std::string{}, 0};
+        return {nullptr, 0};
     }
 };
 
@@ -449,12 +484,27 @@ int main(int argc, char** argv) {
 
     FixedDict dict;
     if (!args.dict_path.empty()) {
-        if (dict.load(args.dict_path)) {
-            std::cout << "dict: " << args.dict_path
-                      << " (" << dict.entries.size() << " entries)\n";
-        } else {
-            std::cerr << "dict load failed: " << args.dict_path << "\n";
+        // Accept a comma-separated list. Earlier paths win on ordering
+        // when homophones overlap (user dict before mozc before mozc-ut),
+        // which determines the tie-break if LM scores are equal.
+        std::vector<std::string> paths;
+        {
+            std::string cur;
+            for (char c : args.dict_path) {
+                if (c == ',') { if (!cur.empty()) paths.push_back(std::move(cur)); cur.clear(); }
+                else cur += c;
+            }
+            if (!cur.empty()) paths.push_back(std::move(cur));
         }
+        for (const auto& p : paths) {
+            if (!dict.load(p)) {
+                std::cerr << "dict load failed: " << p << "\n";
+            } else {
+                std::cout << "dict: " << p << "\n";
+            }
+        }
+        std::cout << "  total readings: " << dict.entries.size()
+                  << " / surfaces: " << dict.total_surfaces() << "\n";
     }
 
     constexpr int TOP_K = 3;
@@ -473,6 +523,31 @@ int main(int argc, char** argv) {
     // One kana run -> list of Chunks. Each chunk is either a dict hit
     // (single-alt) or a CTC decode (TOP_K alts). The caller composes final
     // top-N strings by cross-product over chunks.
+    // Contextual LM score = natlog P(left_ctx + surface) - natlog P(left_ctx).
+    // The subtraction leaves only the marginal cost of the new surface
+    // under KenLM, which is what we want to compare across candidates at
+    // the same chunk position. Cached per (ctx, surface).
+    auto ctx_lm_score = [&](const std::string& left_ctx, const std::string& surface) -> float {
+        if (!lm_scorer) return 0.0f;
+        float a = lm_scorer->score(std::string_view(left_ctx + surface));
+        float b = lm_scorer->score(std::string_view(left_ctx));
+        return a - b;
+    };
+
+    // Count UTF-8 codepoints for the length bonus — matches what
+    // CTCDecoder does internally.
+    auto glyph_count = [](const std::string& s) -> int {
+        int n = 0;
+        for (unsigned char c : s) if ((c & 0xC0) != 0x80) ++n;
+        return n;
+    };
+
+    // A CTC chunk now unions CTC beam top-K with dict homophones. The
+    // dict alts get CTC score 0 (CTC neither prefers nor rejects them —
+    // it simply didn't enumerate them). Ranking is a fused score:
+    //     CTC_score + lm_alpha_ctx * logp_lm(ctx + alt) + lm_beta * glyphs
+    // For the non-CTC (dict) alts, CTC_score=0 means ranking is pure LM.
+    // lm_alpha_ctx is read from the existing --alpha so tuning propagates.
     auto chunk_kana_run = [&](const std::string& kana_in,
                               const std::string& left_ctx_in,
                               double& ms_onnx, double& ms_decode) -> std::vector<Chunk> {
@@ -480,25 +555,44 @@ int main(int argc, char** argv) {
         std::string left_ctx = left_ctx_in;
         std::vector<Chunk> chunks;
         while (!kana.empty()) {
-            auto [hit, n] = dict.entries.empty()
-                ? std::make_pair(std::string{}, size_t{0})
-                : dict.match_prefix(kana, 0);
-            if (n > 0) {
+            // Dict matches at the current position drive *two* things: a
+            // pinned dict chunk (whole key) if no CTC-worthy tail follows,
+            // OR a set of dict alternatives added to the CTC chunk that
+            // covers the same kana span.
+            const FixedDict::Entry* dict_hit = nullptr;
+            size_t dict_hit_len = 0;
+            if (!dict.entries.empty()) {
+                auto [e, n] = dict.match_prefix(kana, 0);
+                if (n > 0) { dict_hit = e; dict_hit_len = n; }
+            }
+
+            if (dict_hit && dict_hit->surfaces.size() >= 1) {
                 Chunk c;
-                c.alt_texts.push_back(hit);
-                c.alt_scores.push_back(0.0f);
+                // Every homophone becomes an alt. LM scored in context.
+                float best_score = -1e30f;
+                for (const auto& surf : dict_hit->surfaces) {
+                    float s = args.alpha * ctx_lm_score(left_ctx, surf)
+                            + args.beta  * glyph_count(surf);
+                    c.alt_texts.push_back(surf);
+                    c.alt_scores.push_back(s);
+                    if (s > best_score) best_score = s;
+                }
+                // Pick best homophone for left context advancement.
+                size_t best_idx = 0;
+                for (size_t i = 0; i < c.alt_scores.size(); ++i)
+                    if (c.alt_scores[i] > c.alt_scores[best_idx]) best_idx = i;
+                left_ctx += c.alt_texts[best_idx];
                 chunks.push_back(std::move(c));
-                left_ctx += hit;
-                kana.erase(0, n);
+                kana.erase(0, dict_hit_len);
                 continue;
             }
+
             auto [cp, cp_n] = utf8_decode_one(kana, 0);
             if (cp_n == 0) break;
-
             size_t take = cp_n;
             while (take < kana.size()) {
-                auto [hit2, n2] = dict.entries.empty()
-                    ? std::make_pair(std::string{}, size_t{0})
+                auto [e2, n2] = dict.entries.empty()
+                    ? std::make_pair(static_cast<const FixedDict::Entry*>(nullptr), size_t{0})
                     : dict.match_prefix(kana, take);
                 if (n2 > 0) break;
                 auto [cp2, cp2_n] = utf8_decode_one(kana, take);

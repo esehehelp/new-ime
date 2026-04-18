@@ -2,14 +2,14 @@
 setlocal enabledelayedexpansion
 REM Build interactive_ctc.exe: CTC-NAT ONNX + C++ beam search + optional KenLM.
 REM
-REM Outputs into build/win32_ctc. Requires:
+REM Outputs into build/win32. Requires:
 REM   - onnxruntime unpacked under tools/onnxruntime-win-x64-* (same as build.bat)
 REM   - server/third_party/kenlm cloned
 REM Builds KenLM via CMake the first time, then links kenlm.lib + kenlm_util.lib.
 
 set SCRIPT_DIR=%~dp0
 for %%I in ("%SCRIPT_DIR%..\..") do set REPO_ROOT=%%~fI
-set OUT_DIR=%REPO_ROOT%\build\win32_ctc
+set OUT_DIR=%REPO_ROOT%\build\win32
 set ORT_DIR=%REPO_ROOT%\tools\onnxruntime-win-x64-1.22.0
 set KENLM_SRC=%REPO_ROOT%\server\third_party\kenlm
 set KENLM_BUILD=%REPO_ROOT%\build\kenlm_win

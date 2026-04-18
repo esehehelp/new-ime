@@ -6,7 +6,7 @@ set SCRIPT_DIR=%~dp0
 for %%I in ("%SCRIPT_DIR%..\..") do set REPO_ROOT=%%~fI
 set OUT_DIR=%REPO_ROOT%\build\win32
 
-set ORT_DIR=C:\Users\admin\Dev\new-ime\tools\onnxruntime-win-x64-1.22.0
+set ORT_DIR=%REPO_ROOT%\tools\onnxruntime-win-x64-1.22.0
 
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 
