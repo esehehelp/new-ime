@@ -361,29 +361,46 @@ def validate_resume_compatibility(
     # KD metadata: resume must use matching teacher + hyperparameters, otherwise
     # the optimizer/scheduler state belongs to a different objective.
     kd_prev = checkpoint.get("kd") or {}
-    kd_fields = [
+    # Strict: changing these across resume changes the loss definition or
+    # picks a different teacher, so the previous gradients no longer apply.
+    kd_strict = [
         ("teacher_path", "kd_teacher_path", ""),
         ("teacher_vocab", "kd_teacher_vocab", ""),
+        ("gate_mode", "kd_gate_mode", "low_conf"),
+    ]
+    # Tunable: schedule/budget knobs that can legitimately change mid-training
+    # (e.g. dialing KD down for OOM safety). Warn but do not block.
+    kd_tunable = [
         ("alpha", "kd_alpha", 0.0),
         ("alpha_final", "kd_alpha_final", None),
         ("alpha_decay_start", "kd_alpha_decay_start", 0),
         ("alpha_decay_steps", "kd_alpha_decay_steps", 0),
         ("hard_threshold", "kd_hard_threshold", 0.0),
-        ("gate_mode", "kd_gate_mode", "low_conf"),
         ("start_step", "kd_start_step", 0),
         ("warmup_steps", "kd_warmup_steps", 0),
         ("every", "kd_every", 1),
         ("max_new_tokens", "kd_max_new_tokens", 0),
     ]
-    for ckpt_key, arg_key, default in kd_fields:
+
+    def _diff(ckpt_val, cur_val, default) -> bool:
+        if type(default) is float:
+            return abs(float(ckpt_val) - float(cur_val)) > 1e-9
+        return ckpt_val != cur_val
+
+    for ckpt_key, arg_key, default in kd_strict:
         ckpt_val = kd_prev.get(ckpt_key, default) if kd_prev else default
         cur_val = getattr(args, arg_key, default)
-        if type(default) is float:
-            if abs(float(ckpt_val) - float(cur_val)) > 1e-9:
-                mismatches.append(f"kd.{ckpt_key}: ckpt={ckpt_val} current={cur_val}")
-        else:
-            if ckpt_val != cur_val:
-                mismatches.append(f"kd.{ckpt_key}: ckpt={ckpt_val} current={cur_val}")
+        if _diff(ckpt_val, cur_val, default):
+            mismatches.append(f"kd.{ckpt_key}: ckpt={ckpt_val} current={cur_val}")
+
+    for ckpt_key, arg_key, default in kd_tunable:
+        ckpt_val = kd_prev.get(ckpt_key, default) if kd_prev else default
+        cur_val = getattr(args, arg_key, default)
+        if _diff(ckpt_val, cur_val, default):
+            print(
+                f"[resume] kd.{ckpt_key} changed: ckpt={ckpt_val} -> current={cur_val}",
+                flush=True,
+            )
 
     if mismatches:
         details = "; ".join(mismatches)
