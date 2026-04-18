@@ -17,7 +17,7 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from src.eval.metrics import EvalResult
+from models.src.eval.metrics import EvalResult
 
 
 class ConversionBackend(ABC):

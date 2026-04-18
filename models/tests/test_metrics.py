@@ -1,6 +1,6 @@
 """Tests for evaluation metrics."""
 
-from src.eval.metrics import (
+from models.src.eval.metrics import (
     EvalResult,
     character_accuracy,
     edit_distance,

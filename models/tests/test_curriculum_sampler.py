@@ -1,4 +1,4 @@
-from src.data.curriculum_sampler import (
+from models.src.data.curriculum_sampler import (
     CurriculumSampler,
     CurriculumStage,
     build_phase3_curriculum,

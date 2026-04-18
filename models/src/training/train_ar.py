@@ -30,8 +30,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.data.dataset import ARCollator, KanaKanjiDataset
-from src.eval.metrics import EvalResult
+from models.src.data.dataset import ARCollator, KanaKanjiDataset
+from models.src.eval.metrics import EvalResult
 
 
 class SimpleGPT2(nn.Module):

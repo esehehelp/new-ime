@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.data.dataset import KanaKanjiDataset
+from models.src.data.dataset import KanaKanjiDataset
 
 
 def _write_jsonl(path: Path, n: int) -> None:

@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from src.data.tokenizer import (
+from models.src.data.tokenizer import (
     BLANK_ID,
     CLS_ID,
     INVALID_BYTE_TOKEN,

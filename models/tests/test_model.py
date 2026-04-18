@@ -2,10 +2,10 @@
 
 import torch
 
-from src.model.ctc_nat import CTCNAT, CTCHead, GLATSampler, MaskCTCRefiner
-from src.model.cvae import CVAEConditioner
-from src.model.decoder import NATDecoder, NATDecoderLayer
-from src.model.encoder import MockEncoder, SmallEncoder
+from models.src.model.ctc_nat import CTCNAT, CTCHead, GLATSampler, MaskCTCRefiner
+from models.src.model.cvae import CVAEConditioner
+from models.src.model.decoder import NATDecoder, NATDecoderLayer
+from models.src.model.encoder import MockEncoder, SmallEncoder
 
 BATCH = 2
 SRC_LEN = 16

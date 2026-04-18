@@ -8,9 +8,9 @@ import torch
 import torch.nn.functional as F
 import pytest
 
-from src.data.dataset import ARCollator
-from src.data.tokenizer import BLANK_ID, SharedCharTokenizer
-from src.training.kd import (
+from models.src.data.dataset import ARCollator
+from models.src.data.tokenizer import BLANK_ID, SharedCharTokenizer
+from models.src.training.kd import (
     ARTeacher,
     KDConfig,
     TeacherConfig,
@@ -18,7 +18,7 @@ from src.training.kd import (
     encode_texts_for_student,
     hard_example_mask,
 )
-from src.training.train_ar import SimpleGPT2
+from models.src.training.train_ar import SimpleGPT2
 
 
 VOCAB_SIZE = 20

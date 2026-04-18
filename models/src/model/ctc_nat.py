@@ -8,9 +8,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.model.cvae import CVAEConditioner
-from src.model.decoder import NATDecoder
-from src.model.encoder import BertEncoder, MockEncoder, SmallEncoder
+from models.src.model.cvae import CVAEConditioner
+from models.src.model.decoder import NATDecoder
+from models.src.model.encoder import BertEncoder, MockEncoder, SmallEncoder
 
 
 @dataclass(frozen=True)

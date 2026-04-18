@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.data.mecab_pipeline import (
+from models.src.data.mecab_pipeline import (
     MAX_SENTENCE_LEN,
     MIN_SENTENCE_LEN,
     attach_context,
@@ -67,7 +67,7 @@ def test_attach_context_threads_previous_surface():
 
 def test_reading_from_mecab_requires_worker_init():
     """reading_from_mecab without worker_init must raise, not silently no-op."""
-    import src.data.mecab_pipeline as mp
+    import models.src.data.mecab_pipeline as mp
 
     original = mp._tagger
     mp._tagger = None

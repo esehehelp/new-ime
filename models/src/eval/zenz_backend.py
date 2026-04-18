@@ -12,7 +12,7 @@ import jaconv
 import torch
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-from src.eval.run_eval import ConversionBackend
+from models.src.eval.run_eval import ConversionBackend
 
 
 class ZenzV2Backend(ConversionBackend):

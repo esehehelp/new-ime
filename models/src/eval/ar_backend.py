@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import torch
 
-from src.data.dataset import ARCollator
-from src.eval.fast_gen import FastARGenerator, fast_beam, fast_greedy
-from src.eval.run_eval import ConversionBackend
-from src.training.train_ar import SimpleGPT2
+from models.src.data.dataset import ARCollator
+from models.src.eval.fast_gen import FastARGenerator, fast_beam, fast_greedy
+from models.src.eval.run_eval import ConversionBackend
+from models.src.training.train_ar import SimpleGPT2
 
 
 class ARCheckpointBackend(ConversionBackend):

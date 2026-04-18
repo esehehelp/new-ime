@@ -32,9 +32,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.data.dataset import ARCollator
-from src.data.tokenizer import BLANK_ID, PAD_ID, SharedCharTokenizer
-from src.training.train_ar import SimpleGPT2
+from models.src.data.dataset import ARCollator
+from models.src.data.tokenizer import BLANK_ID, PAD_ID, SharedCharTokenizer
+from models.src.training.train_ar import SimpleGPT2
 
 
 @dataclass
@@ -342,6 +342,178 @@ def hard_example_mask(
     if mode == "high_conf":
         return confidences >= threshold
     return confidences < threshold
+
+
+@dataclass
+class CTCTeacherConfig:
+    """Hyperparameters needed to reconstruct a CTC-NAT teacher.
+
+    Unlike AR teacher:
+      - No vocab_path; teacher tokenizer is the sidecar JSON of the ckpt.
+      - No max_new_tokens; CTC teacher is non-autoregressive (one forward pass).
+      - Same tokenizer as student is **required** (enforced at load time).
+    """
+    checkpoint_path: str
+    fp16: bool = True
+
+
+class CTCTeacher(nn.Module):
+    """Frozen CTC-NAT teacher for direct-logit KD.
+
+    - Same tokenizer as student (enforced).
+    - Single forward pass (no autoregressive loop) → fast.
+    - Returns per-position logits + per-sample mean confidence.
+    - KD loss is soft-KL on output softmax, applied per time step.
+
+    The student and teacher consume the same input_ids / attention_mask so
+    the caller passes them in directly; no re-tokenization needed.
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        tokenizer: SharedCharTokenizer,
+        config: CTCTeacherConfig,
+        device: torch.device,
+    ):
+        super().__init__()
+        self.model = model
+        self.tokenizer = tokenizer
+        self.config = config
+        self.device = device
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.model.eval()
+        self.dtype = torch.float16 if config.fp16 and device.type == "cuda" else torch.float32
+        if self.dtype == torch.float16:
+            self.model = self.model.half()
+        self.model = self.model.to(device)
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        config: CTCTeacherConfig,
+        device: torch.device,
+        student_tokenizer: SharedCharTokenizer,
+    ) -> "CTCTeacher":
+        from models.src.model.ctc_nat import CTCNAT, PRESETS
+        ckpt_path = Path(config.checkpoint_path)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"CTC teacher checkpoint not found: {ckpt_path}")
+
+        tok_path = Path(str(ckpt_path).replace(".pt", "_tokenizer.json"))
+        if not tok_path.exists():
+            raise FileNotFoundError(
+                f"CTC teacher tokenizer sidecar not found: {tok_path}"
+            )
+        teacher_tokenizer = SharedCharTokenizer.load(str(tok_path))
+        if teacher_tokenizer.vocab_size != student_tokenizer.vocab_size:
+            raise ValueError(
+                f"CTC teacher vocab size {teacher_tokenizer.vocab_size} does not "
+                f"match student {student_tokenizer.vocab_size}. Direct-logit KD "
+                f"requires identical tokenizers."
+            )
+        # Spot-check: the first, last, and a middle id should map back to the
+        # same character in both tokenizers. Deeper verification is costly but
+        # vocab-size match + id 0/N check catches most mismatches.
+        for probe_id in (0, teacher_tokenizer.vocab_size // 2,
+                         teacher_tokenizer.vocab_size - 1):
+            s_char = student_tokenizer.id_to_token.get(probe_id, "")
+            t_char = teacher_tokenizer.id_to_token.get(probe_id, "")
+            if s_char != t_char:
+                raise ValueError(
+                    f"Tokenizer mismatch at id {probe_id}: student={s_char!r} "
+                    f"teacher={t_char!r}. Teacher must share student's tokenizer."
+                )
+
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        preset_name = checkpoint.get("preset")
+        if preset_name not in PRESETS:
+            raise ValueError(f"unknown preset in teacher: {preset_name!r}")
+        vocab_size = int(checkpoint.get("vocab_size") or teacher_tokenizer.vocab_size)
+        model = CTCNAT.from_preset(
+            preset_name,
+            vocab_size=vocab_size,
+            use_cvae=bool(checkpoint.get("use_cvae", False)),
+        )
+        model.load_state_dict(checkpoint["model_state_dict"])
+        return cls(model=model, tokenizer=teacher_tokenizer,
+                   config=config, device=device)
+
+    def train(self, mode: bool = True) -> "CTCTeacher":
+        super().train(False)
+        self.model.eval()
+        return self
+
+    @torch.no_grad()
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """One forward pass. Returns (logits, mean_confidence_per_sample).
+
+        logits shape:       (B, T, V)
+        confidence shape:   (B,) — mean top-1 softmax prob over non-blank
+                                    positions of greedy path
+        """
+        with torch.amp.autocast(
+            device_type=self.device.type,
+            enabled=self.dtype == torch.float16,
+            dtype=self.dtype if self.dtype == torch.float16 else torch.float32,
+        ):
+            out = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = out["logits"].float()   # (B, T, V)
+        probs = F.softmax(logits, dim=-1)
+        top_probs, top_ids = probs.max(dim=-1)  # (B, T)
+        blank_id = self.model.blank_id
+        nonblank = (top_ids != blank_id) & (attention_mask.bool())
+        # Avoid div-by-zero: if a sample has only blanks, fall back to
+        # attention-mask mean (still valid, just includes blank positions).
+        has_nonblank = nonblank.any(dim=-1)
+        mean_conf = torch.where(
+            has_nonblank,
+            (top_probs * nonblank.float()).sum(dim=-1)
+                / nonblank.float().sum(dim=-1).clamp_min(1.0),
+            (top_probs * attention_mask.float()).sum(dim=-1)
+                / attention_mask.float().sum(dim=-1).clamp_min(1.0),
+        )
+        return logits, mean_conf
+
+
+def compute_kd_kl_loss(
+    student_logits: torch.Tensor,   # (B, T, V)
+    teacher_logits: torch.Tensor,   # (B, T, V)
+    attention_mask: torch.Tensor,   # (B, T)
+    hard_mask: torch.Tensor,        # (B,)
+    temperature: float = 1.0,
+) -> tuple[torch.Tensor, int]:
+    """Soft-KL KD loss on CTC output distributions.
+
+    KL(teacher || student) averaged over non-padded positions of hard
+    examples. Temperature-scaled per standard KD.
+
+    Returns (loss, num_hard). num_hard is the number of samples that
+    contributed. Loss is 0 when no hard samples remain.
+    """
+    device = student_logits.device
+    valid = hard_mask.to(device)
+    num_hard = int(valid.sum().item())
+    if num_hard == 0:
+        return torch.zeros((), device=device, dtype=student_logits.dtype), 0
+
+    idx = valid.nonzero(as_tuple=False).squeeze(-1)
+    s_log = F.log_softmax(student_logits.index_select(0, idx) / temperature, dim=-1)
+    t_log = F.log_softmax(teacher_logits.index_select(0, idx) / temperature, dim=-1)
+    t_prob = t_log.exp()
+
+    # KL(t || s) = sum t * (log t - log s), positionwise
+    kl = (t_prob * (t_log - s_log)).sum(dim=-1)  # (B_hard, T)
+    mask = attention_mask.index_select(0, idx).float()  # (B_hard, T)
+    loss = (kl * mask).sum() / mask.sum().clamp_min(1.0)
+    # Temperature scaling correction (standard KD).
+    loss = loss * (temperature ** 2)
+    return loss, num_hard
 
 
 def compute_kd_ctc_loss(

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from src.data.tokenizer import SharedCharTokenizer
-from src.training.train_ctc_nat import (
+from models.src.data.tokenizer import SharedCharTokenizer
+from models.src.training.train_ctc_nat import (
     build_tokenizer,
     build_model,
     estimate_training_memory,
@@ -13,7 +13,7 @@ from src.training.train_ctc_nat import (
     should_run_kd_microbatch,
     validate_resume_compatibility,
 )
-from src.training.kd import KDConfig
+from models.src.training.kd import KDConfig
 
 
 def test_estimate_training_memory_for_30m():

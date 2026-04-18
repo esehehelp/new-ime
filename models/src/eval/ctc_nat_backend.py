@@ -27,10 +27,10 @@ from pathlib import Path
 
 import torch
 
-from src.data.tokenizer import SharedCharTokenizer
-from src.eval.ctc_beam import prefix_beam_search
-from src.eval.run_eval import ConversionBackend
-from src.model.ctc_nat import CTCNAT, PRESETS
+from models.src.data.tokenizer import SharedCharTokenizer
+from models.src.eval.ctc_beam import prefix_beam_search
+from models.src.eval.run_eval import ConversionBackend
+from models.src.model.ctc_nat import CTCNAT, PRESETS
 
 
 class CTCNATBackend(ConversionBackend):
@@ -101,7 +101,7 @@ class CTCNATBackend(ConversionBackend):
         self.lm_beta = float(lm_beta)
         self.lm_gate_min_conf = float(lm_gate_min_conf)
         if lm_path and (self.lm_alpha > 0.0 or self.lm_beta > 0.0):
-            from src.eval.kenlm_scorer import KenLMCharScorer
+            from models.src.eval.kenlm_scorer import KenLMCharScorer
             self.lm_scorer = KenLMCharScorer(lm_path, self.tokenizer)
 
         ckpt_id = f"{ckpt_path.parent.name}/{ckpt_path.name}"

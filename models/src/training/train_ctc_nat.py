@@ -22,15 +22,18 @@ import time
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.dataset import KanaKanjiDataset
-from src.data.tokenizer import BLANK_ID, PAD_ID, SharedCharTokenizer
-from src.eval.metrics import EvalResult
-from src.model.ctc_nat import CTCNAT, PRESETS
-from src.training.kd import (
+from models.src.data.dataset import KanaKanjiDataset
+from models.src.data.tokenizer import BLANK_ID, PAD_ID, SharedCharTokenizer
+from models.src.eval.metrics import EvalResult
+from models.src.model.ctc_nat import CTCNAT, PRESETS
+from models.src.training.kd import (
     ARTeacher,
+    CTCTeacher,
+    CTCTeacherConfig,
     KDConfig,
     TeacherConfig,
     compute_kd_ctc_loss,
+    compute_kd_kl_loss,
     encode_texts_for_student,
     hard_example_mask,
 )
@@ -151,7 +154,7 @@ def should_run_kd_microbatch(
     step: int,
     batch_idx: int,
     grad_accum: int,
-    teacher: ARTeacher | None,
+    teacher: "ARTeacher | CTCTeacher | None",
     kd_config: KDConfig,
 ) -> bool:
     if teacher is None:
@@ -532,8 +535,18 @@ def make_dataloader(
     )
 
 
-def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher | None, KDConfig]:
-    """Construct the KD teacher + config from CLI args (teacher is optional)."""
+def build_kd(
+    args: argparse.Namespace,
+    device: torch.device,
+    student_tokenizer: SharedCharTokenizer,
+) -> tuple[ARTeacher | CTCTeacher | None, KDConfig]:
+    """Construct the KD teacher + config from CLI args (teacher is optional).
+
+    Teacher type is selected by `--kd-teacher-type`:
+      * "ar"  (default): classic AR teacher via text round-trip + CTC loss.
+      * "ctc": CTC-NAT teacher via direct logit KL. Requires the teacher's
+               tokenizer sidecar (`*_tokenizer.json`) to match the student.
+    """
     kd_config = KDConfig(
         alpha=args.kd_alpha,
         alpha_final=args.kd_alpha_final,
@@ -548,6 +561,29 @@ def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher 
     )
     if not args.kd_teacher_path or args.kd_alpha <= 0.0:
         return None, kd_config
+
+    teacher_type = getattr(args, "kd_teacher_type", "ar")
+    if teacher_type == "ctc":
+        teacher_config = CTCTeacherConfig(
+            checkpoint_path=args.kd_teacher_path,
+            fp16=args.fp16,
+        )
+        teacher = CTCTeacher.from_checkpoint(
+            teacher_config, device=device,
+            student_tokenizer=student_tokenizer,
+        )
+        print(
+            f"KD teacher (CTC-NAT) loaded: {args.kd_teacher_path} "
+            f"(vocab={teacher.tokenizer.vocab_size}, fp16={teacher_config.fp16}) "
+            f"α={kd_config.alpha}, threshold={kd_config.hard_threshold}, "
+            f"mode={kd_config.gate_mode}, start={kd_config.start_step}, "
+            f"warmup={kd_config.warmup_steps}, alpha_final={kd_config.alpha_final}, "
+            f"decay_start={kd_config.alpha_decay_start}, "
+            f"decay_steps={kd_config.alpha_decay_steps}, every={kd_config.every}, "
+            f"T={args.kd_temperature}"
+        )
+        return teacher, kd_config
+
     teacher_config = TeacherConfig(
         checkpoint_path=args.kd_teacher_path,
         vocab_path=args.kd_teacher_vocab or "",
@@ -561,7 +597,7 @@ def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher 
     )
     teacher = ARTeacher.from_checkpoint(teacher_config, device=device)
     print(
-        f"KD teacher loaded: {args.kd_teacher_path} "
+        f"KD teacher (AR) loaded: {args.kd_teacher_path} "
         f"(vocab={teacher.collator.vocab_size}, fp16={teacher_config.fp16}) "
         f"α={kd_config.alpha}, threshold={kd_config.hard_threshold}, mode={kd_config.gate_mode}, "
         f"start={kd_config.start_step}, warmup={kd_config.warmup_steps}, "
@@ -579,12 +615,26 @@ def train_local(args: argparse.Namespace) -> None:
     tokenizer = build_tokenizer(args)
     model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lambda step: min((step + 1) / max(args.warmup_steps, 1), 1.0),
-    )
+    # LR schedule: warmup then optional decay. `flat` (default, legacy) holds
+    # at peak after warmup (the source of the "LR plateau" seen in earlier 30M
+    # runs). `cosine` decays from peak to 0 across remaining steps.
+    import math
 
-    teacher, kd_config = build_kd(args, device)
+    def lr_lambda(step: int) -> float:
+        warmup = max(args.warmup_steps, 1)
+        if step < warmup:
+            return (step + 1) / warmup
+        schedule = getattr(args, "lr_schedule", "flat")
+        if schedule == "cosine":
+            total = max(args.max_steps, warmup + 1)
+            progress = (step - warmup) / max(total - warmup, 1)
+            progress = min(max(progress, 0.0), 1.0)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+        return 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+    teacher, kd_config = build_kd(args, device, tokenizer)
 
     start_step = 0
     start_epoch = 0
@@ -738,59 +788,84 @@ def train_local(args: argparse.Namespace) -> None:
                     run_kd = False
 
             if run_kd:
-                with torch.no_grad():
-                    kd_chunk = int(getattr(args, "max_kd_batch_size", 0))
-                    n_ctx = len(contexts)
-                    if kd_chunk <= 0 or kd_chunk >= n_ctx:
-                        teacher_texts, teacher_conf = teacher.generate(
-                            contexts=contexts,
-                            readings=readings,
-                            max_new_tokens=kd_config.max_new_tokens,
+                if isinstance(teacher, CTCTeacher):
+                    # Direct-logit KL path. Same input as student, single
+                    # forward, soft-KL on output distributions.
+                    with torch.no_grad():
+                        teacher_logits, teacher_conf_tensor = teacher(
+                            batch["input_ids"], batch["attention_mask"]
                         )
-                    else:
-                        teacher_texts = []
-                        teacher_conf = []
-                        for s in range(0, n_ctx, kd_chunk):
-                            t_texts, t_conf = teacher.generate(
-                                contexts=contexts[s : s + kd_chunk],
-                                readings=readings[s : s + kd_chunk],
+                    hard_mask = hard_example_mask(
+                        teacher_conf_tensor,
+                        kd_config.hard_threshold,
+                        mode=kd_config.gate_mode,
+                    )
+                    kd_loss_value, num_hard = compute_kd_kl_loss(
+                        student_logits=result["logits"],
+                        teacher_logits=teacher_logits,
+                        attention_mask=batch["attention_mask"],
+                        hard_mask=hard_mask,
+                        temperature=float(getattr(args, "kd_temperature", 2.0)),
+                    )
+                    if num_hard > 0 and alpha_now > 0.0:
+                        loss = loss + alpha_now * args.grad_accum * kd_loss_value
+                    kd_stats["loss_sum"] += float(kd_loss_value.detach().item())
+                    kd_stats["hard_sum"] += num_hard
+                    kd_stats["total_sum"] += int(batch["input_ids"].shape[0])
+                    kd_stats["conf_sum"] += (
+                        float(teacher_conf_tensor.mean().item())
+                        if teacher_conf_tensor.numel() else 0.0
+                    )
+                    kd_stats["batches"] += 1
+                else:
+                    with torch.no_grad():
+                        kd_chunk = int(getattr(args, "max_kd_batch_size", 0))
+                        n_ctx = len(contexts)
+                        if kd_chunk <= 0 or kd_chunk >= n_ctx:
+                            teacher_texts, teacher_conf = teacher.generate(
+                                contexts=contexts,
+                                readings=readings,
                                 max_new_tokens=kd_config.max_new_tokens,
                             )
-                            teacher_texts.extend(t_texts)
-                            teacher_conf.extend(t_conf)
-                conf_tensor = torch.tensor(teacher_conf, device=device)
-                hard_mask = hard_example_mask(
-                    conf_tensor,
-                    kd_config.hard_threshold,
-                    mode=kd_config.gate_mode,
-                )
-                teacher_ids, teacher_lengths = encode_texts_for_student(
-                    teacher_texts,
-                    tokenizer=tokenizer,
-                    max_len=args.max_seq_len,
-                )
-                kd_loss_value, num_hard = compute_kd_ctc_loss(
-                    student_log_probs=result["log_probs"],
-                    input_lengths=batch["attention_mask"].sum(dim=1).long(),
-                    teacher_ids=teacher_ids,
-                    teacher_lengths=teacher_lengths,
-                    hard_mask=hard_mask,
-                    blank_id=BLANK_ID,
-                )
-                if num_hard > 0 and alpha_now > 0.0:
-                    # KD fires on only 1 of grad_accum microbatches per active
-                    # optimizer step. The subsequent `loss / grad_accum` would
-                    # otherwise shrink the KD contribution by that same factor.
-                    # Pre-multiply so --kd-alpha acts as a grad_accum-invariant
-                    # weight on the KD term.
-                    loss = loss + alpha_now * args.grad_accum * kd_loss_value
-                kd_stats["loss_sum"] += float(kd_loss_value.detach().item())
-                kd_stats["hard_sum"] += num_hard
-                kd_stats["total_sum"] += len(teacher_texts)
-                kd_stats["conf_sum"] += (
-                    float(conf_tensor.mean().item()) if conf_tensor.numel() else 0.0
-                )
-                kd_stats["batches"] += 1
+                        else:
+                            teacher_texts = []
+                            teacher_conf = []
+                            for s in range(0, n_ctx, kd_chunk):
+                                t_texts, t_conf = teacher.generate(
+                                    contexts=contexts[s : s + kd_chunk],
+                                    readings=readings[s : s + kd_chunk],
+                                    max_new_tokens=kd_config.max_new_tokens,
+                                )
+                                teacher_texts.extend(t_texts)
+                                teacher_conf.extend(t_conf)
+                    conf_tensor = torch.tensor(teacher_conf, device=device)
+                    hard_mask = hard_example_mask(
+                        conf_tensor,
+                        kd_config.hard_threshold,
+                        mode=kd_config.gate_mode,
+                    )
+                    teacher_ids, teacher_lengths = encode_texts_for_student(
+                        teacher_texts,
+                        tokenizer=tokenizer,
+                        max_len=args.max_seq_len,
+                    )
+                    kd_loss_value, num_hard = compute_kd_ctc_loss(
+                        student_log_probs=result["log_probs"],
+                        input_lengths=batch["attention_mask"].sum(dim=1).long(),
+                        teacher_ids=teacher_ids,
+                        teacher_lengths=teacher_lengths,
+                        hard_mask=hard_mask,
+                        blank_id=BLANK_ID,
+                    )
+                    if num_hard > 0 and alpha_now > 0.0:
+                        loss = loss + alpha_now * args.grad_accum * kd_loss_value
+                    kd_stats["loss_sum"] += float(kd_loss_value.detach().item())
+                    kd_stats["hard_sum"] += num_hard
+                    kd_stats["total_sum"] += len(teacher_texts)
+                    kd_stats["conf_sum"] += (
+                        float(conf_tensor.mean().item()) if conf_tensor.numel() else 0.0
+                    )
+                    kd_stats["batches"] += 1
 
             loss = loss / args.grad_accum
 
@@ -977,6 +1052,16 @@ def main() -> None:
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--kl-weight", type=float, default=0.05)
     parser.add_argument("--warmup-steps", type=int, default=1000)
+    parser.add_argument(
+        "--lr-schedule",
+        choices=["flat", "cosine"],
+        default="flat",
+        help=(
+            "LR schedule after warmup: 'flat' holds peak (legacy, caused "
+            "LR plateau in 30M training), 'cosine' decays to 0 across "
+            "--max-steps."
+        ),
+    )
     parser.add_argument("--tiny-overfit-samples", type=int, default=0)
     parser.add_argument("--short-sample-max-chars", type=int, default=0)
     parser.add_argument("--warmup-short-sample-steps", type=int, default=0)
@@ -998,9 +1083,26 @@ def main() -> None:
         help="Max context chars fed to both the student encoder and the AR teacher",
     )
 
-    kd_group = parser.add_argument_group("online KD (AR teacher)")
-    kd_group.add_argument("--kd-teacher-path", default="", help="AR teacher checkpoint (.pt)")
-    kd_group.add_argument("--kd-teacher-vocab", default="", help="AR teacher vocab JSON (default: auto)")
+    kd_group = parser.add_argument_group("online KD (AR or CTC teacher)")
+    kd_group.add_argument(
+        "--kd-teacher-type",
+        choices=["ar", "ctc"],
+        default="ar",
+        help=(
+            "Teacher kind. 'ar' = autoregressive SimpleGPT2 (vocab-bridged via "
+            "text round-trip + CTC loss against teacher text). "
+            "'ctc' = CTC-NAT teacher (same tokenizer as student required; KD "
+            "via direct logit KL, much faster forward pass)."
+        ),
+    )
+    kd_group.add_argument(
+        "--kd-temperature",
+        type=float,
+        default=2.0,
+        help="Soft-KL temperature for CTC teacher (ignored for AR teacher)",
+    )
+    kd_group.add_argument("--kd-teacher-path", default="", help="Teacher checkpoint (.pt)")
+    kd_group.add_argument("--kd-teacher-vocab", default="", help="AR teacher vocab JSON (default: auto; AR only)")
     kd_group.add_argument("--kd-teacher-hidden", type=int, default=512)
     kd_group.add_argument("--kd-teacher-layers", type=int, default=8)
     kd_group.add_argument("--kd-teacher-heads", type=int, default=8)

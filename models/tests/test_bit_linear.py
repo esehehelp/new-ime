@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from src.model.bit_linear import (
+from models.src.model.bit_linear import (
     BitLinear,
     quantize_activation_absmax,
     quantize_weight_ternary,
