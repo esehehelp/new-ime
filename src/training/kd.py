@@ -57,6 +57,9 @@ class KDConfig:
     """Runtime controls for online KD."""
 
     alpha: float = 0.3
+    alpha_final: float | None = None
+    alpha_decay_start: int = 0
+    alpha_decay_steps: int = 0
     hard_threshold: float = 0.6
     gate_mode: Literal["low_conf", "high_conf", "all"] = "low_conf"
     start_step: int = 0
@@ -65,13 +68,23 @@ class KDConfig:
     max_new_tokens: int = 128
 
     def alpha_at(self, step: int) -> float:
-        """α with optional linear warmup from start_step."""
+        """α with optional linear warmup from start_step and optional decay."""
         if step < self.start_step:
             return 0.0
+
         if self.warmup_steps <= 0:
-            return self.alpha
-        progress = min((step - self.start_step) / self.warmup_steps, 1.0)
-        return self.alpha * progress
+            alpha_now = self.alpha
+        else:
+            progress = min((step - self.start_step) / self.warmup_steps, 1.0)
+            alpha_now = self.alpha * progress
+
+        if self.alpha_final is None or self.alpha_decay_steps <= 0:
+            return alpha_now
+        if step < self.alpha_decay_start:
+            return alpha_now
+
+        decay_progress = min((step - self.alpha_decay_start) / self.alpha_decay_steps, 1.0)
+        return alpha_now + (self.alpha_final - alpha_now) * decay_progress
 
     def active(self, step: int) -> bool:
         """Whether KD should run at the given optimizer step.

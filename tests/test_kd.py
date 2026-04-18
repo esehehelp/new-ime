@@ -72,6 +72,22 @@ class TestKDConfig:
         assert cfg.alpha_at(200) == pytest.approx(0.4)
         assert cfg.alpha_at(10_000) == pytest.approx(0.4)
 
+    def test_alpha_at_decay_after_warmup(self):
+        cfg = KDConfig(
+            alpha=0.4,
+            start_step=100,
+            warmup_steps=100,
+            alpha_final=0.1,
+            alpha_decay_start=400,
+            alpha_decay_steps=200,
+        )
+        assert cfg.alpha_at(100) == pytest.approx(0.0)
+        assert cfg.alpha_at(200) == pytest.approx(0.4)
+        assert cfg.alpha_at(399) == pytest.approx(0.4)
+        assert cfg.alpha_at(500) == pytest.approx(0.25)
+        assert cfg.alpha_at(600) == pytest.approx(0.1)
+        assert cfg.alpha_at(10_000) == pytest.approx(0.1)
+
     def test_active_respects_alpha_zero(self):
         cfg = KDConfig(alpha=0.0)
         assert not cfg.active(1000)

@@ -181,15 +181,6 @@ class TestCTCNAT:
         result = self.model(input_ids, attention_mask, target_ids, target_lengths)
         assert not torch.isnan(result["loss"])
 
-    def test_blank_logit_bias_lowers_blank_column(self):
-        input_ids = torch.randint(0, 200, (BATCH, SRC_LEN))
-        attention_mask = torch.ones(BATCH, SRC_LEN)
-        self.model.eval()
-        baseline = self.model(input_ids, attention_mask)["logits"]
-        self.model.blank_logit_bias = 0.75
-        biased = self.model(input_ids, attention_mask)["logits"]
-        delta = baseline[..., BLANK_ID] - biased[..., BLANK_ID]
-        assert torch.allclose(delta, torch.full_like(delta, 0.75), atol=1e-5)
 
     def test_from_preset_30m(self):
         model = CTCNAT.from_preset("phase3_30m", vocab_size=1024, use_cvae=False)

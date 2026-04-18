@@ -294,11 +294,13 @@ def save_checkpoint(
         "max_kanji": args.max_kanji,
         "vocab_size": tokenizer.vocab_size,
         "tokenizer_path": getattr(args, "tokenizer_path", ""),
-        "blank_logit_bias": float(getattr(args, "blank_logit_bias", 0.0)),
         "kd": {
             "teacher_path": getattr(args, "kd_teacher_path", "") or "",
             "teacher_vocab": getattr(args, "kd_teacher_vocab", "") or "",
             "alpha": float(getattr(args, "kd_alpha", 0.0)),
+            "alpha_final": getattr(args, "kd_alpha_final", None),
+            "alpha_decay_start": int(getattr(args, "kd_alpha_decay_start", 0)),
+            "alpha_decay_steps": int(getattr(args, "kd_alpha_decay_steps", 0)),
             "hard_threshold": float(getattr(args, "kd_hard_threshold", 0.0)),
             "gate_mode": getattr(args, "kd_gate_mode", "low_conf"),
             "start_step": int(getattr(args, "kd_start_step", 0)),
@@ -349,11 +351,6 @@ def validate_resume_compatibility(
         mismatches.append(
             f"max_kanji: ckpt={checkpoint.get('max_kanji')} current={args.max_kanji}"
         )
-    if abs(float(checkpoint.get("blank_logit_bias", 0.0)) - float(args.blank_logit_bias)) > 1e-9:
-        mismatches.append(
-            "blank_logit_bias: "
-            f"ckpt={checkpoint.get('blank_logit_bias', 0.0)} current={args.blank_logit_bias}"
-        )
     if tokenizer is not None and int(checkpoint.get("vocab_size", tokenizer.vocab_size)) != int(
         tokenizer.vocab_size
     ):
@@ -368,6 +365,9 @@ def validate_resume_compatibility(
         ("teacher_path", "kd_teacher_path", ""),
         ("teacher_vocab", "kd_teacher_vocab", ""),
         ("alpha", "kd_alpha", 0.0),
+        ("alpha_final", "kd_alpha_final", None),
+        ("alpha_decay_start", "kd_alpha_decay_start", 0),
+        ("alpha_decay_steps", "kd_alpha_decay_steps", 0),
         ("hard_threshold", "kd_hard_threshold", 0.0),
         ("gate_mode", "kd_gate_mode", "low_conf"),
         ("start_step", "kd_start_step", 0),
@@ -519,6 +519,9 @@ def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher 
     """Construct the KD teacher + config from CLI args (teacher is optional)."""
     kd_config = KDConfig(
         alpha=args.kd_alpha,
+        alpha_final=args.kd_alpha_final,
+        alpha_decay_start=args.kd_alpha_decay_start,
+        alpha_decay_steps=args.kd_alpha_decay_steps,
         hard_threshold=args.kd_hard_threshold,
         gate_mode=args.kd_gate_mode,
         start_step=args.kd_start_step,
@@ -545,6 +548,8 @@ def build_kd(args: argparse.Namespace, device: torch.device) -> tuple[ARTeacher 
         f"(vocab={teacher.collator.vocab_size}, fp16={teacher_config.fp16}) "
         f"α={kd_config.alpha}, threshold={kd_config.hard_threshold}, mode={kd_config.gate_mode}, "
         f"start={kd_config.start_step}, warmup={kd_config.warmup_steps}, "
+        f"alpha_final={kd_config.alpha_final}, decay_start={kd_config.alpha_decay_start}, "
+        f"decay_steps={kd_config.alpha_decay_steps}, "
         f"every={kd_config.every}"
     )
     return teacher, kd_config
@@ -556,7 +561,6 @@ def train_local(args: argparse.Namespace) -> None:
     pin_memory = device.type == "cuda"
     tokenizer = build_tokenizer(args)
     model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae).to(device)
-    model.blank_logit_bias = float(args.blank_logit_bias)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
@@ -643,7 +647,6 @@ def train_local(args: argparse.Namespace) -> None:
         use_adamw=True,
     )
     print(format_memory_table(estimate, peak_gb=None))
-    print(f"blank bias:     {args.blank_logit_bias:.2f}")
     print(
         f"dataloader: workers={num_workers} pin_memory={pin_memory} "
         f"persistent_workers={num_workers > 0}"
@@ -948,12 +951,6 @@ def main() -> None:
     parser.add_argument("--warmup-short-sample-steps", type=int, default=0)
     parser.add_argument("--warmup-short-sample-max-chars", type=int, default=0)
     parser.add_argument("--fp16", action="store_true")
-    parser.add_argument(
-        "--blank-logit-bias",
-        type=float,
-        default=0.0,
-        help="Subtract this value from the CTC blank logit before softmax/decode",
-    )
     parser.add_argument("--checkpoint-every", type=int, default=2000)
     parser.add_argument("--eval-every", type=int, default=2000)
     parser.add_argument("--eval-batches", type=int, default=20)
@@ -978,6 +975,24 @@ def main() -> None:
     kd_group.add_argument("--kd-teacher-heads", type=int, default=8)
     kd_group.add_argument("--kd-teacher-max-seq-len", type=int, default=256)
     kd_group.add_argument("--kd-alpha", type=float, default=0.0, help="KD loss weight (0 disables)")
+    kd_group.add_argument(
+        "--kd-alpha-final",
+        type=float,
+        default=None,
+        help="Final KD alpha after optional post-warmup decay (default: keep constant)",
+    )
+    kd_group.add_argument(
+        "--kd-alpha-decay-start",
+        type=int,
+        default=0,
+        help="Optimizer step at which KD alpha starts decaying toward --kd-alpha-final",
+    )
+    kd_group.add_argument(
+        "--kd-alpha-decay-steps",
+        type=int,
+        default=0,
+        help="Number of optimizer steps used to linearly decay KD alpha",
+    )
     kd_group.add_argument("--kd-hard-threshold", type=float, default=0.6)
     kd_group.add_argument(
         "--kd-gate-mode",
@@ -1007,7 +1022,6 @@ def main() -> None:
 
     tokenizer = build_tokenizer(args)
     model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae)
-    model.blank_logit_bias = float(args.blank_logit_bias)
     estimate = estimate_training_memory(
         model,
         preset_name=args.preset,
