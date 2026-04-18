@@ -18,6 +18,7 @@
 #include <onnxruntime_cxx_api.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -155,6 +156,75 @@ struct Tokenizer {
     }
 };
 
+// Replace ASCII/fullwidth-Latin punctuation with the Japanese forms the
+// training corpus actually uses. Without this, inputs like "，" (U+FF0C) or
+// ASCII "?" reach the model as rare tokens and the KenLM prior drives the
+// beam to drop them. Only rewrites input characters; the model can still
+// emit either form on its own if it learned them.
+std::string normalize_input_punct(const std::string& s) {
+    static const std::pair<std::string, std::string> subs[] = {
+        {"\xEF\xBC\x8C", "\xE3\x80\x81"},  // ，  -> 、
+        {"\xEF\xBC\x8E", "\xE3\x80\x82"},  // ．  -> 。
+        {",", "\xE3\x80\x81"},              // ASCII ,  -> 、
+        {"?", "\xEF\xBC\x9F"},              // ASCII ?  -> ？
+        {"!", "\xEF\xBC\x81"},              // ASCII !  -> ！
+    };
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ) {
+        bool matched = false;
+        for (const auto& [from, to] : subs) {
+            if (s.compare(i, from.size(), from) == 0) {
+                out += to;
+                i += from.size();
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) out += s[i++];
+    }
+    return out;
+}
+
+// Decode a UTF-8 sequence starting at s[i], return codepoint and byte length.
+// On malformed input, returns (-1, 1).
+std::pair<int32_t, size_t> utf8_decode_one(const std::string& s, size_t i) {
+    if (i >= s.size()) return {-1, 0};
+    unsigned char c0 = static_cast<unsigned char>(s[i]);
+    if ((c0 & 0x80) == 0) return {static_cast<int32_t>(c0), 1};
+    auto need = [&](size_t n) { return i + n <= s.size(); };
+    if ((c0 & 0xE0) == 0xC0 && need(2)) {
+        int32_t cp = (c0 & 0x1F) << 6;
+        cp |= (s[i + 1] & 0x3F);
+        return {cp, 2};
+    }
+    if ((c0 & 0xF0) == 0xE0 && need(3)) {
+        int32_t cp = (c0 & 0x0F) << 12;
+        cp |= (s[i + 1] & 0x3F) << 6;
+        cp |= (s[i + 2] & 0x3F);
+        return {cp, 3};
+    }
+    if ((c0 & 0xF8) == 0xF0 && need(4)) {
+        int32_t cp = (c0 & 0x07) << 18;
+        cp |= (s[i + 1] & 0x3F) << 12;
+        cp |= (s[i + 2] & 0x3F) << 6;
+        cp |= (s[i + 3] & 0x3F);
+        return {cp, 4};
+    }
+    return {-1, 1};
+}
+
+// True for hiragana, katakana, prolongation mark ー. We treat these as the
+// "kana run" that gets fed to CTC; everything else (digits, latin,
+// symbols, CJK already-converted kanji, etc.) is passthrough.
+bool is_kana_codepoint(int32_t cp) {
+    if (cp >= 0x3041 && cp <= 0x3096) return true;  // Hiragana
+    if (cp >= 0x30A1 && cp <= 0x30FA) return true;  // Katakana
+    if (cp == 0x30FC) return true;                   // ー prolong mark
+    if (cp == 0x3093 || cp == 0x30F3) return true;   // ん / ン (inside range but explicit)
+    return false;
+}
+
 // Split UTF-8 string into codepoint substrings.
 std::vector<std::string> split_utf8_chars(const std::string& s) {
     std::vector<std::string> out;
@@ -212,6 +282,7 @@ struct Args {
     std::string onnx_path;
     std::string tokenizer_path;
     std::string lm_path;
+    std::string dict_path;
     float alpha = 0.8f;
     float beta = 1.0f;
     int beam = 4;
@@ -219,6 +290,74 @@ struct Args {
     int max_context = 32;
     bool help = false;
 };
+
+// Simple longest-prefix-match kana dictionary. Loaded from a TSV of
+//   kana<TAB>surface
+// lines (# comments skipped). Used BEFORE the CTC pass to cover basic
+// vocab gaps — mostly SI prefixes and katakana loanwords the training
+// corpus is thin on.
+struct FixedDict {
+    std::vector<std::pair<std::string, std::string>> entries;
+
+    bool load(const std::string& path) {
+        std::ifstream f(path);
+        if (!f) return false;
+        std::string line;
+        while (std::getline(f, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty() || line[0] == '#') continue;
+            auto tab = line.find('\t');
+            if (tab == std::string::npos) continue;
+            std::string kana = line.substr(0, tab);
+            std::string surface = line.substr(tab + 1);
+            if (kana.empty() || surface.empty()) continue;
+            entries.emplace_back(std::move(kana), std::move(surface));
+        }
+        // Longest first so longest-prefix-match is O(entries).
+        std::sort(entries.begin(), entries.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.first.size() > b.first.size();
+                  });
+        return true;
+    }
+
+    // Returns (surface, bytes_consumed) if a dict entry matches as a
+    // prefix of `kana` starting at offset `at`. 0 consumed means no match.
+    std::pair<std::string, size_t> match_prefix(const std::string& kana, size_t at) const {
+        for (const auto& [k, v] : entries) {
+            if (at + k.size() <= kana.size()
+                && kana.compare(at, k.size(), k) == 0) {
+                return {v, k.size()};
+            }
+        }
+        return {std::string{}, 0};
+    }
+};
+
+// Split a normalized input line into alternating segments of kana and
+// non-kana. Each segment carries an `is_kana` flag; non-kana segments
+// pass through to the output unchanged. Kana segments go through the
+// dict+CTC pipeline.
+struct Segment {
+    std::string text;
+    bool is_kana;
+};
+
+std::vector<Segment> segment_by_kana(const std::string& s) {
+    std::vector<Segment> out;
+    size_t i = 0;
+    while (i < s.size()) {
+        auto [cp, n] = utf8_decode_one(s, i);
+        if (cp < 0 || n == 0) { ++i; continue; }
+        bool is_k = is_kana_codepoint(cp);
+        if (out.empty() || out.back().is_kana != is_k) {
+            out.push_back({std::string{}, is_k});
+        }
+        out.back().text.append(s, i, n);
+        i += n;
+    }
+    return out;
+}
 
 Args parse_args(int argc, char** argv) {
     Args a;
@@ -231,6 +370,7 @@ Args parse_args(int argc, char** argv) {
         if (s == "--onnx") a.onnx_path = next();
         else if (s == "--tokenizer") a.tokenizer_path = next();
         else if (s == "--lm") a.lm_path = next();
+        else if (s == "--dict") a.dict_path = next();
         else if (s == "--alpha") a.alpha = std::stof(next());
         else if (s == "--beta") a.beta = std::stof(next());
         else if (s == "--beam") a.beam = std::stoi(next());
@@ -245,6 +385,7 @@ void usage() {
         "Usage: interactive_ctc.exe --onnx MODEL.onnx [options]\n"
         "  --tokenizer FILE    tokenizer sidecar .json (default: inferred from --onnx)\n"
         "  --lm FILE           KenLM .arpa or .bin (optional)\n"
+        "  --dict FILE         fixed kana->surface TSV (optional)\n"
         "  --alpha F           LM weight (default 0.8)\n"
         "  --beta F            length penalty (default 1.0)\n"
         "  --beam N            beam width (default 4)\n"
@@ -306,6 +447,94 @@ int main(int argc, char** argv) {
 
     newime::CTCDecoder decoder(tokenizer.id_to_token, tokenizer.blank_id);
 
+    FixedDict dict;
+    if (!args.dict_path.empty()) {
+        if (dict.load(args.dict_path)) {
+            std::cout << "dict: " << args.dict_path
+                      << " (" << dict.entries.size() << " entries)\n";
+        } else {
+            std::cerr << "dict load failed: " << args.dict_path << "\n";
+        }
+    }
+
+    // One kana run -> best surface via dict + CTC. Greedy longest-prefix
+    // dict scan consumes matching prefix bytes; the remainder (if any)
+    // goes through CTC with the consumed dict surface prepended as left
+    // context so the model sees a coherent prior.
+    auto convert_kana_run = [&](const std::string& kana_in,
+                                const std::string& left_ctx_in,
+                                double& ms_onnx, double& ms_decode) -> std::string {
+        std::string kana = kana_in;
+        std::string left_ctx = left_ctx_in;
+        std::string surface_out;
+        while (!kana.empty()) {
+            auto [hit, n] = dict.entries.empty()
+                ? std::make_pair(std::string{}, size_t{0})
+                : dict.match_prefix(kana, 0);
+            if (n > 0) {
+                surface_out += hit;
+                left_ctx += hit;
+                kana.erase(0, n);
+                continue;
+            }
+            // Take whatever remains as one CTC chunk. If more dict hits
+            // appear later in the run they're handled on the next loop
+            // only when they're at the prefix — to find mid-run matches,
+            // we scan one codepoint at a time.
+            auto [cp, cp_n] = utf8_decode_one(kana, 0);
+            if (cp_n == 0) break;
+
+            // Accumulate codepoints until we hit a dict-prefixed suffix
+            // or end of run.
+            size_t take = cp_n;
+            while (take < kana.size()) {
+                auto [hit2, n2] = dict.entries.empty()
+                    ? std::make_pair(std::string{}, size_t{0})
+                    : dict.match_prefix(kana, take);
+                if (n2 > 0) break;
+                auto [cp2, cp2_n] = utf8_decode_one(kana, take);
+                if (cp2_n == 0) break;
+                take += cp2_n;
+            }
+
+            std::string chunk = kana.substr(0, take);
+            auto enc = encode(tokenizer, left_ctx, chunk, args.seq_len, args.max_context);
+            std::array<int64_t, 2> shape{1, args.seq_len};
+            Ort::MemoryInfo mem_info = Ort::MemoryInfo::CreateCpu(
+                OrtArenaAllocator, OrtMemTypeDefault);
+            Ort::Value ids_tensor = Ort::Value::CreateTensor<int64_t>(
+                mem_info, enc.input_ids.data(), enc.input_ids.size(),
+                shape.data(), shape.size());
+            Ort::Value mask_tensor = Ort::Value::CreateTensor<int64_t>(
+                mem_info, enc.attention_mask.data(), enc.attention_mask.size(),
+                shape.data(), shape.size());
+            const char* input_names[] = {"input_ids", "attention_mask"};
+            const char* output_names[] = {"logits"};
+            std::array<Ort::Value, 2> inputs{std::move(ids_tensor), std::move(mask_tensor)};
+            auto t_a = std::chrono::steady_clock::now();
+            auto outs = session.Run(Ort::RunOptions{nullptr}, input_names,
+                                    inputs.data(), inputs.size(),
+                                    output_names, 1);
+            auto t_b = std::chrono::steady_clock::now();
+            float* logits = outs[0].GetTensorMutableData<float>();
+            auto info = outs[0].GetTensorTypeAndShapeInfo();
+            int64_t V = info.GetShape()[2];
+            std::vector<float> trimmed(logits, logits + enc.seq_len * V);
+            auto candidates = decoder.beam_search(
+                trimmed, enc.seq_len, static_cast<int>(V),
+                args.beam, lm_scorer.get(), args.alpha, args.beta);
+            auto t_c = std::chrono::steady_clock::now();
+            ms_onnx += std::chrono::duration<double, std::milli>(t_b - t_a).count();
+            ms_decode += std::chrono::duration<double, std::milli>(t_c - t_b).count();
+
+            std::string best = candidates.empty() ? std::string{} : candidates[0].text;
+            surface_out += best;
+            left_ctx += best;
+            kana.erase(0, take);
+        }
+        return surface_out;
+    };
+
     std::cout << "\nType kana to convert (empty line to quit).\n"
               << "Use 'ctx <text>' to set left context.\n\n";
 
@@ -314,42 +543,66 @@ int main(int argc, char** argv) {
     while (std::cout << "> " && std::getline(std::cin, line)) {
         if (line.empty()) break;
         if (line.rfind("ctx ", 0) == 0) {
-            context = line.substr(4);
+            context = normalize_input_punct(line.substr(4));
             std::cout << "context set (" << context.size() << " bytes)\n";
             continue;
         }
 
-        auto enc = encode(tokenizer, context, line, args.seq_len, args.max_context);
-        std::array<int64_t, 2> shape{1, args.seq_len};
-        Ort::MemoryInfo mem_info = Ort::MemoryInfo::CreateCpu(
-            OrtArenaAllocator, OrtMemTypeDefault);
+        auto t_start = std::chrono::steady_clock::now();
+        line = normalize_input_punct(line);
 
-        Ort::Value ids_tensor = Ort::Value::CreateTensor<int64_t>(
-            mem_info, enc.input_ids.data(), enc.input_ids.size(),
-            shape.data(), shape.size());
-        Ort::Value mask_tensor = Ort::Value::CreateTensor<int64_t>(
-            mem_info, enc.attention_mask.data(), enc.attention_mask.size(),
-            shape.data(), shape.size());
+        // Segment into alternating kana / non-kana runs. Non-kana (digits,
+        // punctuation, latin, already-mixed text) passes through verbatim;
+        // kana runs go through the dict + CTC pipeline. This covers the
+        // practical IME cases the model can't emit on its own: raw numbers,
+        // SI-prefix loanwords pinned by the dict, model-name spelling.
+        auto segs = segment_by_kana(line);
+        std::string surface;
+        std::string left_ctx = context;
+        double ms_onnx = 0.0, ms_decode = 0.0;
+        for (auto& seg : segs) {
+            if (!seg.is_kana) {
+                surface += seg.text;
+                left_ctx += seg.text;
+                continue;
+            }
+            std::string piece = convert_kana_run(seg.text, left_ctx, ms_onnx, ms_decode);
+            surface += piece;
+            left_ctx += piece;
+        }
+        auto t_end = std::chrono::steady_clock::now();
 
-        const char* input_names[] = {"input_ids", "attention_mask"};
-        const char* output_names[] = {"logits"};
-        std::array<Ort::Value, 2> inputs{std::move(ids_tensor), std::move(mask_tensor)};
-        auto outs = session.Run(Ort::RunOptions{nullptr}, input_names,
-                                inputs.data(), inputs.size(),
-                                output_names, 1);
+        // Compatibility bridge for the ？/！ tail echo block below — it
+        // used to operate on the CTC beam's candidate list, now there's
+        // just one composed surface.
+        std::vector<newime::DecodedCandidate> candidates;
+        if (!surface.empty()) candidates.push_back({surface, 0.0f});
 
-        float* logits = outs[0].GetTensorMutableData<float>();
-        auto info = outs[0].GetTensorTypeAndShapeInfo();
-        auto out_shape = info.GetShape();
-        int64_t T = out_shape[1];
-        int64_t V = out_shape[2];
+        // Training corpus underrepresents ？ ！ at sentence endings — Wiki
+        // uses 。 overwhelmingly. The CTC path + LM prior converge onto
+        // blank-at-？ for those inputs. If the user typed a trailing
+        // sentence-final marker, echo it back onto the top candidates so
+        // the raw input intent is preserved.
+        auto ends_with = [](const std::string& s, const std::string& suf) {
+            return s.size() >= suf.size()
+                && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+        };
+        for (const auto& mark : {std::string("\xEF\xBC\x9F"),   // ？
+                                  std::string("\xEF\xBC\x81"),  // ！
+                                  std::string("\xE3\x80\x82"),  // 。
+                                  std::string("\xE3\x80\x81")}) // 、
+        {
+            if (ends_with(line, mark)) {
+                for (auto& c : candidates) {
+                    if (!ends_with(c.text, mark) && !c.text.empty()) {
+                        c.text += mark;
+                    }
+                }
+                break;
+            }
+        }
 
-        // Trim logits to the actual (non-padded) prefix length.
-        std::vector<float> trimmed(logits, logits + enc.seq_len * V);
-
-        auto candidates = decoder.beam_search(
-            trimmed, enc.seq_len, static_cast<int>(V),
-            args.beam, lm_scorer.get(), args.alpha, args.beta);
+        double ms_total = std::chrono::duration<double, std::milli>(t_end - t_start).count();
 
         int shown = std::min<size_t>(3, candidates.size());
         for (int k = 0; k < shown; ++k) {
@@ -358,6 +611,9 @@ int main(int argc, char** argv) {
                       << "  (" << candidates[k].score << ")\n";
         }
         if (candidates.empty()) std::cout << "  (no candidates)\n";
+        std::cout << "  [time] total=" << ms_total
+                  << "ms (onnx=" << ms_onnx
+                  << "ms, decode=" << ms_decode << "ms)\n";
     }
 
     return 0;
