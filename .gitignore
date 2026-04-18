@@ -76,3 +76,7 @@ build/
 models/fixed_dict_mozc.tsv
 models/fixed_dict_mozc_ut*.tsv
 tools/mozc_import/
+
+# Sweep per-config artifacts (regenerable via scripts/sweep_interactive_ctc.py)
+results/sweep_*/alpha*.json
+results/sweep_*/report.md
