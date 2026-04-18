@@ -25,7 +25,9 @@
 - **推論**: ONNX Runtime / bitnet.cpp / 比較用ベンチハーネス
 - **IME 統合**: 研究段階では `interactive.cpp` を中心とした CLI / デモ優先
 
-設計詳細は `docs/vision.md`、実装計画は `docs/roadmap.md` を参照。
+設計詳細は `docs/vision.md` (未来目標の単一ソース)、現在進行中の実行手順は
+`docs/phase3_v2_dryrun_runbook.md`。過去の計画 / 完了 phase のアーカイブは
+`docs/old/` 配下。
 
 ## アーキテクチャ
 
@@ -50,25 +52,30 @@
    漢字かな混じり出力 (top-K 候補)
 ```
 
-## 現状 (2026-04-18)
+## 現状 (2026-04-19)
 
-| Phase | 状態 |
+| 領域 | 状態 |
 |-------|------|
-| Phase 0 (設計) | 完了 |
-| Phase 1 (データパイプライン) | 完了 — ~21M ペア + 100M チャンク、加えて HPLT v3 / FineWeb-2 / zenz-llmjp サブセット追加、`datasets/phase3/train.jsonl` 200M rows 生成済 |
-| Phase 2 (AR ベースライン) | 完了 — 31.9M, manual 80/100, eval_v3 EM 0.412 |
-| Phase 3 (CTC-NAT + CVAE + 1.58-bit) | 進行中 — 受け入れテスト / `SharedCharTokenizer` / `CTCNAT` / `CVAE` / `BitLinear` / `curriculum_sampler` / オンライン KD 実装済。20M/90M の学習と速度評価を進行中 |
-| Phase 5 (Windows TSF DLL, AR 版) | 動作確認済 (`phase3_plan.md` で v1.0 範囲外に再定義、CLI `interactive.cpp` が出口) |
-| Phase 5 (fcitx5 プラグイン) | ソース実装済、未ビルド |
+| データパイプライン (v1) | `datasets/mixes/train_v1_200m.jsonl` 200M rows (chunks + zenz_llmjp + wiki + aozora + fineweb2 + hplt3)、コンポーネントは `datasets/corpus/v1/` |
+| データパイプライン (v2 corpus) | wikinews/aozora_dialogue/wikibooks/wiktionary/tatoeba の yomi 付与 + bunsetsu 化進行中 (6 pool、約 7M 句) |
+| 合成データ | synth_numeric (37K: 数詞×助数詞) + synth_numeric_ext (150K: 時刻/日付/通貨/分数/小数/連番) |
+| AR (Phase 2) | 完了 — 31.9M, eval_v3 EM 0.412、KD teacher として保管 |
+| CTC-NAT 90M step27500 | probe_v2 (467 項目) EM1=0.612 (+KenLM α=0.2 β=0.6 beam=5)、zenz-v2.5-small の 0.70 から 9pt 差、レイテンシ 13x 速 |
+| CTC-NAT 30M step50000 | probe_v2 EM1=0.499 (+KenLM α=0.4 β=0.3 beam=5) |
+| **phase3_v2 dry-run** | 準備完了、bunsetsu 完走待ち。30M scratch + 90M CTC teacher + 20M mix + 16K step。実行手順は `docs/phase3_v2_dryrun_runbook.md` |
+| CVAE probe | 188 項目、baseline EM1=0.585、domain-disagreement 47%。CVAE 実装後の評価基盤 |
+| Windows TSF DLL (AR 版) | 動作確認済、CLI `interactive_ctc.exe` が dry-run 出口 (TSF 統合は v1 範囲外) |
+| fcitx5 プラグイン | ソース実装済、未ビルド |
 
-Phase 2 の詳細は `docs/phase2_results.md`、Phase 3 計画は `docs/phase3_plan.md`、
-ベンチ比較は `docs/benchmark_comparison.md`。
+ベンチ集約は `docs/benchmark_comparison.md` (living doc)。詳細は
+`docs/probe_v2_4way_results.md`, `docs/cvae_probe_baseline.md`。
+過去 Phase / plan の詳細は `docs/old/` 配下。
 
 ## プロジェクト構成
 
 ```
 new-ime/
-├── src/                       # Python (モデル・学習・データ・評価)
+├── models/src/                # Python メイン実装 (モデル・学習・データ・評価)
 │   ├── model/
 │   │   ├── encoder.py         #   BERT / scratch エンコーダ
 │   │   ├── decoder.py         #   NAT デコーダ (FiLM 条件付け)
@@ -83,8 +90,7 @@ new-ime/
 │   ├── training/
 │   │   ├── train_ar.py        #   Phase 2 AR
 │   │   ├── train_ctc_nat.py   #   Phase 3 本線 (KD/GLAT/Mask-CTC/CVAE/QAT)
-│   │   └── kd.py              #   オンライン KD (hard-example 中心)
-│   ├── inference/
+│   │   └── kd.py              #   オンライン KD (AR/CTC teacher 両対応)
 │   └── eval/
 │       ├── metrics.py         #   edit distance, CharAcc, EM
 │       ├── run_eval.py        #   バックエンド抽象 + レイテンシ測定
@@ -92,72 +98,104 @@ new-ime/
 │       ├── ar_backend.py
 │       ├── zenz_backend.py
 │       └── fast_gen.py
-├── engine/                    # IME エンジンプラグイン
-│   ├── src/                   #   fcitx5 InputMethodEngineV2 (C++)
+├── engine/                    # IME エンジン一式 (C++)
+│   ├── src/                   #   fcitx5 InputMethodEngineV2 プラグイン
 │   │   ├── engine.{cpp,h}
-│   │   ├── composing_text.*   #   ローマ字→ひらがな
+│   │   ├── composing_text.*   #     ローマ字→ひらがな
 │   │   ├── preedit.*
-│   │   └── server_connector.* #   IPC クライアント
+│   │   └── server_connector.* #     IPC クライアント
 │   ├── win32/                 #   Windows TSF 統合 (DLL 動作確認済)
 │   │   ├── ffi_impl.cpp       #     ONNX Runtime C++ FFI
-│   │   ├── interactive.cpp    #     対話型コンソールデモ
-│   │   ├── test_ffi.cpp
-│   │   └── build.bat
-│   ├── new-ime-addon.conf     # fcitx5 メタデータ
-│   └── new-ime-im.conf
-├── server/                    # 推論サーバー (C++)
-│   └── src/
-│       ├── main.cpp
-│       ├── socket_server.*    #   Unix domain socket
-│       ├── ctc_decoder.*      #   CTC greedy / beam search
-│       └── conversion_engine.*#   変換ロジック (ONNX Runtime)
-├── protocol/                  # protobuf IPC スキーマ
-│   └── new_ime.proto
-├── scripts/                   # データ・学習・評価スクリプト
-│   ├── process_{wiki,aozora,livedoor,tatoeba}.py    # Phase 1 ソース処理
-│   ├── process_{hplt,fineweb2,zenz_subset}.py       # Phase 3 Step C 追加ソース
-│   ├── download_{hplt3_ja,fineweb2_ja,zenz_subset}.py  # HF ダウンローダ
-│   ├── postprocess.py / audit_data.py / audit_pools.py / audit_tokenizer.py
-│   ├── build_vocab.py / build_eval_set.py / dataset_stats.py
-│   ├── generate_chunks.py / mecab_to_tsv.py
-│   ├── build_phase3_train.py  # プール混合 + reservoir で train.jsonl 生成
-│   ├── run_all_evals.py / eval_ar_checkpoint.py / eval_gold.py
-│   ├── manual/                #   manual_test*.py (旧パス wrapper 互換あり)
-│   ├── bench/                 #   bench_*_speed.py (旧パス wrapper 互換あり)
-│   ├── gold/                  #   gen_gold_*.py (旧パス wrapper 互換あり)
-│   ├── print_comparison.py
-│   └── vast_train.sh          #   Vast.ai 学習スクリプト
-├── tools/                     # Rust ツール (WSL ビルド、rustc 1.85)
-│   ├── chunk-generator/       #   文節分割 + 1-3文節ウィンドウ
-│   ├── postprocess/           #   品質フィルタ (Rust 版)
-│   ├── build-vocab/           #   語彙構築
-│   ├── build-train-mix/       #   phase3 train.jsonl 混合 (Python scripts/build_phase3_train.py の Rust port)
-│   ├── process-zenz/          #   zenz サブセット処理 (Rust port)
-│   ├── audit-pools/           #   プール別監査 (Rust port)
-│   ├── audit-tokenizer/       #   tokenizer 検証
-│   ├── datacore/              #   共通データ型・I/O
-│   └── mecab-test/            #   mecab-rs 動作確認
-├── tests/                     # テスト (Python 128 pass + C++ 17)
-│   ├── test_tokenizer.py / test_model.py / test_metrics.py
-│   ├── test_mecab_pipeline.py / test_curriculum_sampler.py
-│   ├── test_bit_linear.py / test_kd.py / test_train_ctc_nat.py
-│   ├── test_dataset_reservoir.py / test_audit_pools.py
-│   └── cpp/
-│       ├── test_composing_text.cpp
-│       └── test_ctc_decoder.cpp
-├── configs/                   # 学習設定 YAML
-├── checkpoints/               # 学習チェックポイント (gitignore)
+│   │   ├── interactive.cpp    #     AR 版対話デモ
+│   │   ├── interactive_ctc.cpp #    CTC-NAT 版対話デモ (dry-run 出口)
+│   │   ├── build.bat / build_ctc.bat
+│   │   └── test_ffi.cpp
+│   ├── server/                #   推論サーバー + CTC decoder + KenLM
+│   │   └── src/
+│   │       ├── main.cpp
+│   │       ├── socket_server.*    #  Unix domain socket IPC
+│   │       ├── ctc_decoder.*      #  CTC greedy / prefix beam
+│   │       ├── lm_scorer_kenlm.*  #  KenLM shallow fusion
+│   │       └── conversion_engine.*
+│   ├── protocol/              #   protobuf IPC (engine ↔ server、現状 mock)
+│   │   └── new_ime.proto
+│   ├── new-ime-addon.conf     #   fcitx5 addon メタデータ
+│   └── new-ime-im.conf        #   fcitx5 IM メタデータ
+├── tools/                     # ツール (Rust + Python)
+│   ├── datacore/              #   Rust: 共通データ型・I/O
+│   ├── build-train-mix/       #   Rust: v1 mix builder
+│   ├── build-train-mix-v2/    #   Rust: v2 mix builder (sentence + bunsetsu span + synth)
+│   ├── chunk-generator/       #   Rust: 文節チャンク生成
+│   ├── postprocess/           #   Rust: 品質フィルタ
+│   ├── build-vocab/           #   Rust: 語彙構築
+│   ├── process-zenz/          #   Rust: zenz サブセット処理
+│   ├── audit-pools/           #   Rust: プール別監査
+│   ├── audit-tokenizer/       #   Rust: tokenizer 検証
+│   ├── mecab-test/            #   Rust: mecab-rs smoke
+│   ├── corpus_v2/             #   Python: v2 pipeline (bunsetsu_split, clean_v2, synth_*)
+│   ├── probe/                 #   Python: probe eval (run_probe_v2, run_cvae_probe, generate_v2)
+│   ├── bench/                 #   Python: speed bench (ar/ctc/zenz/fusion)
+│   ├── eval/                  #   Python: run_all_evals, eval_gold, print_comparison
+│   ├── manual/                #   Python: 手動テスト 100問
+│   ├── export/                #   Python: ONNX export
+│   ├── dict/                  #   Python: mozc dict import
+│   ├── ops/                   #   shell: deploy/mirror/compress_archive/finalize_v2_reorg
+│   └── old/                   #   legacy one-shot scripts (audit_data, process_*, gen_gold_* 等)
+├── models/
+│   ├── checkpoints/           # 学習チェックポイント (gitignore)
+│   │   ├── ar_v3_vast/        #   Phase 2 AR 31.9M (KD teacher)
+│   │   ├── ctc_nat_30m/       #   30M step50000
+│   │   ├── ctc_nat_90m/       #   90M step27500
+│   │   └── archive/           #   旧 smoke / 実験用 (zstd 圧縮済)
+│   ├── onnx/                  # 配布 ONNX + sidecar
+│   ├── dicts/                 # 辞書層 (fixed_dict_*, user_dict)
+│   ├── kenlm/                 # KenLM 言語モデル (.bin)
+│   └── tests/                 # テスト (Python + C++)
+│       ├── test_tokenizer.py / test_model.py / test_metrics.py
+│       ├── test_mecab_pipeline.py / test_curriculum_sampler.py
+│       ├── test_bit_linear.py / test_kd.py / test_train_ctc_nat.py
+│       ├── test_dataset_reservoir.py / test_audit_pools.py
+│       └── cpp/
+│           ├── test_composing_text.cpp
+│           └── test_ctc_decoder.cpp
+├── configs/                   # 学習設定 YAML (phase3_30m/phase3_90m など)
 ├── datasets/                  # データ (gitignore)
+│   ├── corpus/
+│   │   ├── v1/                #   旧 phase3 component pools
+│   │   └── v2/
+│   │       ├── sentences/     #     v2 文レベル (yomi 付)
+│   │       ├── bunsetsu/      #     v2 句レベル (Ginza)
+│   │       └── synth/         #     合成 (numeric / numeric_ext)
+│   ├── mixes/
+│   │   ├── train_v1_200m.jsonl #    旧 phase3/train.jsonl
+│   │   └── train_v2_20m.jsonl  #    (作成予定) phase3_v2 dry-run 用
+│   ├── eval/
+│   │   ├── eval_v3/            #    dev/test/train
+│   │   ├── gold_1k.jsonl
+│   │   ├── probe_v1.tsv        #    旧 116 項目 sentence-level
+│   │   ├── probe_v2.tsv        #    467 項目 phrase-level
+│   │   └── cvae_probe.tsv      #    188 項目 domain-labeled
+│   ├── raw/                    #   一次ソース (XML/CSV)
+│   ├── tokenizers/             #   共有トークナイザ
+│   └── audits/                 #   監査ログ
 ├── docker/                    # Docker 関連
 ├── docs/                      # ドキュメント
-│   ├── vision.md              #   最終構成ビジョン
-│   ├── roadmap.md             #   実装ロードマップ (Phase 0〜5)
-│   ├── phase3_plan.md         #   Phase 3 (CTC-NAT + CVAE + 1.58-bit) 詳細計画
-│   ├── data_pipeline.md       #   データパイプライン詳細
-│   ├── dataset_candidates.md  #   学習データ追加候補 (ライセンス整理)
-│   ├── phase2_results.md      #   Phase 2 AR 実験結果
-│   ├── benchmark_comparison.md#   zenz-v2.5 との比較
-│   └── external_review_notes.md
+│   ├── vision.md              #   最終構成ビジョン (未来目標の単一ソース)
+│   ├── benchmark_comparison.md      # 現状ベンチ集約 (living doc、頻繁更新)
+│   ├── phase3_v2_dryrun_runbook.md  # 現在進行中の dry-run 実行手順
+│   ├── probe_v2_4way_results.md     # probe_v2 (467) 4-way 測定詳細
+│   ├── cvae_probe_baseline.md       # CVAE probe ベースライン
+│   └── old/                   #   過去 plan / 完了 phase / superseded ドキュメント
+│       ├── roadmap.md               # 旧 Phase 0-5 ロードマップ
+│       ├── phase3_plan.md           # 旧 Phase 3 計画
+│       ├── phase2_results.md        # Phase 2 AR 実験結果
+│       ├── data_pipeline.md         # 旧データパイプライン詳細
+│       ├── dataset_candidates.md    # 学習データ候補整理
+│       ├── corpus_candidates_v2.md  # corpus_v2 候補
+│       ├── deployment.md            # vast.ai deploy (local 移行で superseded)
+│       ├── sweep_probe_v1_results.md # probe_v1 sweep (v2 で置換)
+│       ├── external_review_notes.md # 外部 review ノート
+│       └── 30m-50k-sample.txt       # 前回 30M training log
 ├── CHANGELOG.md
 ├── CMakeLists.txt             # C++ ビルド
 └── pyproject.toml             # Python (uv)
@@ -175,17 +213,21 @@ uv run pytest
 ### C++ テスト (gcc)
 
 ```bash
-g++ -std=c++20 -I engine/src -o test_composing tests/cpp/test_composing_text.cpp engine/src/composing_text.cpp && ./test_composing
-g++ -std=c++20 -I server/src -o test_ctc tests/cpp/test_ctc_decoder.cpp server/src/ctc_decoder.cpp && ./test_ctc
+g++ -std=c++20 -I engine/src -o test_composing models/tests/cpp/test_composing_text.cpp engine/src/composing_text.cpp && ./test_composing
+g++ -std=c++20 -I engine/server/src -o test_ctc models/tests/cpp/test_ctc_decoder.cpp engine/server/src/ctc_decoder.cpp && ./test_ctc
 ```
 
 ### Windows エンジン (MSVC, 動作確認済)
 
 ```cmd
 cd engine\win32
+rem AR 版 (動作確認済、v1 スコープ外)
 build.bat
-test_ffi.exe
 interactive.exe
+
+rem CTC-NAT 版 (phase3_v2 dry-run の出口)
+build_ctc.bat
+interactive_ctc.exe
 ```
 
 ### Linux fcitx5 プラグイン (未ビルド検証)
@@ -197,54 +239,53 @@ cmake --build build
 
 ## データパイプライン
 
-詳細は `docs/data_pipeline.md`。
+v1 パイプライン (phase3/train.jsonl 200M) の旧コマンド群は `docs/old/data_pipeline.md`
+参照。MeCab feature は **`features[17]` (仮名形出現形)** を使用。`features[6/7/8/9]`
+は不正 (詳細は `docs/old/phase2_results.md`)。
+
+v2 corpus パイプライン (現行):
 
 ```bash
-# Wikipedia
-uv run python scripts/process_wiki.py \
-    --input datasets/src/jawiki-latest-pages-articles.xml.bz2 \
-    --output datasets/wiki_sentences.jsonl \
-    --workers 16
+# v2 raw → yomi + sentence-level clean (既に完了)
+uv run python -m tools.corpus_v2.process_wikimedia --xml ... --out datasets/corpus/v2/sentences/wikibooks.jsonl
+uv run python -m tools.corpus_v2.clean_v2 --src ... --out datasets/corpus/v2/sentences/wikibooks.clean.jsonl
 
-# 青空文庫
-uv run python scripts/process_aozora.py \
-    --input datasets/src/utf8_all.csv.gz \
-    --output datasets/aozora_sentences.jsonl
+# bunsetsu 化 (v2 → 句単位、Ginza 使用)
+bash tools/corpus_v2/run_bunsetsu_all.sh
+# → datasets/corpus/v2/bunsetsu/{wikinews,aozora_dialogue,tatoeba,wikibooks,wiktionary}.jsonl
 
-# Livedoor / Tatoeba
-uv run python scripts/process_livedoor.py ...
-uv run python scripts/process_tatoeba.py ...
+# 合成データ
+uv run python -m tools.corpus_v2.synth_numeric --out datasets/corpus/v2/synth/numeric.jsonl
+uv run python -m tools.corpus_v2.synth_numeric_ext --out datasets/corpus/v2/synth/numeric_ext.jsonl
 
-# 後処理 (品質フィルタ)
-uv run python scripts/postprocess.py \
-    --input datasets/wiki_sentences.jsonl datasets/aozora_sentences.jsonl \
-    --output datasets/all_clean.jsonl --stats
-
-# 評価セット分離
-uv run python scripts/build_eval_set.py \
-    --input datasets/all_clean.jsonl \
-    --out-dir datasets/splits/
-
-# 語彙構築
-uv run python scripts/build_vocab.py \
-    --input datasets/all_clean.jsonl \
-    --output datasets/vocab.json
+# 20M training mix 構築 (phase3_v2 dry-run 用)
+uv run python -m tools.build-train-mix-v2.build \
+    --output datasets/mixes/train_v2_20m.jsonl --total 20000000 \
+    --sentence-src datasets/mixes/train_v1_200m.jsonl \
+    --sentence-src datasets/corpus/v2/sentences/wikinews.clean.jsonl ... \
+    --bunsetsu-src datasets/corpus/v2/bunsetsu \
+    --synth-src datasets/corpus/v2/synth/numeric.jsonl \
+    --synth-src datasets/corpus/v2/synth/numeric_ext.jsonl \
+    --ratio-sentence 0.555 --ratio-bunsetsu2 0.278 \
+    --ratio-bunsetsu1 0.055 --ratio-synth 0.111
 ```
 
-MeCab feature は **`features[17]` (仮名形出現形)** を使用。
-`features[6/7/8/9]` は不正 (詳細は `docs/phase2_results.md`)。
+詳細な手順は `docs/phase3_v2_dryrun_runbook.md`。
 
 ## 評価
 
 ```bash
-# 全ベンチ一括 (zenz-v2.5, 自前 AR, チャンクモデル対比)
-uv run python scripts/run_all_evals.py
+# 現行の主力: phrase-level probe (467 項目、7 category)
+uv run python -m tools.probe.run_probe_v2 --models ctc_nat_90m-step27500
 
-# ゴールド (1000件、人手検証)
-uv run python scripts/eval_gold.py --backend ar --checkpoint ...
+# KenLM 付き α/β sweep (WSL 経由、kenlm py は Linux のみ)
+wsl -- bash -c "bash /mnt/d/Dev/new-ime/tools/probe/sweep_probe_v2_kenlm.sh ctc_nat_90m-step27500"
 
-# 手動テスト (100問)
-uv run python scripts/manual_test.py
+# CVAE 検証 probe (188 項目、domain 別 EM)
+uv run python -m tools.probe.run_cvae_probe --backend ctc_nat_90m
+
+# 旧 sentence-level ベンチ (eval_v3 / AJIMEE / manual)
+uv run python -m tools.eval.run_all_evals --manual 100 --evalv3 300 --ajimee 100
 ```
 
 ## 参考文献
@@ -261,7 +302,7 @@ uv run python scripts/manual_test.py
 
 このリポジトリでは、コードとモデル/データ成果物でライセンスが異なる。
 
-- コード (`src/`, `server/`, `engine/`, `tools/`, `scripts/` など): [MIT](LICENSE)
+- コード (`models/src/`, `engine/`, `tools/` など): [MIT](LICENSE)
 - モデル重み・学習チェックポイント・混合学習 JSONL・蒸留成果物: [CC BY-SA 4.0](MODEL_LICENSE)
 - データソースごとの注意と帰属: [DATA_LICENSES.md](DATA_LICENSES.md), [ATTRIBUTION.md](ATTRIBUTION.md)
 

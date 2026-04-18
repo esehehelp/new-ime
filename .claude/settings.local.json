@@ -152,7 +152,13 @@
       "Bash(grep -cv -E \"^#|^$\" datasets/probe_v2/probe.tsv)",
       "Bash(grep -v -E \"^#|^$\" datasets/probe_v2/probe.tsv)",
       "Bash(Read *)",
-      "Bash(python -c \"import json,sys; v=json.load\\(sys.stdin\\); print\\('vocab size:', len\\(v\\)\\); pua=[k for k in v if any\\(0xE000<=ord\\(c\\)<=0xF8FF for c in k\\)]; print\\('PUA tokens:', pua[:10]\\)\")"
+      "Bash(python -c \"import json,sys; v=json.load\\(sys.stdin\\); print\\('vocab size:', len\\(v\\)\\); pua=[k for k in v if any\\(0xE000<=ord\\(c\\)<=0xF8FF for c in k\\)]; print\\('PUA tokens:', pua[:10]\\)\")",
+      "Bash(python *)",
+      "Bash(find scripts *)",
+      "Bash(target/release/build-train-mix-v2.exe --help)",
+      "Bash(target/release/build-train-mix-v2.exe --output /tmp/mix_rust_smoke.jsonl --total 10000 --sentence-src datasets/v2/wikinews_v2.clean.jsonl --sentence-src datasets/v2/aozora_dialogue.jsonl --bunsetsu-src datasets/v2_bunsetsu --synth-src datasets/v2_bunsetsu/synth_numeric.jsonl --synth-src datasets/v2_bunsetsu/synth_numeric_ext.jsonl --seed 42 --shuffle-buffer 1000)",
+      "Bash(tools/target/release/build-train-mix-v2.exe --output /tmp/mix_rust_smoke.jsonl --total 100000 --sentence-src datasets/v2/wikinews_v2.clean.jsonl --sentence-src datasets/v2/aozora_dialogue.jsonl --bunsetsu-src datasets/v2_bunsetsu --synth-src datasets/v2_bunsetsu/synth_numeric.jsonl --synth-src datasets/v2_bunsetsu/synth_numeric_ext.jsonl --seed 42 --shuffle-buffer 10000 --report-every 25000)",
+      "Bash([ -f \"$d/__init__.py\" ])"
     ]
   }
 }
