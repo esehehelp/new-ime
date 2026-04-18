@@ -26,6 +26,7 @@ from src.eval.bench_loaders import (
     load_manual_test,
     sample_items,
 )
+from src.eval.ctc_nat_backend import CTCNATBackend
 from src.eval.metrics import EvalResult
 from src.eval.zenz_backend import ZenzV2Backend
 
@@ -152,6 +153,84 @@ def build_models(args) -> list[tuple[str, callable]]:
             "ar_v3_chunks-greedy",
             lambda: ARCheckpointBackend(
                 "checkpoints/ar_v3_chunks/best.pt", beam_width=1
+            ),
+        ),
+        (
+            "ctc_nat_20m_fast_kd-step8000-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/ctc_nat_local_20m_fast_kd/checkpoint_step_8000.pt"
+            ),
+        ),
+        (
+            "ctc_nat_20m_fast_kd-final-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/ctc_nat_local_20m_fast_kd/final.pt"
+            ),
+        ),
+        (
+            "ctc_nat_30m_fast_kd-best-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/ctc_nat_local_30m_fast_kd/best.pt"
+            ),
+        ),
+        (
+            "ctc_nat_30m_fast_kd-step12000-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/ctc_nat_local_30m_fast_kd/checkpoint_step_12000.pt"
+            ),
+        ),
+        (
+            "ctc_nat_20m_vocab4k-best-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/ctc_nat_local_20m_vocab4k/best.pt"
+            ),
+        ),
+        (
+            "ctc_nat_90m_step5000-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/vast_mirror/ctc_nat_90m_phase3mix/checkpoint_step_5000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+            ),
+        ),
+        (
+            "ctc_nat_90m_step10000-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/vast_mirror/ctc_nat_90m_phase3mix/checkpoint_step_10000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+            ),
+        ),
+        (
+            "ctc_nat_90m_step15000-greedy",
+            lambda: CTCNATBackend(
+                "checkpoints/vast_mirror/ctc_nat_90m_phase3mix/checkpoint_step_15000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+            ),
+        ),
+        (
+            "ctc_nat_90m_step15000-beam8",
+            lambda: CTCNATBackend(
+                "checkpoints/vast_mirror/ctc_nat_90m_phase3mix/checkpoint_step_15000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+                beam_width=8,
+            ),
+        ),
+        (
+            "ctc_nat_90m_step15000-chunk16x8",
+            lambda: CTCNATBackend(
+                "checkpoints/vast_mirror/ctc_nat_90m_phase3mix/checkpoint_step_15000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+                chunk_threshold=16,
+                chunk_size=8,
+            ),
+        ),
+        (
+            "ctc_nat_90m_step15000-beam8+chunk",
+            lambda: CTCNATBackend(
+                "checkpoints/vast_mirror/ctc_nat_90m_phase3mix/checkpoint_step_15000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+                beam_width=8,
+                chunk_threshold=16,
+                chunk_size=8,
             ),
         ),
     ]
