@@ -296,16 +296,25 @@ struct Args {
 // line is ``kana<TAB>surface`` — to register multiple homophones, just
 // repeat the kana on separate lines. That format is what mozc's open
 // dictionary already produces, so an import script can dump it directly.
+//
+// With mozc-ut loaded the entry count approaches 1.5M, so the lookup
+// path uses a hash-map keyed by the exact kana bytes plus a per-byte-
+// length bucket, turning match_prefix into O(max_len_bucket) hash
+// lookups (~20 probes) regardless of total entry count.
 struct FixedDict {
-    // All surfaces for one reading, ordered by whatever input order the
-    // TSV had (first entry is treated as the fallback primary).
     struct Entry {
         std::string kana;
         std::vector<std::string> surfaces;
     };
 
-    // Sorted by descending kana size for longest-prefix matching.
     std::vector<Entry> entries;
+    // kana (byte string) -> index into entries. Used at load time to
+    // merge homophones and at lookup time to check whether a given
+    // prefix is a key.
+    std::unordered_map<std::string, size_t> by_kana;
+    // Sorted distinct byte-lengths of all keys, descending — used by
+    // match_prefix to probe lengths from longest to shortest.
+    std::vector<size_t> lengths_desc;
 
     size_t total_surfaces() const {
         size_t n = 0;
@@ -313,56 +322,55 @@ struct FixedDict {
         return n;
     }
 
-    // Cumulative: every load() call merges into the existing entries.
-    // Earlier-loaded paths (user dict) keep their surface ordering, so
-    // when homophones from a later file overlap they're appended after
-    // the existing ones. The longest-prefix sort is re-done at the end.
     bool load(const std::string& path) {
         std::ifstream f(path);
         if (!f) return false;
 
-        // Bucket existing entries for O(1) kana->index lookup during merge.
-        std::unordered_map<std::string, size_t> index_of;
-        for (size_t i = 0; i < entries.size(); ++i) index_of[entries[i].kana] = i;
-
         std::string line;
+        line.reserve(256);
         while (std::getline(f, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.empty() || line[0] == '#') continue;
             auto tab = line.find('\t');
             if (tab == std::string::npos) continue;
+            if (tab == 0 || tab + 1 >= line.size()) continue;
+
             std::string kana = line.substr(0, tab);
             std::string surface = line.substr(tab + 1);
-            if (kana.empty() || surface.empty()) continue;
 
-            auto it = index_of.find(kana);
-            if (it == index_of.end()) {
+            auto it = by_kana.find(kana);
+            if (it == by_kana.end()) {
                 Entry e;
                 e.kana = kana;
-                e.surfaces.push_back(surface);
-                index_of.emplace(kana, entries.size());
+                e.surfaces.push_back(std::move(surface));
+                by_kana.emplace(std::move(kana), entries.size());
                 entries.push_back(std::move(e));
             } else {
                 auto& existing = entries[it->second].surfaces;
                 bool dup = false;
                 for (const auto& s : existing) if (s == surface) { dup = true; break; }
-                if (!dup) existing.push_back(surface);
+                if (!dup) existing.push_back(std::move(surface));
             }
         }
-        std::sort(entries.begin(), entries.end(),
-                  [](const Entry& a, const Entry& b) {
-                      return a.kana.size() > b.kana.size();
-                  });
+
+        // Rebuild descending-length bucket index.
+        std::vector<size_t> uniq_lengths;
+        uniq_lengths.reserve(entries.size());
+        for (const auto& e : entries) uniq_lengths.push_back(e.kana.size());
+        std::sort(uniq_lengths.begin(), uniq_lengths.end(), std::greater<size_t>());
+        uniq_lengths.erase(std::unique(uniq_lengths.begin(), uniq_lengths.end()),
+                           uniq_lengths.end());
+        lengths_desc = std::move(uniq_lengths);
         return true;
     }
 
-    // Returns (pointer-to-entry, bytes_consumed) if a dict key matches as
-    // a prefix of `kana` starting at `at`. Null pointer + 0 = no match.
     std::pair<const Entry*, size_t> match_prefix(const std::string& kana, size_t at) const {
-        for (const auto& e : entries) {
-            if (at + e.kana.size() <= kana.size()
-                && kana.compare(at, e.kana.size(), e.kana) == 0) {
-                return {&e, e.kana.size()};
+        const size_t remain = kana.size() - at;
+        for (size_t L : lengths_desc) {
+            if (L == 0 || L > remain) continue;
+            auto it = by_kana.find(kana.substr(at, L));
+            if (it != by_kana.end()) {
+                return {&entries[it->second], L};
             }
         }
         return {nullptr, 0};

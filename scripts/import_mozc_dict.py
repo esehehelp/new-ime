@@ -60,6 +60,22 @@ def has_kanji(s: str) -> bool:
     return False
 
 
+def kanji_ratio(s: str) -> float:
+    """Fraction of codepoints in surface that are kanji. Wikipedia titles
+    in mozc-ut include many "半分かな+kanji" entries that are not useful
+    as IME conversions — a kanji ratio ≥ 0.5 filters most of those while
+    still keeping legitimate compound terms."""
+    if not s:
+        return 0.0
+    kanji = 0
+    total = 0
+    for c in s:
+        total += 1
+        if "\u4E00" <= c <= "\u9FFF" or "\u3400" <= c <= "\u4DBF":
+            kanji += 1
+    return kanji / total if total else 0.0
+
+
 # Readings that are almost always particles / functional morphemes;
 # even with a cost filter the mozc dict emits rare kanji spellings for
 # these that hurt more than they help. Kept as literals so it's obvious
@@ -78,7 +94,11 @@ PARTICLE_BLACKLIST = {
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--src", default="tools/mozc_import", help="dir with dictionary00.txt..09.txt")
+    parser.add_argument(
+        "--src",
+        default="tools/mozc_import",
+        help="dir — all *.txt under it are consumed (recursive)",
+    )
     parser.add_argument("--out", default="models/fixed_dict_mozc.tsv")
     parser.add_argument(
         "--max-cost",
@@ -104,6 +124,18 @@ def main() -> None:
         default=True,
         help="Drop entries whose surface is pure kana (CTC handles these) — default on",
     )
+    parser.add_argument(
+        "--min-kanji-ratio",
+        type=float,
+        default=0.3,
+        help="Drop entries where kanji fraction of surface is below this (filters jawiki title noise)",
+    )
+    parser.add_argument(
+        "--max-kana-len",
+        type=int,
+        default=12,
+        help="Drop very long readings (Wikipedia phrase titles) that over-match common kana sequences",
+    )
     args = parser.parse_args()
 
     src_dir = Path(args.src)
@@ -115,7 +147,7 @@ def main() -> None:
     seen_pair: set[tuple[str, str]] = set()
     total_in = 0
     kept_in = 0
-    for f in sorted(src_dir.glob("dictionary*.txt")):
+    for f in sorted(src_dir.rglob("*.txt")):
         for raw in f.read_text(encoding="utf-8").splitlines():
             total_in += 1
             parts = raw.split("\t")
@@ -130,6 +162,12 @@ def main() -> None:
                 continue
             if len(kana) < args.min_kana_len:
                 continue
+            # kana byte length ~3 bytes/char in UTF-8, so 12 char => ~36 bytes.
+            # mozc-ut Wikipedia titles ("あぁいいちがい..." kind of thing)
+            # are typically much longer and only match one specific phrase,
+            # so they shadow good short matches.
+            if len(kana) > args.max_kana_len * 3:
+                continue
             if not is_all_hiragana(kana):
                 continue
             if surface == kana:
@@ -137,6 +175,8 @@ def main() -> None:
             if kana in PARTICLE_BLACKLIST:
                 continue
             if args.require_kanji and not has_kanji(surface):
+                continue
+            if kanji_ratio(surface) < args.min_kanji_ratio:
                 continue
             if (kana, surface) in seen_pair:
                 continue
