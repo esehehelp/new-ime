@@ -11,7 +11,7 @@ option(ENABLE_ONNX "Build with ONNX Runtime inference (otherwise uses mock)" OFF
 # ---- Protobuf ----
 find_package(Protobuf 3.12)
 if(Protobuf_FOUND)
-    protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS protocol/new_ime.proto)
+    protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS engine/protocol/new_ime.proto)
     add_library(newime_proto STATIC ${PROTO_SRCS} ${PROTO_HDRS})
     target_include_directories(newime_proto PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
     target_link_libraries(newime_proto PUBLIC protobuf::libprotobuf-lite)
@@ -23,10 +23,10 @@ endif()
 
 # ---- Inference server ----
 add_executable(new-ime-server
-    server/src/main.cpp
-    server/src/socket_server.cpp
-    server/src/conversion_engine.cpp
-    server/src/ctc_decoder.cpp
+    engine/server/src/main.cpp
+    engine/server/src/socket_server.cpp
+    engine/server/src/conversion_engine.cpp
+    engine/server/src/ctc_decoder.cpp
 )
 target_include_directories(new-ime-server PRIVATE server/src)
 
@@ -91,13 +91,13 @@ install(TARGETS new-ime-server DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/new-ime"
 # ---- Tests ----
 enable_testing()
 
-add_executable(test_composing_text tests/cpp/test_composing_text.cpp)
+add_executable(test_composing_text models/tests/cpp/test_composing_text.cpp)
 target_link_libraries(test_composing_text PRIVATE newime_engine_core)
 add_test(NAME test_composing_text COMMAND test_composing_text)
 
-add_executable(test_ctc_decoder tests/cpp/test_ctc_decoder.cpp)
+add_executable(test_ctc_decoder models/tests/cpp/test_ctc_decoder.cpp)
 target_link_libraries(test_ctc_decoder PRIVATE newime_engine_core)
 target_include_directories(test_ctc_decoder PRIVATE server/src)
 # Link CTC decoder source directly for testing
-target_sources(test_ctc_decoder PRIVATE server/src/ctc_decoder.cpp)
+target_sources(test_ctc_decoder PRIVATE engine/server/src/ctc_decoder.cpp)
 add_test(NAME test_ctc_decoder COMMAND test_ctc_decoder)

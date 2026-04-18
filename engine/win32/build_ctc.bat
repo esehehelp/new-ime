@@ -4,16 +4,16 @@ REM Build interactive_ctc.exe: CTC-NAT ONNX + C++ beam search + optional KenLM.
 REM
 REM Outputs into build/win32. Requires:
 REM   - onnxruntime unpacked under tools/onnxruntime-win-x64-* (same as build.bat)
-REM   - server/third_party/kenlm cloned
+REM   - engine/server/third_party/kenlm cloned
 REM Builds KenLM via CMake the first time, then links kenlm.lib + kenlm_util.lib.
 
 set SCRIPT_DIR=%~dp0
 for %%I in ("%SCRIPT_DIR%..\..") do set REPO_ROOT=%%~fI
 set OUT_DIR=%REPO_ROOT%\build\win32
 set ORT_DIR=%REPO_ROOT%\tools\onnxruntime-win-x64-1.22.0
-set KENLM_SRC=%REPO_ROOT%\server\third_party\kenlm
+set KENLM_SRC=%REPO_ROOT%\engine\server\third_party\kenlm
 set KENLM_BUILD=%REPO_ROOT%\build\kenlm_win
-set SERVER_SRC=%REPO_ROOT%\server\src
+set SERVER_SRC=%REPO_ROOT%\engine\server\src
 
 if not exist "%ORT_DIR%" (
     echo onnxruntime not found at %ORT_DIR%
@@ -22,7 +22,7 @@ if not exist "%ORT_DIR%" (
 )
 if not exist "%KENLM_SRC%" (
     echo kenlm source not found at %KENLM_SRC%
-    echo git clone https://github.com/kpu/kenlm server/third_party/kenlm
+    echo git clone https://github.com/kpu/kenlm engine/server/third_party/kenlm
     exit /b 1
 )
 
@@ -57,7 +57,7 @@ if not exist "%KENLM_BUILD%\lib\Release\kenlm.lib" (
 
 pushd "%SCRIPT_DIR%"
 
-echo === Compiling server/src + engine/win32 with kenlm ===
+echo === Compiling engine/server/src + engine/win32 with kenlm ===
 cl /EHsc /std:c++17 /O2 /utf-8 ^
     /DNEWIME_ENABLE_KENLM /DNOMINMAX /DKENLM_MAX_ORDER=6 ^
     /I"%ORT_DIR%\include" ^
