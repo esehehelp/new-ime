@@ -110,7 +110,7 @@ wc -l datasets/mixes/train_v2_20m.jsonl
 
 ## Step 2: 30M scratch training
 
-90M step27500 を CTC teacher、cosine→0 LR、16K step。
+90M step27500 を CTC teacher、cosine→0 LR、**160K step** (local 3060 で ~12h)。
 
 ```powershell
 .\.venv\Scripts\python.exe -m models.src.training.train_ctc_nat `
@@ -118,18 +118,18 @@ wc -l datasets/mixes/train_v2_20m.jsonl
     --dev datasets/eval/eval_v3/dev.jsonl `
     --preset phase3_30m `
     --tokenizer-path models/checkpoints/ctc_nat_90m/checkpoint_step_27500_tokenizer.json `
-    --batch-size 32 `
+    --batch-size 48 `
     --grad-accum 4 `
     --max-seq-len 128 `
     --max-context 40 `
     --fp16 `
-    --num-workers 8 `
+    --num-workers 0 `
     --max-train-samples 0 `
     --max-dev-samples 2000 `
-    --max-steps 16000 `
+    --max-steps 160000 `
     --epochs 99 `
     --lr 1.5e-4 `
-    --warmup-steps 500 `
+    --warmup-steps 1000 `
     --lr-schedule cosine `
     --weight-decay 0.01 `
     --grad-clip 1.0 `
@@ -141,27 +141,61 @@ wc -l datasets/mixes/train_v2_20m.jsonl
     --kd-temperature 2.0 `
     --kd-alpha 0.3 `
     --kd-alpha-final 0.1 `
-    --kd-alpha-decay-start 8000 `
-    --kd-alpha-decay-steps 8000 `
-    --kd-start-step 2000 `
-    --kd-warmup-steps 1000 `
+    --kd-alpha-decay-start 12000 `
+    --kd-alpha-decay-steps 20000 `
+    --kd-start-step 4000 `
+    --kd-warmup-steps 2000 `
     --kd-gate-mode low_conf `
-    --kd-hard-threshold 0.85 `
+    --kd-hard-threshold 0.92 `
     --kd-every 4 `
     --output models/checkpoints/ctc_nat_30m_v2_dryrun
 ```
 
-### VRAM 見積もり (3060 12GB、batch 32、seq 128)
+### KD schedule の形 (前寄せ型)
 
-| 区分 | 推定 |
+- **0-4000**: scratch 独走 (KD off)
+- **4000-6000**: KD warmup、α 0 → 0.3 線形
+- **6000-12000**: KD α=0.3 定常、teacher 最大引きこみ期
+- **12000-32000**: KD α decay、0.3 → 0.1 線形
+- **32000-160000**: KD α=0.1 定常、長い tail で student 自走
+
+### 前寄せ型を選んだ根拠
+
+**CTC teacher の弱点共有問題**: student (CTC-NAT 30M) と teacher (CTC-NAT 90M)
+は同じアーキテクチャで、弱点 (numeric ほぼ 0%、homophone ~60%、EM5==EM1 の候補
+多様性不足) を共有している。teacher に引きこみ続けても弱点は補正されない。
+むしろ student が自由に探索する機会を奪う。
+
+**AR teacher の過学習傾向**: 過去の 30M 50K run (AR teacher、KD α=0.075 → 0.1
+long-tail) では eval で過学習傾向が出た。teacher の top-1 を長く模倣することで
+student が supervision bias に囚われる。
+
+**前寄せ型の設計思想**:
+1. **教師介入期 (4K-12K)**: teacher が student を正しい basin に引き込む。
+   scratch からの迷走を防ぎ、早期収束を促す
+2. **移行期 (12K-32K)**: α を 0.3 → 0.1 へ decay。teacher から student へ
+   主導権を渡す
+3. **自走期 (32K-160K)**: 弱い KD (α=0.1) を残し teacher の方向性参照だけ
+   維持、student 自身の探索で弱点カテゴリを掘る
+
+long-tail decay より、明示的に「介入期」「自走期」を切り分ける。同構造 teacher
+の限界を受け入れた設計。
+
+**Windows 注**: `--num-workers 0` が安全。8 にすると DataLoader が worker に
+in-memory dataset を pickle 複製しようとして MemoryError (20M 行 × 8 worker =
+RAM 32GB 要求)。
+
+### VRAM 見積もり (3060 12GB、batch 48、seq 128)
+
+| 区分 | 実測 / 推定 |
 |---|---:|
-| 30M student params + opt/grad | ~0.4 GB |
-| 30M student activation (batch 32, seq 128) | ~0.6 GB |
-| 90M CTC teacher params fp16 | ~0.2 GB |
-| 90M CTC teacher forward activation (batch 32, seq 128) | ~0.6 GB |
-| **peak 合計** | **~1.8-2.5 GB (15-20% VRAM)** |
+| 30M student params + opt/grad | 0.40 GB |
+| activation (batch 48, seq 128) | 0.95 GB |
+| total estimate | 1.35 GB |
+| **cuda peak (測定値)** | **3.50 GB (29% of 12GB)** |
 
-3060 12GB の 15-20% 程度。余裕大。万一 OOM の場合は `--batch-size 24` or `16`。
+batch 48 でも 3060 12GB の 30% 程度に収まる。余裕あり。OOM 時は
+`--batch-size 32` に下げる。
 
 **seq 128 に下げた背景**: teacher (90M step27500) の pos_embedding が
 max_positions=128 で学習済み。student 側を 256 に拡張しても teacher 側で
@@ -185,8 +219,8 @@ uv run python -m tools.probe.run_probe_v2 \
 # CVAE probe (188 items, domain 別 EM)
 uv run python -m tools.probe.run_cvae_probe \
     --backend ctc_nat_30m \
-    --ckpt models/checkpoints/ctc_nat_30m_v2_dryrun/checkpoint_step_16000.pt \
-    --out results/phase3_v2_dryrun/cvae_16k.json
+    --ckpt models/checkpoints/ctc_nat_30m_v2_dryrun/checkpoint_step_160000.pt \
+    --out results/phase3_v2_dryrun/cvae_160k.json
 ```
 
 ## 前回 30M 50k run との差分
@@ -196,25 +230,37 @@ uv run python -m tools.probe.run_cvae_probe \
 | teacher | AR (ar_v3_vast/best.pt) | **CTC (90M step27500)** |
 | KD 損失 | text round-trip + CTC | **直接 logit KL (temp=2.0)** |
 | kd-alpha | 0.075 → 0.1 | **0.3 → 0.1** |
-| kd-start-step | 6000 | **2000** |
+| batch-size | 32 | **48** (3060 VRAM 余裕) |
+| kd-start-step | 6000 | **4000** (早期から教師引きこみ) |
 | kd-every | 32 (3%) | **4 (25%)** |
 | LR peak | 3e-4 | **1.5e-4** |
+| LR warmup | (暗黙) | **1000 step** |
 | LR schedule | warmup→flat | **warmup→cosine→0** |
-| max-steps | 50000 | **16000** |
+| max-steps | 50000 | **160000** (~10-12h 3060) |
 | seq_len | 128 | 128 (teacher 90M の max_positions が 128 のため一致) |
 | max-context | 32 | **40** |
 | train 形式 | eval_v3/train.jsonl (2M) | **mixes/train_v2_20m.jsonl (20M)** |
-| checkpoint-every | 2000 | **1000** |
-| kd-hard-threshold | 0.95 | **0.85** |
+| checkpoint-every | 2000 | **1000** (160 ckpt、granular 監視) |
+| eval-every | (定例 2000) | **500** (より頻繁) |
+| kd-hard-threshold | 0.95 | **0.92** |
+| KD decay 設計 | linear long-tail | **前寄せ (12K-32K で 0.3→0.1)** |
+| num-workers | 8 | **0** (Windows multiprocessing pickle 爆発回避) |
 
 ## 中断判断 (user 監視時の目安)
 
-- **step 0-1000**: loss 発散 (>10 持続)、blank_ratio > 0.99 固着 →
-  ハイパラ致命的齟齬、中断
-- **step 2000-8000**: KD on 期。kd_loss が CTC loss 比で発散 →
-  teacher-student 不整合、KD 設定見直し
-- **step 8000+**: eval_v3 dev loss + probe_v2 EM trajectory で判定。
-  monotonic 改善なら継続
+- **step 0-1000**: LR warmup 期。loss 発散 (>10 持続)、blank_ratio > 0.99
+  固着 → ハイパラ致命的齟齬、中断
+- **step 1000-4000**: scratch 独走期 (KD off)。loss が単調減少しない or
+  blank 固着 → モデル構造 / データ齟齬
+- **step 4000-6000**: KD warmup 期 (α 0→0.3 漸増)。kd_loss が CTC loss 比で
+  発散 → teacher-student 不整合、KD 設定見直し
+- **step 6000-12000**: KD α=0.3 定常、teacher 引きこみ最大。eval 改善幅
+  最大期待
+- **step 12000-32000**: KD decay 期 (0.3 → 0.1)。student 自走へ遷移、eval
+  plateau or 微減は正常 (過学習でなければ OK)
+- **step 32000-160000**: KD α=0.1 定常の long tail。eval が plateau なら
+  計画通り、monotonic に悪化したら早期終了検討
+- **step 160000**: 完走。probe_v2 + cvae_probe で最終評価
 
 ## 未実装 / 後工程
 
