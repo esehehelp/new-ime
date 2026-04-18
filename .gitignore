@@ -42,11 +42,8 @@ tools/target/
 checkpoints/
 wandb/
 
-# Data
-data/raw/
-data/processed/
+# Data — broad ignore (HF 経由配布、git には入れない)
 datasets/
-checkpoints/
 results/
 *.bz2
 *.gz
@@ -65,22 +62,20 @@ Thumbs.db
 # Training and bench logs
 logs/
 
-# Large downloaded / built artifacts
-models/*.onnx
-models/*.bin
+# Models — broad ignore, コードとテストのみ track
+models/*
+!models/src/
+!models/tests/
+
+# Other large artifacts
 tools/onnxruntime-win-x64-*/
-server/third_party/kenlm/
+engine/server/third_party/kenlm/
 build/
 
-# Generated mozc/mozc-ut dict artifact (regenerable via scripts/import_mozc_dict.py)
-models/fixed_dict_mozc.tsv
-models/fixed_dict_mozc_ut*.tsv
+# Dict / external dicts source (regenerable)
 tools/mozc_import/
 tools/merge-ut-dictionaries/
 tools/mozc_ut_import/
-
-# Probe backups (regenerable)
-datasets/probe_v2/probe_v1_pilot50.tsv
 
 # Sweep per-config artifacts (regenerable via scripts/sweep_interactive_ctc.py)
 results/sweep_*/alpha*.json
