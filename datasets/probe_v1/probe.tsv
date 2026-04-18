@@ -1,0 +1,136 @@
+# Multi-domain probe set for α/β sweep. One input per line.
+# Format: category<TAB>reading<TAB>expected_surface
+# Exact-match on expected_surface is the primary metric; top-3 inclusion is
+# secondary. When the target is ambiguous (multiple valid surfaces) we
+# pick one as the reference and note the category as "choice" — those
+# are filtered out of strict EM but kept for top-3 analysis.
+
+# ---- general: everyday conversation ----
+general	きょうはいいてんきだ	今日はいい天気だ
+general	あしたもきっとはれる	明日もきっと晴れる
+general	ともだちとしょくじした	友達と食事した
+general	えきでまちあわせしよう	駅で待ち合わせしよう
+general	いぬをさんぽにつれてった	犬を散歩に連れてった
+general	あたらしいくるまをかった	新しい車を買った
+general	けさはやくおきた	今朝早く起きた
+general	ゆうごはんをたべおわった	夕ご飯を食べ終わった
+general	らいしゅうはいそがしい	来週は忙しい
+general	でんわをかけなおします	電話をかけ直します
+general	もういちどおねがいします	もう一度お願いします
+general	あのみせのらーめんはおいしい	あの店のラーメンは美味しい
+general	ほっかいどうにりょこうにいく	北海道に旅行に行く
+general	こどもたちがあそんでいる	子供たちが遊んでいる
+general	つかれたからねる	疲れたから寝る
+general	あめがふりそうだ	雨が降りそうだ
+general	ねつがあるからやすむ	熱があるから休む
+general	おはようございます	おはようございます
+general	ありがとうございました	ありがとうございました
+general	しつもんがあります	質問があります
+
+# ---- tech: software/IT jargon ----
+tech	みっともなにほんしゅうせいする	git に本修正する
+tech	うぇぶあぷりのばっくえんどをしゅうせいした	ウェブアプリのバックエンドを修正した
+tech	でーたべーすのすきーまをへんこうする	データベースのスキーマを変更する
+tech	あぷりけーしょんをさいきどうしてください	アプリケーションを再起動してください
+tech	めもりりーくのげんいんをちょうさする	メモリリークの原因を調査する
+tech	こうかんせいをいじしたい	互換性を維持したい
+tech	かいはつかんきょうをこうちくする	開発環境を構築する
+tech	ぷっしゅすればじどうでびるどされる	プッシュすれば自動でビルドされる
+tech	あぷろーどしたぞうをかくにんしてください	アップロードした画像を確認してください
+tech	ひょうじゅんにゅうしゅつりょくをりだいれくとする	標準入出力をリダイレクトする
+tech	うんてぃんぐてすとがしっぱいした	ユニットテストが失敗した
+tech	きのうしじゅんをみたすために	機能仕様を満たすために
+tech	がいぶえーぴーあいのにんしょうをじっそうする	外部APIの認証を実装する
+tech	にんめいくうかんをわけてかんりする	名前空間を分けて管理する
+tech	ひゃくみりびょうでおうとうする	百ミリ秒で応答する
+tech	しーぴーゆーふかりつがあがっている	CPU負荷率が上がっている
+tech	どうじせいせいぎょをついかする	同時制御を追加する
+tech	さーばーのろぐをかくにんした	サーバーのログを確認した
+tech	もくじょーじゅうようないちだ	重要な位置だ
+tech	ていきてきにばっくあっぷをとる	定期的にバックアップを取る
+
+# ---- medical: clinical/admin ----
+medical	しゅじゅつどういしょのさいかくにん	手術同意書の再確認
+medical	しんりょうじょうほうていきょうしょ	診療情報提供書
+medical	ほうもんかんごけいかくしょ	訪問看護計画書
+medical	がいらいかんごでのかくにんじこう	外来看護での確認事項
+medical	せいしんしつかんをうたがう	精神疾患を疑う
+medical	けつえきけんさをおこなった	血液検査を行った
+medical	きおうれきとかぞくれき	既往歴と家族歴
+medical	とうにょうびょうのちりょうせんたく	糖尿病の治療選択
+medical	たんぱくしつのあたいがたかい	タンパク質の値が高い
+medical	しょくどうあつせんのしょうじょう	食道圧迫の症状
+medical	こうせいぶっしつをとうよする	抗生物質を投与する
+medical	にゅういんきかんをえんちょうする	入院期間を延長する
+medical	せんもんいにしょうかいする	専門医に紹介する
+medical	がんけんしんをすいしょうする	がん検診を推奨する
+medical	こうしょうけつあつをかんりする	高血圧を管理する
+
+# ---- legal: courts/contracts ----
+legal	けいやくふりこうにもとづくそんがいばいしょう	契約不履行に基づく損害賠償
+legal	みんじほぜんほうにもとづくてつづき	民事保全法に基づく手続き
+legal	しょうこほぜんのひつようせい	証拠保全の必要性
+legal	かしょうさしおさえのもうしたて	仮処分差押えの申立て
+legal	けんりしゃのしょうだくがひつよう	権利者の承諾が必要
+legal	さいばんしょのきゃっかけってい	裁判所の却下決定
+legal	ほうりつじむしょにそうだんする	法律事務所に相談する
+legal	けいじそしょうのてつづきにのっとる	刑事訴訟の手続きに則る
+legal	しょうがいがくをさんていする	賠償額を算定する
+legal	いいんかいのしょうにんがひつよう	委員会の承認が必要
+legal	いしひょうじのかしをりゆうとする	意思表示の瑕疵を理由とする
+legal	こくさいほうじょうのそちをとる	国際法上の措置をとる
+legal	とっきょしんがいそしょう	特許侵害訴訟
+legal	しょうじかいしゃほうのかいせい	商事会社法の改正
+legal	みんじさいばんかんかつ	民事裁判管轄
+
+# ---- names: persons / places ----
+names	とうきょうだいがく	東京大学
+names	きょうとだいがく	京都大学
+names	こくりつこくごけんきゅうじょ	国立国語研究所
+names	とうきょうしょうけんとりひきじょ	東京証券取引所
+names	きたざとだいがくびょういん	北里大学病院
+names	しぶさわえいいちのえいきょう	渋沢栄一の影響
+names	はるのひがしやまおんせん	春の東山温泉
+names	ほっかいどうだいがく	北海道大学
+names	にいがたけん	新潟県
+names	ふじさんのちょうじょう	富士山の頂上
+names	しんじゅくえきのみなみぐち	新宿駅の南口
+names	はわいのこなびーち	ハワイのコナビーチ
+names	なかむらせんせいがおしえる	中村先生が教える
+names	わせだだいがくそうせつきねん	早稲田大学創設記念
+names	みつびしでんきほんしゃ	三菱電機本社
+
+# ---- homophone: same-reading disambiguation (choice-sensitive) ----
+homophone	けいひをせいさんする	経費を精算する
+homophone	せいさんのめどがたった	生産のめどが立った
+homophone	しゅふのしごと	主婦の仕事
+homophone	しゅふのやくわり	主夫の役割
+homophone	おはしでごはんをたべる	お箸でご飯を食べる
+homophone	かわにはしがかかっている	川に橋が架かっている
+homophone	ふるさとにかえる	故郷に帰る
+homophone	かえるがはねる	蛙が跳ねる
+homophone	こうえんをさんぽする	公園を散歩する
+homophone	おんがくこうえんをきく	音楽公演を聴く
+homophone	しぜんかんきょうをまもる	自然環境を守る
+homophone	ぼうえきかんきょうがかわった	貿易環境が変わった
+homophone	きかいをつかった	機械を使った
+homophone	きかいをのがす	機会を逃す
+homophone	いしのきもち	意志の気持ち
+homophone	いしにたのむ	医師に頼む
+
+# ---- edge: numbers, symbols, mixed, very-short ----
+edge	1ぎがばいとのでーた	1ギガバイトのデータ
+edge	100みりびょういないにおうとうする	100ミリ秒以内に応答する
+edge	ver2.0がでた	ver2.0が出た
+edge	あぷり	アプリ
+edge	めも	メモ
+edge	ok	OK
+edge	ひゃくみりびょう	百ミリ秒
+edge	ぎが	ギガ
+edge	てらばいとのhddをこうにゅうした	テラバイトのHDDを購入した
+edge	3.14はえんしゅうりつ	3.14は円周率
+edge	+1は正	+1は正
+edge	あ	あ
+edge	ん	ん
+edge	ぁ	ぁ
+edge	じゅう	十
