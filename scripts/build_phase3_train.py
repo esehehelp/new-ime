@@ -34,12 +34,14 @@ Usage (default 200M-row build):
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import lzma
 import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, IO, Iterator
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -73,6 +75,32 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
                 yield json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+
+def open_compressed_writer(path: Path, mode: str, level: int) -> IO[str]:
+    """Open path for text writing with optional compression.
+
+    mode ∈ {"none", "zstd", "xz", "gzip"}. The caller picks the destination
+    suffix via --output; this just picks the right writer.
+    """
+    if mode == "none":
+        return path.open("w", encoding="utf-8")
+    if mode == "xz":
+        preset = max(0, min(level, 9))
+        return lzma.open(path, "wt", encoding="utf-8", preset=preset)
+    if mode == "gzip":
+        compresslevel = max(1, min(level, 9))
+        return gzip.open(path, "wt", encoding="utf-8", compresslevel=compresslevel)
+    if mode == "zstd":
+        import zstandard as zstd  # declared as project dep
+
+        raw = path.open("wb")
+        cctx = zstd.ZstdCompressor(level=max(1, min(level, 22)), threads=-1)
+        binary_stream = cctx.stream_writer(raw)
+        import io
+
+        return io.TextIOWrapper(binary_stream, encoding="utf-8", write_through=True)
+    raise ValueError(f"unknown compress mode: {mode}")
 
 
 def pool_rows(
@@ -244,11 +272,31 @@ def main() -> None:
         default=5_000_000,
         help="Emit a progress line every N rows written",
     )
+    parser.add_argument(
+        "--compress",
+        choices=["none", "zstd", "xz", "gzip"],
+        default="none",
+        help=(
+            "Compress the output file. Appends .zst/.xz/.gz to --output. "
+            "For multi-GB transfers, zstd -19 is recommended (best size/speed "
+            "tradeoff for JSONL). See memory feedback_dataset_distribution.md."
+        ),
+    )
+    parser.add_argument(
+        "--compress-level",
+        type=int,
+        default=19,
+        help="Compression level (zstd: 1-22, xz: 0-9, gzip: 1-9)",
+    )
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
 
     output_path = Path(args.output)
+    if args.compress != "none":
+        suffix = {"zstd": ".zst", "xz": ".xz", "gzip": ".gz"}[args.compress]
+        if not str(output_path).endswith(suffix):
+            output_path = Path(str(output_path) + suffix)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build contamination ngram set from all reference files.
@@ -287,7 +335,7 @@ def main() -> None:
 
     written = 0
     exhausted: set[str] = set()
-    with output_path.open("w", encoding="utf-8") as out:
+    with open_compressed_writer(output_path, args.compress, args.compress_level) as out:
         while True:
             pool = weighted_least_served(
                 [s for s in specs if s.name not in exhausted]
