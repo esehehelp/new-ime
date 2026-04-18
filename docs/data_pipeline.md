@@ -43,6 +43,22 @@ all_morphemes.tsv (9GB, 4.4億行)
     │ 文節分割 → 1-3文節ウィンドウ → JSONL
     ▼
 chunks_v3_100m.jsonl (100M chunks, 13GB)
+
+[Phase 3 Step C 追加ソース]
+HPLT v3 ja (CC0 jsonl.zst)   → scripts/download_hplt3_ja.py → scripts/process_hplt.py
+FineWeb-2 jpn_Jpan (ODC-By)  → scripts/download_fineweb2_ja.py → scripts/process_fineweb2.py
+zenz-v2.5-dataset (ODC-BY サブセット) → scripts/download_zenz_subset.py → scripts/process_zenz_subset.py
+    │ いずれも src/data/mecab_pipeline.py (features[17]) で共通処理
+    ▼
+datasets/src/{hplt3_ja,fineweb2_ja,zenz_llmjp}/*.jsonl
+
+[Phase 3 train.jsonl 生成]
+全プール → scripts/build_phase3_train.py (weighted least-served 交互書き込み)
+          or tools/build-train-mix (Rust port)
+          + scripts/audit_pools.py (ライセンス・汚染監査)
+    ▼
+datasets/phase3/train.jsonl (200M rows, ~37.5 GB)
+    │ src/data/dataset.py (Algorithm R reservoir sampling) で学習時ロード
 ```
 
 ## 品質監査プロセス
@@ -72,11 +88,19 @@ chunks_v3_100m.jsonl (100M chunks, 13GB)
 
 ## Rust ツール
 
-| ツール | 用途 | ビルド |
-|--------|------|--------|
-| tools/chunk-generator | 文節チャンク生成 | WSL + rustc 1.85 |
-| tools/postprocess | 品質フィルタ | WSL + rustc 1.85 |
-| tools/build-vocab | 語彙構築 | WSL + rustc 1.85 |
+すべて WSL + rustc 1.85 でビルド (1.95 は ICE バグあり)。共通型・I/O は `tools/datacore/`。
 
-rustc 1.95 には ICE バグがあるため 1.85 を使用。
-mecab-rs は NAIST jdic のフォーマットで動作 (unidic-lite とは別)。
+| ツール | 用途 | Python 版との対応 |
+|--------|------|------|
+| tools/chunk-generator | 文節分割 + 1-3文節ウィンドウ | (なし、Rust が正) |
+| tools/postprocess | 品質フィルタ (旧仮名・ト書き・POS 漏れ等) | scripts/postprocess.py |
+| tools/build-vocab | 頻度語彙構築 | scripts/build_vocab.py |
+| tools/build-train-mix | phase3 train.jsonl 混合 (weighted least-served) | scripts/build_phase3_train.py |
+| tools/process-zenz | zenz サブセット整形 (kata2hira, 汚染監査) | scripts/process_zenz_subset.py |
+| tools/audit-pools | プール別件数・ライセンス・汚染監査 | scripts/audit_pools.py |
+| tools/audit-tokenizer | tokenizer 可逆性・ID 固定検査 | scripts/audit_tokenizer.py |
+| tools/mecab-test | mecab-rs 動作確認 | - |
+| tools/datacore | 共通型・JSONL/zstd I/O | - |
+
+mecab-rs は NAIST jdic のフォーマットで動作 (unidic-lite とは別)。新規/改修は Rust
+ファースト、Python は外部ライブラリ必須局所 (MeCab Python binding, mwparserfromhell 等) のみ。

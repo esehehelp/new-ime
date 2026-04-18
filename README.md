@@ -1,37 +1,50 @@
 # new-ime
 
-CTC-NAT (Connectionist Temporal Classification + Non-Autoregressive Transformer) ベースの日本語かな漢字変換エンジン。Windows TSF + fcitx5 対応。
+日本語かな漢字変換の研究・実験プロトタイプ。CTC-NAT (Connectionist Temporal Classification + Non-Autoregressive Transformer) を主軸に、自己回帰モデル、蒸留、量子化、推論統合を比較検証する。
+
+## 位置づけ
+
+このリポジトリは、使える IME の出荷よりも研究検証を優先する。
+
+- 学習・評価・推論の再現実験を主目的とする
+- コードと、モデル/データ成果物のライセンスを分離して管理する
+- 学習済みモデルや混合学習データは実験的成果物として扱う
 
 ## 概要
 
 既存の自己回帰モデル (zenz-v1 等) に対し、**並列生成アーキテクチャ** でレイテンシ削減と
 **1.58-bit 量子化** で極小サイズを狙う。
 
-- **Encoder**: cl-tohoku/bert-base-japanese-char-v3 (事前学習済み、12層, 768dim)
-- **Decoder**: Non-autoregressive Transformer (双方向 self-attention, 6層)
+- **モデル名**: `new-ime-model`
+  - `new-ime-model-90M`: 本命 (scratch h=640, L_enc=8, L_dec=8, CTC-NAT base ~97M + CVAE ~7M = ~104M、config: `configs/phase3_90m.yaml`)
+  - `new-ime-model-20M`: テスト/速度検証用 (h=384, L=6+6, CVAE 無効、config: `configs/phase3_20m.yaml`)
+- **Encoder**: scratch Transformer (事前学習は Step B 任意オプションで cl-tohoku/bert-base-japanese-char-v3 を MLM warm-up)
+- **Decoder**: Non-autoregressive Transformer (双方向 self-attention + cross-attention + FiLM 条件付け)
 - **出力**: CTC loss による並列デコード + Mask-CTC refinement
 - **学習安定化**: GLAT (Glancing Language Model Training) + Knowledge Distillation
-- **推論**: ONNX Runtime (CPU, int8 量子化 → v1 以降 1.58-bit QAT)
-- **IME 統合**: Windows TSF (DLL 動作確認済) / fcitx5 プラグイン (クライアント・サーバー方式)
+- **推論**: ONNX Runtime / bitnet.cpp / 比較用ベンチハーネス
+- **IME 統合**: 研究段階では `interactive.cpp` を中心とした CLI / デモ優先
 
 設計詳細は `docs/vision.md`、実装計画は `docs/roadmap.md` を参照。
 
 ## アーキテクチャ
 
 ```
-[左文脈 + ひらがな入力]
+[左文脈 + ひらがな入力] + CVAE z (writer/domain/session)
         │
    ┌────▼─────────┐
-   │   Encoder     │  BERT (事前学習済み, 12層)
+   │   Encoder     │  scratch Transformer (h=640, L=8)
+   │   (FiLM 条件) │  本命は事前学習初期化なし
    └────┬─────────┘
         │
    ┌────▼─────────┐
-   │   Decoder     │  NAT (並列生成, 6層)
-   │   (NAT)       │  cross-attention でエンコーダ参照
+   │   Decoder     │  NAT (並列生成, h=640, L=8)
+   │   (NAT)       │  self-attn + cross-attn + FiLM
    └────┬─────────┘
         │
    ┌────▼─────────┐
    │   CTC Head    │  CTC collapse / beam search + KenLM
+   │   + Mask-CTC  │  低信頼位置のみ refinement
    └────┬─────────┘
         │
    漢字かな混じり出力 (top-K 候補)
@@ -42,33 +55,42 @@ CTC-NAT (Connectionist Temporal Classification + Non-Autoregressive Transformer)
 | Phase | 状態 |
 |-------|------|
 | Phase 0 (設計) | 完了 |
-| Phase 1 (データパイプライン) | 完了 — 20.8M ペア + 100M チャンク |
+| Phase 1 (データパイプライン) | 完了 — ~21M ペア + 100M チャンク、加えて HPLT v3 / FineWeb-2 / zenz-llmjp サブセット追加、`datasets/phase3/train.jsonl` 200M rows 生成済 |
 | Phase 2 (AR ベースライン) | 完了 — 31.9M, manual 80/100, eval_v3 EM 0.412 |
-| Phase 3 (CTC-NAT) | 未着手 |
-| Phase 5 (Windows TSF DLL) | 動作確認済 |
+| Phase 3 (CTC-NAT + CVAE + 1.58-bit) | 進行中 — 受け入れテスト / `SharedCharTokenizer` / `CTCNAT` / `CVAE` / `BitLinear` / `curriculum_sampler` / オンライン KD 実装済。20M/90M の学習と速度評価を進行中 |
+| Phase 5 (Windows TSF DLL, AR 版) | 動作確認済 (`phase3_plan.md` で v1.0 範囲外に再定義、CLI `interactive.cpp` が出口) |
 | Phase 5 (fcitx5 プラグイン) | ソース実装済、未ビルド |
 
-Phase 2 の詳細は `docs/phase2_results.md`、ベンチ比較は `docs/benchmark_comparison.md`。
+Phase 2 の詳細は `docs/phase2_results.md`、Phase 3 計画は `docs/phase3_plan.md`、
+ベンチ比較は `docs/benchmark_comparison.md`。
 
 ## プロジェクト構成
 
 ```
 new-ime/
 ├── src/                       # Python (モデル・学習・データ・評価)
-│   ├── model/                 #   CTC-NAT モデル定義
-│   │   ├── encoder.py         #     BERT エンコーダ
-│   │   ├── decoder.py         #     NAT デコーダ
-│   │   └── ctc_nat.py         #     統合モデル + GLAT + Mask-CTC
-│   ├── data/                  #   トークナイザ・データセット
-│   │   └── tokenizer.py
-│   ├── training/              #   学習ループ
-│   ├── inference/             #   推論
-│   └── eval/                  #   評価
-│       ├── metrics.py         #     edit distance, CharAcc, EM
-│       ├── run_eval.py        #     バックエンド抽象 + レイテンシ測定
-│       ├── bench_loaders.py   #     ベンチデータローダ
-│       ├── ar_backend.py      #     AR ベースライン
-│       ├── zenz_backend.py    #     zenz-v2.5 比較
+│   ├── model/
+│   │   ├── encoder.py         #   BERT / scratch エンコーダ
+│   │   ├── decoder.py         #   NAT デコーダ (FiLM 条件付け)
+│   │   ├── ctc_nat.py         #   統合モデル + GLAT + Mask-CTC
+│   │   ├── cvae.py            #   writer/domain/session 潜在変数
+│   │   └── bit_linear.py      #   1.58-bit BitLinear (median scaling + STE)
+│   ├── data/
+│   │   ├── tokenizer.py       #   SharedCharTokenizer + 旧 Input/Output 互換
+│   │   ├── dataset.py         #   reservoir sampling 対応 JSONL dataset
+│   │   ├── curriculum_sampler.py  # プール混合 S0-S5 サンプラー
+│   │   └── mecab_pipeline.py  #   features[17] 共通ワーカー
+│   ├── training/
+│   │   ├── train_ar.py        #   Phase 2 AR
+│   │   ├── train_ctc_nat.py   #   Phase 3 本線 (KD/GLAT/Mask-CTC/CVAE/QAT)
+│   │   └── kd.py              #   オンライン KD (hard-example 中心)
+│   ├── inference/
+│   └── eval/
+│       ├── metrics.py         #   edit distance, CharAcc, EM
+│       ├── run_eval.py        #   バックエンド抽象 + レイテンシ測定
+│       ├── bench_loaders.py
+│       ├── ar_backend.py
+│       ├── zenz_backend.py
 │       └── fast_gen.py
 ├── engine/                    # IME エンジンプラグイン
 │   ├── src/                   #   fcitx5 InputMethodEngineV2 (C++)
@@ -92,28 +114,34 @@ new-ime/
 ├── protocol/                  # protobuf IPC スキーマ
 │   └── new_ime.proto
 ├── scripts/                   # データ・学習・評価スクリプト
-│   ├── process_wiki.py        #   Wikipedia dump → JSONL (16 workers)
-│   ├── process_aozora.py
-│   ├── process_livedoor.py
-│   ├── process_tatoeba.py
-│   ├── postprocess.py         #   品質フィルタ (旧仮名・ト書き除去等)
-│   ├── build_vocab.py
-│   ├── build_eval_set.py      #   train/dev/test 分離
-│   ├── audit_data.py
-│   ├── dataset_stats.py
-│   ├── generate_chunks.py     #   文節チャンク生成呼び出し
-│   ├── mecab_to_tsv.py
-│   ├── run_all_evals.py       #   全ベンチ一括実行
-│   ├── eval_ar_checkpoint.py
-│   ├── eval_gold.py
-│   ├── manual_test.py / manual_test_beam.py
+│   ├── process_{wiki,aozora,livedoor,tatoeba}.py    # Phase 1 ソース処理
+│   ├── process_{hplt,fineweb2,zenz_subset}.py       # Phase 3 Step C 追加ソース
+│   ├── download_{hplt3_ja,fineweb2_ja,zenz_subset}.py  # HF ダウンローダ
+│   ├── postprocess.py / audit_data.py / audit_pools.py / audit_tokenizer.py
+│   ├── build_vocab.py / build_eval_set.py / dataset_stats.py
+│   ├── generate_chunks.py / mecab_to_tsv.py
+│   ├── build_phase3_train.py  # プール混合 + reservoir で train.jsonl 生成
+│   ├── run_all_evals.py / eval_ar_checkpoint.py / eval_gold.py
+│   ├── manual_test.py / manual_test_beam.py / manual_test_ctc_nat.py
+│   ├── gen_gold_extra{,2,3}.py / gen_gold_final.py  # ゴールド拡張
+│   ├── bench_ar_speed.py / bench_ctc_nat_speed.py   # レイテンシ計測
+│   ├── print_comparison.py
 │   └── vast_train.sh          #   Vast.ai 学習スクリプト
-├── tools/                     # Rust ツール (WSL ビルド)
-│   └── chunk-generator/       #   文節分割 + 1-3文節ウィンドウ
-├── tests/                     # テスト
-│   ├── test_tokenizer.py      #   Python トークナイザ
-│   ├── test_model.py          #   CTC-NAT モデル
-│   ├── test_metrics.py        #   評価指標
+├── tools/                     # Rust ツール (WSL ビルド、rustc 1.85)
+│   ├── chunk-generator/       #   文節分割 + 1-3文節ウィンドウ
+│   ├── postprocess/           #   品質フィルタ (Rust 版)
+│   ├── build-vocab/           #   語彙構築
+│   ├── build-train-mix/       #   phase3 train.jsonl 混合 (Python scripts/build_phase3_train.py の Rust port)
+│   ├── process-zenz/          #   zenz サブセット処理 (Rust port)
+│   ├── audit-pools/           #   プール別監査 (Rust port)
+│   ├── audit-tokenizer/       #   tokenizer 検証
+│   ├── datacore/              #   共通データ型・I/O
+│   └── mecab-test/            #   mecab-rs 動作確認
+├── tests/                     # テスト (Python 128 pass + C++ 17)
+│   ├── test_tokenizer.py / test_model.py / test_metrics.py
+│   ├── test_mecab_pipeline.py / test_curriculum_sampler.py
+│   ├── test_bit_linear.py / test_kd.py / test_train_ctc_nat.py
+│   ├── test_dataset_reservoir.py / test_audit_pools.py
 │   └── cpp/
 │       ├── test_composing_text.cpp
 │       └── test_ctc_decoder.cpp
@@ -123,7 +151,8 @@ new-ime/
 ├── docker/                    # Docker 関連
 ├── docs/                      # ドキュメント
 │   ├── vision.md              #   最終構成ビジョン
-│   ├── roadmap.md             #   実装ロードマップ (Phase 0〜6)
+│   ├── roadmap.md             #   実装ロードマップ (Phase 0〜5)
+│   ├── phase3_plan.md         #   Phase 3 (CTC-NAT + CVAE + 1.58-bit) 詳細計画
 │   ├── data_pipeline.md       #   データパイプライン詳細
 │   ├── dataset_candidates.md  #   学習データ追加候補 (ライセンス整理)
 │   ├── phase2_results.md      #   Phase 2 AR 実験結果
@@ -230,4 +259,14 @@ uv run python scripts/manual_test.py
 
 ## ライセンス
 
-MIT
+このリポジトリでは、コードとモデル/データ成果物でライセンスが異なる。
+
+- コード (`src/`, `server/`, `engine/`, `tools/`, `scripts/` など): [MIT](LICENSE)
+- モデル重み・学習チェックポイント・混合学習 JSONL・蒸留成果物: [CC BY-SA 4.0](MODEL_LICENSE)
+- データソースごとの注意と帰属: [DATA_LICENSES.md](DATA_LICENSES.md), [ATTRIBUTION.md](ATTRIBUTION.md)
+
+重要:
+
+- `checkpoints/`, `datasets/`, `results/` 以下の成果物は、内容に応じて MIT ではなく追加条件が付く
+- 特に Wikipedia 由来データや、それを含む派生成果物は ShareAlike 条件の影響を受けうる
+- 配布や再学習に使う前に、必ず `MODEL_LICENSE`, `DATA_LICENSES.md`, `ATTRIBUTION.md` を確認すること

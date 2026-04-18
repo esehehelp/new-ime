@@ -50,9 +50,17 @@ KD 事前展開が重い・推論スタック二重化・CVAE 推論時状態未
 
 ## アーキテクチャ
 
+### モデル名
+
+- シリーズ: **`new-ime-model`**
+- **`new-ime-model-90M`** = `configs/phase3_90m.yaml` (本命、CVAE 有効)
+- **`new-ime-model-20M`** = `configs/phase3_20m.yaml` (テスト/速度検証、CVAE 無効)
+
+checkpoint / ONNX / bitnet.cpp pack のファイル名もこの命名規約に従う。
+
 ### 規模と構成
 
-**本命: h=640, L_enc=8, L_dec=8 scratch** ≈ 97M base + 7M CVAE ≈ **~104M**
+**本命 (`new-ime-model-90M`): h=640, L_enc=8, L_dec=8 scratch** ≈ 97M base + 7M CVAE ≈ **~104M**
 
 | コンポーネント | 計算 | params |
 |---|---|---|
@@ -69,7 +77,8 @@ KD 事前展開が重い・推論スタック二重化・CVAE 推論時状態未
 | **CVAE 上乗せ** | | **~7M** |
 | **合計** | | **~104M** |
 
-**縮小実験用: h=384, L=6+6** ≈ 29M + CVAE 1M = 30M (速度検証用、A/B 可能な config 化)
+**テスト/縮小実験用 (`new-ime-model-20M`): h=384, L=6+6** ≈ 20M (CVAE 無効がデフォルト。
+速度検証と pytest smoke 用)
 
 **エンコーダ初期化**: scratch を第一候補。cl-tohoku/bert-base-japanese-char-v3 (110M) は
 ~90M budget を単独で超えるため、本体初期化としては使わない。MLM プリトレで数 epoch
@@ -189,8 +198,8 @@ L = L_CTC + β(t) · max(KL(q(z|x,y) || p(z|x)), free_bits)
 - [ ] `src/model/decoder.py`: FiLM 条件付けを decoder layer に追加 (`film_z` 引数)
 - [ ] `src/model/cvae.py` 新規: PosteriorEncoder, Prior, FiLMProjector
 - [ ] `src/model/bit_linear.py` 新規: BitLinear (median scaling + STE) + 1.58-bit pack/unpack
-- [ ] `src/model/ctc_nat.py`: 上記を統合。`config=` で規模を切り替え (90M / 30M の 2 プリセット)
-- [ ] `configs/phase3_90m.yaml` / `configs/phase3_30m.yaml`
+- [ ] `src/model/ctc_nat.py`: 上記を統合。`config=` で規模を切り替え (90M 本命 / 20M テスト用の 2 プリセット)
+- [ ] `configs/phase3_90m.yaml` (本命) / `configs/phase3_20m.yaml` (テスト・速度検証用)
 
 ### Step C: データ拡充と混合 (1 週)
 

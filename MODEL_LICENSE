@@ -1,0 +1,36 @@
+Creative Commons Attribution-ShareAlike 4.0 International
+
+This file applies to model and data artifacts produced or stored by this
+repository, unless a more specific file or notice says otherwise.
+
+Covered artifacts include, for example:
+
+- trained model weights
+- checkpoints
+- exported ONNX or other inference artifacts derived from trained weights
+- mixed training JSONL files
+- distilled outputs and other generated supervision artifacts
+
+These artifacts are made available under the terms of the
+Creative Commons Attribution-ShareAlike 4.0 International License
+(CC BY-SA 4.0):
+
+https://creativecommons.org/licenses/by-sa/4.0/
+
+Summary:
+
+- You may share and adapt the material, including for commercial use.
+- You must provide appropriate attribution.
+- If you remix, transform, or build upon the material, you must distribute
+  your contributions under the same license or a compatible one.
+- Additional source-specific attribution or terms may still apply.
+
+Important:
+
+- This file does NOT replace source-level obligations from upstream datasets.
+- Some inputs used in experiments are subject to additional attribution
+  requirements or upstream terms.
+- See DATA_LICENSES.md and ATTRIBUTION.md for source-level detail.
+
+This file does NOT apply to the source code of this repository. Source code
+remains under the MIT license in LICENSE unless stated otherwise.
