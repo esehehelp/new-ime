@@ -30,6 +30,7 @@ engine/win32/*.pdb
 
 # Rust build
 tools/*/target/
+tools/target/
 
 # ML artifacts
 *.gguf

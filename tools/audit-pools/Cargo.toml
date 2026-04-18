@@ -1,0 +1,15 @@
+[package]
+name = "audit-pools"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "audit-pools"
+path = "src/main.rs"
+
+[dependencies]
+datacore = { path = "../datacore" }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true

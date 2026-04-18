@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "datacore",
+    "build-train-mix",
+    "process-zenz",
+    "audit-pools",
+]
+# Existing standalone tools keep their own Cargo.toml and build out of tree.
+exclude = [
+    "build-vocab",
+    "chunk-generator",
+    "postprocess",
+    "audit-tokenizer",
+    "mecab-test",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ahash = "0.8"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+zstd = "0.13"
+flate2 = "1"
+xz2 = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
