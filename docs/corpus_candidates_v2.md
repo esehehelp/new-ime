@@ -63,6 +63,21 @@ derivable or already present).
 - CC-BY-NC/NC-ND 系: モデル配布に支障
 - Reddit / Twitter / 5ch / Yahoo 知恵袋: TOS 制約
 - Zenn / note.com 一般記事: 個別著作権
+- **OpenSubtitles (OPUS)**: agg は CC-BY-SA だが、個別字幕は元製作会社・翻訳者の著作権保持のため商用 IME では NG。撤退済
+- **Linux kernel ja 翻訳 (GPL-2.0)**: 学習データ利用は業界慣行として許容されるが、verbatim 出力時に GPL 汚染可能性。volume も小さく ROI 低。撤退済
+
+## 撤退したソースの代替
+
+OpenSubtitles + Linux kernel ja を落とした穴は以下で埋める:
+
+- **aozora_dialogue** (PD) — 既存 `datasets/aozora_clean.jsonl` から `「...」`
+  会話行を regex 抽出。134K 発話分取れる。読みも既存データに含まれるので
+  mecab 再実行不要。`tools/corpus_v2/extract_aozora_dialogue.py` で生成。
+  口語 register のリファレンスとして現実的な選択。
+- Wikinews (CC-BY) の強化 (news register で会話よりやや formal だが安全)
+
+aozora 会話は文学寄りなので現代口語とは違うが、licensing clean で
+**実運用で配布可能**な唯一のまともな口語源。
 
 ## Immediate action plan
 

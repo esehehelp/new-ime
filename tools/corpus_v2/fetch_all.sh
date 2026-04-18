@@ -31,25 +31,15 @@ fetch "Wiktionary ja"  "https://dumps.wikimedia.org/jawiktionary/latest/jawiktio
 mkdir -p "$DST/tatoeba"
 fetch "Tatoeba full"   "https://downloads.tatoeba.org/exports/sentences.tar.bz2"                                       "$DST/tatoeba/sentences.tar.bz2"
 
-# OpenSubtitles monolingual Japanese from the OPUS project.
-mkdir -p "$DST/opensubtitles"
-fetch "OpenSubtitles ja" "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2018/mono/ja.txt.gz"                         "$DST/opensubtitles/ja.txt.gz"
-
-# Linux kernel Japanese translations via sparse checkout.
-if [ ! -d "$DST/linux_kernel_ja/.git" ]; then
-    echo "[fetch] Linux kernel ja (sparse)"
-    mkdir -p "$DST/linux_kernel_ja"
-    pushd "$DST/linux_kernel_ja" >/dev/null
-    git init -q
-    git remote add origin https://github.com/torvalds/linux.git
-    git config core.sparseCheckout true
-    echo "Documentation/translations/ja_JP/*" > .git/info/sparse-checkout
-    git fetch --depth 1 origin master 2>&1 | tail -1
-    git checkout master 2>&1 | tail -1
-    popd >/dev/null
-else
-    echo "[skip]  Linux kernel ja (exists)"
-fi
+# Intentionally skipped:
+#   * OpenSubtitles — OPUS aggregation is CC-BY-SA but individual subtitles
+#     remain copyrighted by translators / studios. Too risky for an IME
+#     we might distribute.
+#   * Linux kernel ja (GPL-2.0) — training-data use is the industry norm,
+#     but if the model ever emits docs verbatim the output is GPL-bound.
+#     Volume is tiny (~1 MB) so the ROI doesn't justify the policy risk.
+# The aozora_dialogue extraction below covers the colloquial-register
+# gap without the licensing ambiguity.
 
 # Extract archives the downstream pipeline needs as plain files.
 cd "$DST"
@@ -68,6 +58,19 @@ if [ ! -e "opensubtitles/ja.txt" ]; then
     gunzip -k opensubtitles/ja.txt.gz
 fi
 
+# Aozora dialogue extraction (PD, no mecab pass needed). Re-runs are cheap
+# because the source aozora_clean.jsonl is already on disk and the script
+# is a single pass filter.
+if [ -e "$REPO/datasets/aozora_clean.jsonl" ]; then
+    echo "[extract] aozora dialogue"
+    uv run python -m tools.corpus_v2.extract_aozora_dialogue \
+        --src "$REPO/datasets/aozora_clean.jsonl" \
+        --out "$REPO/datasets/v2/aozora_dialogue.jsonl"
+else
+    echo "[warn] aozora_clean.jsonl not present — skipping dialogue extraction"
+fi
+
 echo
 echo "== Sizes =="
-ls -lh "$DST"/*.xml "$DST/tatoeba/sentences.csv" "$DST/opensubtitles/ja.txt" 2>/dev/null | awk '{print $5, $9}'
+ls -lh "$DST"/*.xml "$DST/tatoeba/sentences.csv" 2>/dev/null | awk '{print $5, $9}'
+ls -lh "$REPO/datasets/v2"/*.jsonl 2>/dev/null | awk '{print $5, $9}'
