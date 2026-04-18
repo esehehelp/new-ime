@@ -1,0 +1,53 @@
+{
+  "wikinews_v2": {
+    "n": 200,
+    "counts": {
+      "OK": 134,
+      "markup_prefix": 52,
+      "template_artifact": 24,
+      "foreign_script": 14,
+      "short": 11,
+      "heavy_ascii": 6,
+      "symbol_heavy": 1
+    }
+  },
+  "wikibooks_v2": {
+    "n": 200,
+    "counts": {
+      "OK": 101,
+      "markup_prefix": 85,
+      "foreign_script": 15,
+      "heavy_ascii": 10,
+      "short": 8,
+      "template_artifact": 4,
+      "symbol_heavy": 2
+    }
+  },
+  "wiktionary_v2": {
+    "n": 200,
+    "counts": {
+      "markup_prefix": 154,
+      "short": 45,
+      "foreign_script": 45,
+      "heavy_ascii": 24,
+      "OK": 18,
+      "symbol_heavy": 14,
+      "template_artifact": 10,
+      "empty_quote": 3,
+      "empty_reading": 1
+    }
+  },
+  "tatoeba_v2": {
+    "n": 200,
+    "counts": {
+      "OK": 197,
+      "short": 3
+    }
+  },
+  "aozora_dialogue": {
+    "n": 200,
+    "counts": {
+      "OK": 200
+    }
+  }
+}
