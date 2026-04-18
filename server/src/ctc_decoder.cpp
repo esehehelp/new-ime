@@ -1,9 +1,25 @@
 #include "ctc_decoder.h"
+#include "lm_scorer.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <numeric>
+
+namespace {
+
+// Count UTF-8 codepoints (glyphs), not bytes. Used for the length-penalty
+// term so alpha/beta tuning behaves the same on ASCII and CJK.
+int utf8_codepoints(const std::string& s) {
+    int n = 0;
+    for (unsigned char c : s) {
+        if ((c & 0xC0) != 0x80) ++n;
+    }
+    return n;
+}
+
+} // namespace
 
 namespace newime {
 
@@ -45,8 +61,20 @@ DecodedCandidate CTCDecoder::greedy_decode(const std::vector<float>& logits,
 std::vector<DecodedCandidate> CTCDecoder::beam_search(
     const std::vector<float>& logits,
     int seq_len, int vocab_size,
-    int beam_width) const
+    int beam_width,
+    LMScorer* lm_scorer,
+    float lm_alpha,
+    float lm_beta) const
 {
+    const bool use_lm = (lm_scorer != nullptr) && (lm_alpha != 0.0f);
+    const bool use_beta = (lm_beta != 0.0f);
+
+    auto fused_score = [&](const std::string& prefix, float ctc_log) -> float {
+        float out = ctc_log;
+        if (use_lm) out += lm_alpha * lm_scorer->score(prefix);
+        if (use_beta) out += lm_beta * static_cast<float>(utf8_codepoints(prefix));
+        return out;
+    };
     // Prefix beam search (Hannun et al. 2014)
     //
     // Each beam tracks: prefix string, probability of ending in blank,
@@ -153,14 +181,15 @@ std::vector<DecodedCandidate> CTCDecoder::beam_search(
             }
         }
 
-        // Prune to beam_width
+        // Prune to beam_width by the fused score (CTC + alpha * LM + beta * len).
         std::vector<std::pair<std::string, Beam>> sorted_beams(
             new_beams.begin(), new_beams.end());
         std::partial_sort(sorted_beams.begin(),
                           sorted_beams.begin() + std::min(beam_width, static_cast<int>(sorted_beams.size())),
                           sorted_beams.end(),
-                          [](const auto& a, const auto& b) {
-                              return a.second.total_score() > b.second.total_score();
+                          [&](const auto& a, const auto& b) {
+                              return fused_score(a.first, a.second.total_score())
+                                   > fused_score(b.first, b.second.total_score());
                           });
 
         beams.clear();
@@ -169,10 +198,10 @@ std::vector<DecodedCandidate> CTCDecoder::beam_search(
         }
     }
 
-    // Collect results
+    // Collect results. Final ranking uses the same fused score as pruning.
     std::vector<DecodedCandidate> results;
     for (auto& [prefix, beam] : beams) {
-        results.push_back({prefix, beam.total_score()});
+        results.push_back({prefix, fused_score(prefix, beam.total_score())});
     }
     std::sort(results.begin(), results.end(),
               [](const auto& a, const auto& b) { return a.score > b.score; });

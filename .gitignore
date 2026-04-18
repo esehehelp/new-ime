@@ -64,3 +64,10 @@ Thumbs.db
 
 # Training and bench logs
 logs/
+
+# Large downloaded / built artifacts
+models/*.onnx
+models/*.bin
+tools/onnxruntime-win-x64-*/
+server/third_party/kenlm/
+build/
