@@ -76,6 +76,11 @@ build/
 models/fixed_dict_mozc.tsv
 models/fixed_dict_mozc_ut*.tsv
 tools/mozc_import/
+tools/merge-ut-dictionaries/
+tools/mozc_ut_import/
+
+# Probe backups (regenerable)
+datasets/probe_v2/probe_v1_pilot50.tsv
 
 # Sweep per-config artifacts (regenerable via scripts/sweep_interactive_ctc.py)
 results/sweep_*/alpha*.json
