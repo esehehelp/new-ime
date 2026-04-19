@@ -29,8 +29,8 @@ engine/win32/*.pdb
 .claude/scheduled_tasks.lock
 
 # Rust build
-tools/*/target/
-tools/target/
+target/
+**/target/
 
 # ML artifacts
 *.gguf
@@ -43,7 +43,8 @@ checkpoints/
 wandb/
 
 # Data — broad ignore (HF 経由配布、git には入れない)
-datasets/
+datasets/*
+!datasets/tools/
 results/
 *.bz2
 *.gz
@@ -62,10 +63,11 @@ Thumbs.db
 # Training and bench logs
 logs/
 
-# Models — broad ignore, コードとテストのみ track
+# Models — broad ignore, コードとテストとツールのみ track
 models/*
 !models/src/
 !models/tests/
+!models/tools/
 
 # Other large artifacts
 tools/onnxruntime-win-x64-*/

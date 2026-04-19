@@ -210,15 +210,15 @@ bunsetsu/synth (大半 < 30 字) は影響なし。
 1000 step checkpoint ごとに外部評価:
 
 ```bash
-# probe_v2 (467 items, phrase-level EM)
-uv run python -m datasets.tools.probe.run_probe_v2 \
-    --models ctc_nat_30m \
-    --out-dir results/phase3_v2_dryrun/probe_v2
-# → datasets/tools/probe/run_probe_v2.py の _ctc factory で新 ckpt path を指すよう編集要
+# phrase-level probe (AJIMEE 互換 JSON、category × EM)
+uv run python -m datasets.tools.probe.run \
+    --models ctc-nat-30m-student \
+    --out-dir results/phase3_v2_dryrun/probe
+# → datasets/tools/probe/run.py の _ctc factory で新 ckpt path を指すよう編集要
 
 # CVAE probe (188 items, domain 別 EM)
 uv run python -m datasets.tools.probe.run_cvae_probe \
-    --backend ctc_nat_30m \
+    --backend ctc-nat-30m-student \
     --ckpt models/checkpoints/ctc-nat-30m-student/checkpoint_step_160000.pt \
     --out results/phase3_v2_dryrun/cvae_160k.json
 ```
@@ -260,9 +260,9 @@ uv run python -m datasets.tools.probe.run_cvae_probe \
   plateau or 微減は正常 (過学習でなければ OK)
 - **step 32000-160000**: KD α=0.1 定常の long tail。eval が plateau なら
   計画通り、monotonic に悪化したら早期終了検討
-- **step 160000**: 完走。probe_v2 + cvae_probe で最終評価
+- **step 160000**: 完走。phrase probe + cvae_probe で最終評価
 
 ## 未実装 / 後工程
 
-- `datasets/tools/probe/run_probe_v2.py` の `--ckpt` 引数対応 (現状 factory 内 hardcode)
+- `datasets/tools/probe/run.py` の `--ckpt` 引数対応 (現状 factory 内 hardcode)
 - CVAE 実装 (本 dry-run で CTCTeacher の train loop が動くことを先に確認)

@@ -121,71 +121,80 @@ new-ime/
 │   │   └── new_ime.proto
 │   ├── new-ime-addon.conf     #   fcitx5 addon メタデータ
 │   └── new-ime-im.conf        #   fcitx5 IM メタデータ
-├── tools/                     # ツール (Rust + Python)
-│   ├── datacore/              #   Rust: 共通データ型・I/O
-│   ├── build-train-mix/       #   Rust: v1 mix builder
-│   ├── build-train-mix-v2/    #   Rust: v2 mix builder (sentence + bunsetsu span + synth)
-│   ├── chunk-generator/       #   Rust: 文節チャンク生成
-│   ├── postprocess/           #   Rust: 品質フィルタ
-│   ├── build-vocab/           #   Rust: 語彙構築
-│   ├── process-zenz/          #   Rust: zenz サブセット処理
-│   ├── audit-pools/           #   Rust: プール別監査
-│   ├── audit-tokenizer/       #   Rust: tokenizer 検証
-│   ├── mecab-test/            #   Rust: mecab-rs smoke
-│   ├── corpus_v2/             #   Python: v2 pipeline (bunsetsu_split, clean_v2, synth_*)
-│   ├── probe/                 #   Python: probe eval (run_probe_v2, run_cvae_probe, generate_v2)
-│   ├── bench/                 #   Python: speed bench (ar/ctc/zenz/fusion)
-│   ├── eval/                  #   Python: run_all_evals, eval_gold, print_comparison
-│   ├── manual/                #   Python: 手動テスト 100問
-│   ├── export/                #   Python: ONNX export
-│   ├── dict/                  #   Python: mozc dict import
-│   ├── ops/                   #   shell: deploy/mirror/compress_archive/finalize_v2_reorg
-│   └── old/                   #   legacy one-shot scripts (audit_data, process_*, gen_gold_* 等)
+├── datasets/                  # データ (gitignore)
+│   ├── raw/                   #   一次ソース (XML/CSV)
+│   ├── corpus/
+│   │   ├── sentence/          #     文レベル (yomi 付)
+│   │   ├── bunsetsu/          #     句レベル (Ginza)
+│   │   ├── synth/             #     合成 (numeric / numeric_ext)
+│   │   └── legacy/            #     旧 sentence-level コンポーネント pool
+│   ├── mixes/
+│   │   ├── scratch-200m.jsonl #    基礎 mix (chunks + zenz + wiki + aozora + ...)
+│   │   ├── student-20m.jsonl  #    CTC student 用 mix
+│   │   └── teacher-20m.jsonl  #    teacher 用 mix
+│   ├── eval/
+│   │   ├── general/           #    dev/test/train (旧 eval_v3)
+│   │   ├── probe/probe.json   #    467 項目 phrase-level
+│   │   ├── cvae-probe/probe.tsv #  188 項目 domain-labeled
+│   │   └── legacy/            #    旧 probe_v1/v2 他
+│   ├── tokenizers/            #   char-5k.json (shared char tokenizer)
+│   ├── audits/                #   プール監査ログ
+│   └── tools/                 #   データ処理スクリプト
+│       ├── corpus/            #     Python: bunsetsu_split, clean, synth_*
+│       ├── probe/             #     Python: probe 生成・評価ランナー
+│       ├── mix/               #     Rust: build-train-mix (sentence + bunsetsu + synth)
+│       ├── chunk-generator/   #     Rust: 文節チャンク生成
+│       ├── audit/             #     Rust: プール別監査 (旧 audit-pools)
+│       ├── process-zenz/      #     Rust: zenz サブセット処理
+│       └── datacore/          #     Rust: 共通データ型・I/O
 ├── models/
+│   ├── src/                   # Python メイン実装
+│   │   ├── model/             #   encoder / decoder / ctc_nat / cvae / bit_linear
+│   │   ├── data/              #   tokenizer / dataset / curriculum_sampler / mecab_pipeline
+│   │   ├── training/          #   train_ar / train_ctc_nat / train_teacher / kd
+│   │   └── eval/              #   metrics / run_eval / bench_loaders / *_backend
+│   ├── tools/                 # モデル系スクリプト
+│   │   ├── eval/              #   Python: run_all_evals / eval_gold / print_comparison
+│   │   ├── bench/             #   Python: speed bench (ar/ctc/zenz/fusion)
+│   │   ├── manual/            #   Python: 手動テスト 100問
+│   │   ├── export/            #   Python: ONNX export
+│   │   ├── dict/              #   Python: mozc dict import
+│   │   ├── build-vocab/       #   Rust: 語彙構築
+│   │   ├── audit-tokenizer/   #   Rust: tokenizer 検証
+│   │   └── postprocess/       #   Rust: 品質フィルタ
 │   ├── checkpoints/           # 学習チェックポイント (gitignore)
-│   │   ├── ar-31m-scratch/        #   Phase 2 AR 31.9M (KD teacher)
-│   │   ├── ctc_nat_30m/       #   30M step50000
-│   │   ├── ctc_nat_90m/       #   90M step27500
+│   │   ├── ar-31m-scratch/    #   Phase 2 AR 31.9M (KD teacher)
+│   │   ├── ctc-nat-30m-scratch/    # 30M scratch
+│   │   ├── ctc-nat-30m-student/    # 30M (student-20m mix)
+│   │   ├── ctc-nat-90m-scratch/    # 90M scratch
+│   │   ├── teacher-150m-teacher/   # teacher seq2seq 150M
 │   │   └── archive/           #   旧 smoke / 実験用 (zstd 圧縮済)
 │   ├── onnx/                  # 配布 ONNX + sidecar
 │   ├── dicts/                 # 辞書層 (fixed_dict_*, user_dict)
 │   ├── kenlm/                 # KenLM 言語モデル (.bin)
-│   └── tests/                 # テスト (Python + C++)
-│       ├── test_tokenizer.py / test_model.py / test_metrics.py
-│       ├── test_mecab_pipeline.py / test_curriculum_sampler.py
-│       ├── test_bit_linear.py / test_kd.py / test_train_ctc_nat.py
-│       ├── test_dataset_reservoir.py / test_audit_pools.py
-│       └── cpp/
-│           ├── test_composing_text.cpp
-│           └── test_ctc_decoder.cpp
-├── configs/                   # 学習設定 YAML (phase3_30m/phase3_90m など)
-├── datasets/                  # データ (gitignore)
-│   ├── corpus/
-│   │   ├── v1/                #   旧 phase3 component pools
-│   │   └── v2/
-│   │       ├── sentences/     #     v2 文レベル (yomi 付)
-│   │       ├── bunsetsu/      #     v2 句レベル (Ginza)
-│   │       └── synth/         #     合成 (numeric / numeric_ext)
-│   ├── mixes/
-│   │   ├── scratch-200m.jsonl #    旧 phase3/train.jsonl
-│   │   └── student-20m.jsonl  #    (作成予定) phase3_v2 dry-run 用
-│   ├── eval/
-│   │   ├── general/            #    dev/test/train
-│   │   ├── gold_1k.jsonl
-│   │   ├── probe_v1.tsv        #    旧 116 項目 sentence-level
-│   │   ├── probe_v2.tsv        #    467 項目 phrase-level
-│   │   └── cvae-probe/probe.tsv      #    188 項目 domain-labeled
-│   ├── raw/                    #   一次ソース (XML/CSV)
-│   ├── tokenizers/             #   共有トークナイザ
-│   └── audits/                 #   監査ログ
-├── docker/                    # Docker 関連
+│   └── tests/                 # Python + C++ テスト
+├── engine/                    # IME エンジン一式 (C++)
+│   ├── src/                   #   fcitx5 InputMethodEngineV2 プラグイン
+│   ├── win32/                 #   Windows TSF 統合 (ffi_impl / interactive*)
+│   ├── server/                #   推論サーバー + CTC decoder + KenLM
+│   ├── protocol/              #   protobuf IPC
+│   ├── new-ime-addon.conf
+│   └── new-ime-im.conf
+├── tools/                     # プロジェクト全体の雑多ツール
+│   ├── misc/                  #   shell: deploy/mirror/compress_archive
+│   ├── old/                   #   legacy one-shot scripts
+│   ├── mecab-test/            #   Rust: mecab-rs smoke
+│   └── onnxruntime-win-x64-1.22.0/  # Windows 向け ONNX Runtime
+├── configs/                   # 学習設定 YAML + env
 ├── docs/                      # ドキュメント
-│   ├── vision.md              #   最終構成ビジョン (未来目標の単一ソース)
-│   ├── benchmark_comparison.md      # 現状ベンチ集約 (living doc、頻繁更新)
-│   ├── phase3_v2_dryrun_runbook.md  # 現在進行中の dry-run 実行手順
-│   ├── probe_v2_4way_results.md     # probe_v2 (467) 4-way 測定詳細
+│   ├── vision.md              #   最終構成ビジョン
+│   ├── benchmark_comparison.md      # 現状ベンチ集約 (living doc)
+│   ├── phase3_v2_dryrun_runbook.md  # dry-run 実行手順
+│   ├── probe_v2_4way_results.md     # probe_v2 測定詳細
 │   ├── cvae_probe_baseline.md       # CVAE probe ベースライン
-│   └── old/                   #   過去 plan / 完了 phase / superseded ドキュメント
+│   └── old/                   #   過去 plan / superseded 資料
+├── Cargo.toml                 # Rust workspace ルート
+└── CHANGELOG.md
 │       ├── roadmap.md               # 旧 Phase 0-5 ロードマップ
 │       ├── phase3_plan.md           # 旧 Phase 3 計画
 │       ├── phase2_results.md        # Phase 2 AR 実験結果
@@ -275,16 +284,13 @@ cargo run --release --bin build-train-mix -- \
 ## 評価
 
 ```bash
-# 現行の主力: phrase-level probe (467 項目、7 category)
-uv run python -m datasets.tools.probe.run_probe_v2 --models ctc_nat_90m-step27500
-
-# KenLM 付き α/β sweep (WSL 経由、kenlm py は Linux のみ)
-wsl -- bash -c "bash /mnt/d/Dev/new-ime/datasets/tools/probe/sweep_probe_v2_kenlm.sh ctc_nat_90m-step27500"
+# phrase-level probe (category × EM、AJIMEE 互換 JSON 形式)
+uv run python -m datasets.tools.probe.run --models ctc-nat-90m-scratch-step27500
 
 # CVAE 検証 probe (188 項目、domain 別 EM)
-uv run python -m datasets.tools.probe.run_cvae_probe --backend ctc_nat_90m
+uv run python -m datasets.tools.probe.run_cvae_probe --backend ctc-nat-90m-scratch
 
-# 旧 sentence-level ベンチ (general / AJIMEE / manual)
+# sentence-level ベンチ (general / AJIMEE / manual)
 uv run python -m models.tools.eval.run_all_evals --manual 100 --general 300 --ajimee 100
 ```
 

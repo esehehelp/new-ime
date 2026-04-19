@@ -1,0 +1,15 @@
+[package]
+name = "build-train-mix"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "build-train-mix"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+rand = "0.8"

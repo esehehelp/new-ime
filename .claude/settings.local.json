@@ -179,15 +179,17 @@
       "Bash(git mv *)",
       "Bash(mv datasets/tools/probe/sweep_30mv2_kenlm.sh datasets/tools/probe/legacy/)",
       "Bash(touch datasets/tools/probe/legacy/__init__.py)",
-      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.generate_v3)",
-      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run_probe_v3 --models \"ctc-nat-30m-student\")",
-      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run_probe_v3 --models \"teacher-150m-teacher-step130000\")",
-      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run_probe_v3 --models \"zenz-v3.1-small,zenz-v2.5-small\")",
-      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run_probe_v3 --models \"ctc_nat_30m-best,ctc_nat_30m-step16000\")",
-      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run_probe_v3 --models \"ctc_nat_30m-final\")",
+      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.generate)",
+      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run --models \"ctc-nat-30m-student\")",
+      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run --models \"teacher-150m-teacher-step130000\")",
+      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run --models \"zenz-v3.1-small,zenz-v2.5-small\")",
+      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run --models \"ctc_nat_30m-best,ctc_nat_30m-step16000\")",
+      "Bash(.venv/Scripts/python.exe -m datasets.tools.probe.run --models \"ctc_nat_30m-final\")",
       "Bash(find /d/Dev/new-ime -type f \\\\\\( -name \"*.py\" -o -name \"*.md\" -o -name \"*.yaml\" -o -name \"*.env\" -o -name \"*.sh\" -o -name \"*.toml\" \\\\\\) -exec grep -l \"legacy\\\\|v1_200m\\\\|v2_20m\\\\|train_teacher_v1\\\\|corpus_v2\\\\|raw_current\\\\|ar_v3_vast\\\\|ctc_nat_90m\\\\|ctc_nat_30m\\\\|teacher-150m-teacher\\\\|vast_mirror\" {} \\\\;)",
       "Bash(set -e)",
-      "Bash(cargo metadata *)"
+      "Bash(cargo metadata *)",
+      "Bash(git reset *)",
+      "Bash(git rm *)"
     ]
   }
 }
