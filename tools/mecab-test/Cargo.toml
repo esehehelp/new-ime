@@ -1,7 +1,0 @@
-[package]
-name = "mecab-test"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-mecab = "0.1"

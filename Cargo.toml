@@ -12,7 +12,6 @@ exclude = [
     "models/tools/postprocess",
     "models/tools/audit-tokenizer",
     "datasets/tools/chunk-generator",
-    "tools/mecab-test",
     "tools/old",
 ]
 

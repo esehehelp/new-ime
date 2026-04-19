@@ -183,7 +183,6 @@ new-ime/
 ├── tools/                     # プロジェクト全体の雑多ツール
 │   ├── misc/                  #   shell: deploy/mirror/compress_archive
 │   ├── old/                   #   legacy one-shot scripts
-│   ├── mecab-test/            #   Rust: mecab-rs smoke
 │   └── onnxruntime-win-x64-1.22.0/  # Windows 向け ONNX Runtime
 ├── configs/                   # 学習設定 YAML + env
 ├── docs/                      # ドキュメント
