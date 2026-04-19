@@ -1,10 +1,10 @@
 # new-ime
 
-日本語かな漢字変換の研究・実験プロトタイプ。CTC-NAT (Connectionist Temporal Classification + Non-Autoregressive Transformer) を主軸に、自己回帰モデル、蒸留、量子化、推論統合を比較検証する。
+日本語かな漢字変換のプロトタイプ。CTC-NAT (Connectionist Temporal Classification + Non-Autoregressive Transformer) を主軸に、自己回帰モデル、蒸留、量子化、推論統合を比較検証する。
 
 ## 位置づけ
 
-このリポジトリは、使える IME の出荷よりも研究検証を優先する。
+このリポジトリは、使える IME の完成よりも検証を優先する。
 
 - 学習・評価・推論の再現実験を主目的とする
 - コードと、モデル/データ成果物のライセンスを分離して管理する
@@ -12,7 +12,7 @@
 
 ## 概要
 
-既存の自己回帰モデル (zenz-v1 等) に対し、**並列生成アーキテクチャ** でレイテンシ削減と
+既存の自己回帰モデル (zenz-v2.5 等) に対し、**並列生成アーキテクチャ** でレイテンシ削減と
 **1.58-bit 量子化** で極小サイズを狙う。
 
 - **モデル名**: `new-ime-model`
@@ -35,18 +35,18 @@
 [左文脈 + ひらがな入力] + CVAE z (writer/domain/session)
         │
    ┌────▼─────────┐
-   │   Encoder     │  scratch Transformer (h=640, L=8)
-   │   (FiLM 条件) │  本命は事前学習初期化なし
+   │   Encoder    │  scratch Transformer (h=640, L=8)
+   │   (FiLM 条件)│  本命は事前学習初期化なし
    └────┬─────────┘
         │
    ┌────▼─────────┐
-   │   Decoder     │  NAT (並列生成, h=640, L=8)
-   │   (NAT)       │  self-attn + cross-attn + FiLM
+   │   Decoder    │  NAT (並列生成, h=640, L=8)
+   │   (NAT)      │  self-attn + cross-attn + FiLM
    └────┬─────────┘
         │
    ┌────▼─────────┐
-   │   CTC Head    │  CTC collapse / beam search + KenLM
-   │   + Mask-CTC  │  低信頼位置のみ refinement
+   │   CTC Head   │  CTC collapse / beam search + KenLM
+   │   + Mask-CTC │  低信頼位置のみ refinement
    └────┬─────────┘
         │
    漢字かな混じり出力 (top-K 候補)
