@@ -112,7 +112,7 @@ cd $REMOTE_HOME
 git fetch --tags
 git pull --ff-only || echo "(pull skipped; local changes?)"
 
-mkdir -p datasets/phase3 datasets/eval/general datasets/tokenizers checkpoints/ar_v3_vast logs
+mkdir -p datasets/phase3 datasets/eval/general datasets/tokenizers checkpoints/ar-31m-scratch logs
 
 uv sync 2>&1 | tail -3
 
@@ -151,8 +151,8 @@ $SCP_BASE \
     datasets/tokenizers/char-5k.json \
     "$REMOTE:$REMOTE_HOME/datasets/tokenizers/"
 $SCP_BASE \
-    checkpoints/ar_v3_vast/best.pt checkpoints/ar_v3_vast/best_vocab.json \
-    "$REMOTE:$REMOTE_HOME/checkpoints/ar_v3_vast/"
+    checkpoints/ar-31m-scratch/best.pt checkpoints/ar-31m-scratch/best_vocab.json \
+    "$REMOTE:$REMOTE_HOME/checkpoints/ar-31m-scratch/"
 
 log "Phase 4a done"
 

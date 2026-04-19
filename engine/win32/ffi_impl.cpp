@@ -240,13 +240,13 @@ EXPORT void Initialize(const char* dictionaryPath, const char* memoryPath) {
     if (dictionaryPath && strlen(dictionaryPath) > 0) g_modelDir = dictionaryPath;
     if (g_modelDir.empty()) g_modelDir = "models";
 
-    load_vocab(g_modelDir + "\\ar_v3_vast.vocab.json");
+    load_vocab(g_modelDir + "\\ar-31m-scratch.vocab.json");
     try {
         if (!g_env) g_env = new Ort::Env(ORT_LOGGING_LEVEL_WARNING, "new-ime");
         Ort::SessionOptions opts;
         opts.SetIntraOpNumThreads(4);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        std::wstring wpath = std::wstring(g_modelDir.begin(), g_modelDir.end()) + L"\\ar_v3_vast_fixed.onnx";
+        std::wstring wpath = std::wstring(g_modelDir.begin(), g_modelDir.end()) + L"\\ar-31m-scratch_fixed.onnx";
         if (g_session) delete g_session;
         g_session = new Ort::Session(*g_env, wpath.c_str(), opts);
         g_initialized = true;

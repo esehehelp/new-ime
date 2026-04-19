@@ -117,7 +117,7 @@ wc -l datasets/mixes/student-20m.jsonl
     --train datasets/mixes/student-20m.jsonl `
     --dev datasets/eval/general/dev.jsonl `
     --preset phase3_30m `
-    --tokenizer-path models/checkpoints/ctc_nat_90m/checkpoint_step_27500_tokenizer.json `
+    --tokenizer-path models/checkpoints/ctc-nat-90m-scratch/checkpoint_step_27500_tokenizer.json `
     --batch-size 48 `
     --grad-accum 4 `
     --max-seq-len 128 `
@@ -137,7 +137,7 @@ wc -l datasets/mixes/student-20m.jsonl
     --eval-every 500 `
     --log-every 100 `
     --kd-teacher-type ctc `
-    --kd-teacher-path models/checkpoints/ctc_nat_90m/checkpoint_step_27500.pt `
+    --kd-teacher-path models/checkpoints/ctc-nat-90m-scratch/checkpoint_step_27500.pt `
     --kd-temperature 2.0 `
     --kd-alpha 0.3 `
     --kd-alpha-final 0.1 `
@@ -148,7 +148,7 @@ wc -l datasets/mixes/student-20m.jsonl
     --kd-gate-mode low_conf `
     --kd-hard-threshold 0.92 `
     --kd-every 4 `
-    --output models/checkpoints/ctc_nat_30m_v2_dryrun
+    --output models/checkpoints/ctc-nat-30m-student
 ```
 
 ### KD schedule の形 (前寄せ型)
@@ -219,7 +219,7 @@ uv run python -m datasets.tools.probe.run_probe_v2 \
 # CVAE probe (188 items, domain 別 EM)
 uv run python -m datasets.tools.probe.run_cvae_probe \
     --backend ctc_nat_30m \
-    --ckpt models/checkpoints/ctc_nat_30m_v2_dryrun/checkpoint_step_160000.pt \
+    --ckpt models/checkpoints/ctc-nat-30m-student/checkpoint_step_160000.pt \
     --out results/phase3_v2_dryrun/cvae_160k.json
 ```
 
@@ -227,7 +227,7 @@ uv run python -m datasets.tools.probe.run_cvae_probe \
 
 | 項目 | 前回 30M | 今回 dry-run |
 |---|---|---|
-| teacher | AR (ar_v3_vast/best.pt) | **CTC (90M step27500)** |
+| teacher | AR (ar-31m-scratch/best.pt) | **CTC (90M step27500)** |
 | KD 損失 | text round-trip + CTC | **直接 logit KL (temp=2.0)** |
 | kd-alpha | 0.075 → 0.1 | **0.3 → 0.1** |
 | batch-size | 32 | **48** (3060 VRAM 余裕) |

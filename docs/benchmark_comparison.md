@@ -14,7 +14,7 @@ last_updated: 2026-04-19
 |---|---|---:|---:|---:|
 | **CTC-NAT 30m_v2 step49000** | α=0.2, β=0.6, beam=5 + KenLM | **0.779** | 0.779 | 12 |
 | **CTC-NAT 30m_v2 step49000** | greedy (no LM) | **0.739** | 0.739 | 8 |
-| **teacher-v1-150m step100000** | greedy (AR) | **0.739** | 0.739 | 40 |
+| **teacher-150m-teacher step100000** | greedy (AR) | **0.739** | 0.739 | 40 |
 | **zenz-v3.1-small** | beam=5 | 0.715 | 0.925 | 274 |
 | **zenz-v2.5-small** | beam=5 | 0.700 | 0.916 | 266 |
 | CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | 0.612 | 0.612 | 21 |
@@ -108,9 +108,9 @@ domain 別 (greedy):
 | model | manual EM / p50 | ajimee EM / p50 | general eval EM / p50 |
 |---|---:|---:|---:|
 | zenz-v2.5-small | 0.890 / 197ms | 0.750 / 370ms | 0.375 / 593ms |
-| teacher-v1-150m step100000 | 0.850 / 80ms | 0.588 / 153ms | 0.363 / 265ms |
-| ctc_nat_30m_v2 step49000 | 0.830 / 21ms | 0.338 / 21ms | 0.263 / 20ms |
-| ctc_nat_30m_v2 + α=0.4 β=0.6 | 0.870 / ~15ms | 0.575 / ~22ms | 0.300 / 37ms |
+| teacher-150m-teacher step100000 | 0.850 / 80ms | 0.588 / 153ms | 0.363 / 265ms |
+| ctc-nat-30m-student step49000 | 0.830 / 21ms | 0.338 / 21ms | 0.263 / 20ms |
+| ctc-nat-30m-student + α=0.4 β=0.6 | 0.870 / ~15ms | 0.575 / ~22ms | 0.300 / 37ms |
 
 **CharAcc** は teacher 150m が general eval で 0.893 と zenz-small の 0.857 を
 **超えている**。bidirectional encoder による長文の局所整合性の優位。
@@ -142,7 +142,7 @@ manual/ajimee は LM 未露出ゆえ genuine gain。
 
 ## 更新履歴
 
-- 2026-04-19 (追記): ctc_nat_30m_v2 step49000 + teacher-v1-150m step100000 を
+- 2026-04-19 (追記): ctc-nat-30m-student step49000 + teacher-150m-teacher step100000 を
   probe_v2 / 3-bench で評価、30m_v2 KenLM α×β sweep を probe_v2 と 3-bench
   両方で実施。30m_v2 が phrase / sentence 両領域で zenz-small 比肩に到達、
   edge カテゴリ退行を検出

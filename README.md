@@ -143,7 +143,7 @@ new-ime/
 │   └── old/                   #   legacy one-shot scripts (audit_data, process_*, gen_gold_* 等)
 ├── models/
 │   ├── checkpoints/           # 学習チェックポイント (gitignore)
-│   │   ├── ar_v3_vast/        #   Phase 2 AR 31.9M (KD teacher)
+│   │   ├── ar-31m-scratch/        #   Phase 2 AR 31.9M (KD teacher)
 │   │   ├── ctc_nat_30m/       #   30M step50000
 │   │   ├── ctc_nat_90m/       #   90M step27500
 │   │   └── archive/           #   旧 smoke / 実験用 (zstd 圧縮済)

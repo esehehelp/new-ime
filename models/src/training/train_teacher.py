@@ -15,13 +15,13 @@ Usage (vast.ai 5090):
         --train datasets/mixes/teacher-20m.jsonl \
         --dev datasets/eval/general/dev.jsonl \
         --preset teacher_150m \
-        --tokenizer-path models/checkpoints/ctc_nat_90m/checkpoint_step_27500_tokenizer.json \
+        --tokenizer-path models/checkpoints/ctc-nat-90m-scratch/checkpoint_step_27500_tokenizer.json \
         --batch-size 32 --grad-accum 4 --max-seq-len 192 \
         --fp16 --num-workers 4 \
         --max-steps 200000 --lr 2e-4 --warmup-steps 2000 \
         --lr-schedule cosine \
         --checkpoint-every 5000 --eval-every 2000 \
-        --output models/checkpoints/teacher_v1_150m
+        --output models/checkpoints/teacher-150m-teacher
 """
 
 from __future__ import annotations
