@@ -25,7 +25,7 @@ KD overlay は `--kd-every 4` → 25% of optimizer steps で発火 (mix pool と
 
 ### 1. bunsetsu 化完走確認
 
-`tools/corpus_v2/run_bunsetsu_all.sh` が全 5 pool を処理済み:
+`datasets/tools/corpus/run_bunsetsu_all.sh` が全 5 pool を処理済み:
 
 ```bash
 wc -l datasets/corpus/bunsetsu/*.jsonl
@@ -211,13 +211,13 @@ bunsetsu/synth (大半 < 30 字) は影響なし。
 
 ```bash
 # probe_v2 (467 items, phrase-level EM)
-uv run python -m tools.probe.run_probe_v2 \
+uv run python -m datasets.tools.probe.run_probe_v2 \
     --models ctc_nat_30m \
     --out-dir results/phase3_v2_dryrun/probe_v2
-# → tools/probe/run_probe_v2.py の _ctc factory で新 ckpt path を指すよう編集要
+# → datasets/tools/probe/run_probe_v2.py の _ctc factory で新 ckpt path を指すよう編集要
 
 # CVAE probe (188 items, domain 別 EM)
-uv run python -m tools.probe.run_cvae_probe \
+uv run python -m datasets.tools.probe.run_cvae_probe \
     --backend ctc_nat_30m \
     --ckpt models/checkpoints/ctc_nat_30m_v2_dryrun/checkpoint_step_160000.pt \
     --out results/phase3_v2_dryrun/cvae_160k.json
@@ -264,5 +264,5 @@ uv run python -m tools.probe.run_cvae_probe \
 
 ## 未実装 / 後工程
 
-- `tools/probe/run_probe_v2.py` の `--ckpt` 引数対応 (現状 factory 内 hardcode)
+- `datasets/tools/probe/run_probe_v2.py` の `--ckpt` 引数対応 (現状 factory 内 hardcode)
 - CVAE 実装 (本 dry-run で CTCTeacher の train loop が動くことを先に確認)

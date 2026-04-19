@@ -56,7 +56,7 @@
 ### Ginza / SudachiDict (Apache 2.0)
 
 - ライセンス: Apache 2.0
-- 本リポジトリでの扱い: `tools/corpus_v2/bunsetsu_split.py` で使用、ランタイム依存
+- 本リポジトリでの扱い: `datasets/tools/corpus/bunsetsu_split.py` で使用、ランタイム依存
 
 ### Fugashi / unidic-lite (MIT + BSD style)
 
@@ -66,7 +66,7 @@
 ### mozc-ut dict (不問 / Public Domain 相当)
 
 - 参照: `tools/old/build-train-mix-v2.py` で間接参照
-- `tools/dict/import_mozc_dict.py` で処理、成果物の `fixed_dict_mozc_ut*.tsv` は
+- `models/tools/dict/import_mozc_dict.py` で処理、成果物の `fixed_dict_mozc_ut*.tsv` は
   `.gitignore` 済
 
 ## 上流データソース

@@ -1,19 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
-    "datacore",
-    "build-train-mix",
-    "build-train-mix-v2",
-    "process-zenz",
-    "audit-pools",
+    "datasets/tools/datacore",
+    "datasets/tools/mix",
+    "datasets/tools/process-zenz",
+    "datasets/tools/audit",
 ]
-# Existing standalone tools keep their own Cargo.toml and build out of tree.
+# Standalone crates build out of tree.
 exclude = [
-    "build-vocab",
-    "chunk-generator",
-    "postprocess",
-    "audit-tokenizer",
-    "mecab-test",
+    "models/tools/build-vocab",
+    "models/tools/postprocess",
+    "models/tools/audit-tokenizer",
+    "datasets/tools/chunk-generator",
+    "tools/mecab-test",
+    "tools/old",
 ]
 
 [workspace.package]

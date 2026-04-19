@@ -247,19 +247,19 @@ v2 corpus パイプライン (現行):
 
 ```bash
 # v2 raw → yomi + sentence-level clean (既に完了)
-uv run python -m tools.corpus_v2.process_wikimedia --xml ... --out datasets/corpus/sentence/wikibooks.jsonl
-uv run python -m tools.corpus_v2.clean_v2 --src ... --out datasets/corpus/sentence/wikibooks.clean.jsonl
+uv run python -m datasets.tools.corpus.process_wikimedia --xml ... --out datasets/corpus/sentence/wikibooks.jsonl
+uv run python -m datasets.tools.corpus.clean_v2 --src ... --out datasets/corpus/sentence/wikibooks.clean.jsonl
 
 # bunsetsu 化 (v2 → 句単位、Ginza 使用)
-bash tools/corpus_v2/run_bunsetsu_all.sh
+bash datasets/tools/corpus/run_bunsetsu_all.sh
 # → datasets/corpus/bunsetsu/{wikinews,aozora_dialogue,tatoeba,wikibooks,wiktionary}.jsonl
 
 # 合成データ
-uv run python -m tools.corpus_v2.synth_numeric --out datasets/corpus/synth/numeric.jsonl
-uv run python -m tools.corpus_v2.synth_numeric_ext --out datasets/corpus/synth/numeric_ext.jsonl
+uv run python -m datasets.tools.corpus.synth_numeric --out datasets/corpus/synth/numeric.jsonl
+uv run python -m datasets.tools.corpus.synth_numeric_ext --out datasets/corpus/synth/numeric_ext.jsonl
 
 # 20M training mix 構築 (phase3_v2 dry-run 用)
-uv run python -m tools.build-train-mix-v2.build \
+cargo run --release --bin build-train-mix -- \
     --output datasets/mixes/student-20m.jsonl --total 20000000 \
     --sentence-src datasets/mixes/scratch-200m.jsonl \
     --sentence-src datasets/corpus/sentence/wikinews.clean.jsonl ... \
@@ -276,16 +276,16 @@ uv run python -m tools.build-train-mix-v2.build \
 
 ```bash
 # 現行の主力: phrase-level probe (467 項目、7 category)
-uv run python -m tools.probe.run_probe_v2 --models ctc_nat_90m-step27500
+uv run python -m datasets.tools.probe.run_probe_v2 --models ctc_nat_90m-step27500
 
 # KenLM 付き α/β sweep (WSL 経由、kenlm py は Linux のみ)
-wsl -- bash -c "bash /mnt/d/Dev/new-ime/tools/probe/sweep_probe_v2_kenlm.sh ctc_nat_90m-step27500"
+wsl -- bash -c "bash /mnt/d/Dev/new-ime/datasets/tools/probe/sweep_probe_v2_kenlm.sh ctc_nat_90m-step27500"
 
 # CVAE 検証 probe (188 項目、domain 別 EM)
-uv run python -m tools.probe.run_cvae_probe --backend ctc_nat_90m
+uv run python -m datasets.tools.probe.run_cvae_probe --backend ctc_nat_90m
 
 # 旧 sentence-level ベンチ (general / AJIMEE / manual)
-uv run python -m tools.eval.run_all_evals --manual 100 --evalv3 300 --ajimee 100
+uv run python -m models.tools.eval.run_all_evals --manual 100 --general 300 --ajimee 100
 ```
 
 ## 参考文献
