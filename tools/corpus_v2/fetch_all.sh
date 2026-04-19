@@ -4,12 +4,12 @@
 # Linux kernel translations) — see docs/corpus_candidates_v2.md for the
 # license and rationale on each pick.
 #
-# Outputs land in datasets/raw_v2/. Each source is downloaded once;
+# Outputs land in datasets/raw_current/. Each source is downloaded once;
 # re-running is a no-op.
 
 set -euo pipefail
 REPO=$(git rev-parse --show-toplevel)
-DST="$REPO/datasets/raw_v2"
+DST="$REPO/datasets/raw_current"
 mkdir -p "$DST"
 
 fetch() {

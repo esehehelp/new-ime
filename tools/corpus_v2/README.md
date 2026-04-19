@@ -4,7 +4,7 @@ Per `docs/corpus_candidates_v2.md` and the probe_v1 sweep findings,
 these are the raw sources and the per-source processing plan. All
 sources were fetched by `fetch_all.sh`; run that first.
 
-## What's in `datasets/raw_v2/`
+## What's in `datasets/raw_current/`
 
 | file | license | next step |
 |---|---|---|

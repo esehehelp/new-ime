@@ -12,8 +12,8 @@ Design:
 
 Usage (vast.ai 5090):
     python -m models.src.training.train_teacher \
-        --train datasets/mixes/train_teacher_v1_20m.jsonl \
-        --dev datasets/eval/eval_v3/dev.jsonl \
+        --train datasets/mixes/teacher-20m.jsonl \
+        --dev datasets/eval/general/dev.jsonl \
         --preset teacher_150m \
         --tokenizer-path models/checkpoints/ctc_nat_90m/checkpoint_step_27500_tokenizer.json \
         --batch-size 32 --grad-accum 4 --max-seq-len 192 \

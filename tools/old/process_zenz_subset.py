@@ -19,7 +19,7 @@ Usage:
     uv run python scripts/process_zenz_subset.py \
         --input datasets/src/zenz_llmjp/train_llm-jp-corpus-v3.jsonl \
         --output datasets/zenz_llmjp_clean.jsonl \
-        [--contamination-ref datasets/eval_v3/test.jsonl]
+        [--contamination-ref datasets/eval/general/test.jsonl]
 """
 
 from __future__ import annotations

@@ -12,7 +12,7 @@ and we emit one output line per accepted sentence.
 
 Usage:
     uv run python -m tools.corpus_v2.process_wikimedia \
-        --xml datasets/raw_v2/jawikibooks-latest-pages-articles.xml \
+        --xml datasets/raw_current/jawikibooks-latest-pages-articles.xml \
         --source wikibooks_v2 \
         --out datasets/v2/wikibooks_v2.jsonl
 

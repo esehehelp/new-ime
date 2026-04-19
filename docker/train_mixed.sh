@@ -12,16 +12,16 @@ CHUNK_SAMPLES=${2:-5000000}
 
 echo "=== Preparing mixed dataset ==="
 # Take N samples from chunks, combine with full sentence data
-head -"$CHUNK_SAMPLES" datasets/eval_v3/chunks_v3_100m.jsonl > /tmp/chunks_sample.jsonl
-cat datasets/eval_v3/train.jsonl /tmp/chunks_sample.jsonl | shuf > datasets/eval_v3/train_mixed.jsonl
-wc -l datasets/eval_v3/train_mixed.jsonl
+head -"$CHUNK_SAMPLES" datasets/eval/general/chunks_v3_100m.jsonl > /tmp/chunks_sample.jsonl
+cat datasets/eval/general/train.jsonl /tmp/chunks_sample.jsonl | shuf > datasets/mixes/train-mixed.jsonl
+wc -l datasets/mixes/train-mixed.jsonl
 rm /tmp/chunks_sample.jsonl
 
 echo "=== Mixed training: batch=$BATCH_SIZE ==="
 
 uv run python -m src.training.train_ar \
-  --train datasets/eval_v3/train_mixed.jsonl \
-  --dev datasets/eval_v3/dev.jsonl \
+  --train datasets/mixes/train-mixed.jsonl \
+  --dev datasets/eval/general/dev.jsonl \
   --output checkpoints/ar_mixed \
   --epochs 1 \
   --batch-size "$BATCH_SIZE" \

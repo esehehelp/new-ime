@@ -139,8 +139,8 @@ def main() -> None:
         "--eval-sets",
         nargs="+",
         default=[
-            "datasets/eval_v3/dev.jsonl",
-            "datasets/eval_v3/test.jsonl",
+            "datasets/eval/general/dev.jsonl",
+            "datasets/eval/general/test.jsonl",
             "datasets/gold_1k.jsonl",
         ],
         help="Evaluation JSONL files used for contamination checks",

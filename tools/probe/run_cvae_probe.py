@@ -25,7 +25,7 @@ domain z 付きで呼ぶ版に差し替える。
 
 Usage:
     uv run python -m scripts.run_cvae_probe \
-        --probe datasets/eval/cvae_probe.tsv \
+        --probe datasets/eval/cvae-probe/probe.tsv \
         --backend ctc_nat_90m \
         --out results/cvae_probe/baseline_90m.json
 """
@@ -140,7 +140,7 @@ def evaluate_baseline(backend: CTCNATBackend, probe: list[dict]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--probe", default="datasets/eval/cvae_probe.tsv")
+    ap.add_argument("--probe", default="datasets/eval/cvae-probe/probe.tsv")
     ap.add_argument("--backend", default="ctc_nat_90m",
                     choices=["ctc_nat_30m", "ctc_nat_90m"])
     ap.add_argument("--ckpt", default="",

@@ -16,10 +16,10 @@ RUN git clone https://github.com/esehehelp/new-ime.git && \
 
 # Pre-download dataset from HuggingFace
 RUN cd new-ime && \
-    mkdir -p datasets/eval_v3 && \
-    uv run hf download esehe/new-ime-dataset train.jsonl --repo-type dataset --local-dir datasets/eval_v3 && \
-    uv run hf download esehe/new-ime-dataset dev.jsonl --repo-type dataset --local-dir datasets/eval_v3 && \
-    uv run hf download esehe/new-ime-dataset chunks_v3_100m.jsonl --repo-type dataset --local-dir datasets/eval_v3
+    mkdir -p datasets/eval/general && \
+    uv run hf download esehe/new-ime-dataset train.jsonl --repo-type dataset --local-dir datasets/eval/general && \
+    uv run hf download esehe/new-ime-dataset dev.jsonl --repo-type dataset --local-dir datasets/eval/general && \
+    uv run hf download esehe/new-ime-dataset chunks_v3_100m.jsonl --repo-type dataset --local-dir datasets/eval/general
 
 WORKDIR /workspace/new-ime
 

@@ -28,7 +28,7 @@ different vocabulary-building path and is not affected.
 Usage (default 200M-row build):
     uv run python scripts/build_phase3_train.py \
         --output datasets/phase3/train.jsonl \
-        --contamination-ref datasets/eval_v3/test.jsonl datasets/eval_v3/dev.jsonl
+        --contamination-ref datasets/eval/general/test.jsonl datasets/eval/general/dev.jsonl
 """
 
 from __future__ import annotations
@@ -262,7 +262,7 @@ def main() -> None:
     parser.add_argument(
         "--contamination-ref",
         nargs="+",
-        default=["datasets/eval_v3/test.jsonl"],
+        default=["datasets/eval/general/test.jsonl"],
         help="Evaluation JSONL(s) to 6-gram-filter un-filtered pools against",
     )
     parser.add_argument("--contamination-n", type=int, default=6)

@@ -56,10 +56,10 @@
 
 | 領域 | 状態 |
 |-------|------|
-| データパイプライン (v1) | `datasets/mixes/train_v1_200m.jsonl` 200M rows (chunks + zenz_llmjp + wiki + aozora + fineweb2 + hplt3)、コンポーネントは `datasets/corpus/v1/` |
+| データパイプライン (v1) | `datasets/mixes/scratch-200m.jsonl` 200M rows (chunks + zenz_llmjp + wiki + aozora + fineweb2 + hplt3)、コンポーネントは `datasets/corpus/legacy/` |
 | データパイプライン (v2 corpus) | wikinews/aozora_dialogue/wikibooks/wiktionary/tatoeba の yomi 付与 + bunsetsu 化進行中 (6 pool、約 7M 句) |
 | 合成データ | synth_numeric (37K: 数詞×助数詞) + synth_numeric_ext (150K: 時刻/日付/通貨/分数/小数/連番) |
-| AR (Phase 2) | 完了 — 31.9M, eval_v3 EM 0.412、KD teacher として保管 |
+| AR (Phase 2) | 完了 — 31.9M, general eval EM 0.412、KD teacher として保管 |
 | CTC-NAT 90M step27500 | probe_v2 (467 項目) EM1=0.612 (+KenLM α=0.2 β=0.6 beam=5)、zenz-v2.5-small の 0.70 から 9pt 差、レイテンシ 13x 速 |
 | CTC-NAT 30M step50000 | probe_v2 EM1=0.499 (+KenLM α=0.4 β=0.3 beam=5) |
 | **phase3_v2 dry-run** | 準備完了、bunsetsu 完走待ち。30M scratch + 90M CTC teacher + 20M mix + 16K step。実行手順は `docs/phase3_v2_dryrun_runbook.md` |
@@ -167,14 +167,14 @@ new-ime/
 │   │       ├── bunsetsu/      #     v2 句レベル (Ginza)
 │   │       └── synth/         #     合成 (numeric / numeric_ext)
 │   ├── mixes/
-│   │   ├── train_v1_200m.jsonl #    旧 phase3/train.jsonl
-│   │   └── train_v2_20m.jsonl  #    (作成予定) phase3_v2 dry-run 用
+│   │   ├── scratch-200m.jsonl #    旧 phase3/train.jsonl
+│   │   └── student-20m.jsonl  #    (作成予定) phase3_v2 dry-run 用
 │   ├── eval/
-│   │   ├── eval_v3/            #    dev/test/train
+│   │   ├── general/            #    dev/test/train
 │   │   ├── gold_1k.jsonl
 │   │   ├── probe_v1.tsv        #    旧 116 項目 sentence-level
 │   │   ├── probe_v2.tsv        #    467 項目 phrase-level
-│   │   └── cvae_probe.tsv      #    188 項目 domain-labeled
+│   │   └── cvae-probe/probe.tsv      #    188 項目 domain-labeled
 │   ├── raw/                    #   一次ソース (XML/CSV)
 │   ├── tokenizers/             #   共有トークナイザ
 │   └── audits/                 #   監査ログ
@@ -247,25 +247,25 @@ v2 corpus パイプライン (現行):
 
 ```bash
 # v2 raw → yomi + sentence-level clean (既に完了)
-uv run python -m tools.corpus_v2.process_wikimedia --xml ... --out datasets/corpus/v2/sentences/wikibooks.jsonl
-uv run python -m tools.corpus_v2.clean_v2 --src ... --out datasets/corpus/v2/sentences/wikibooks.clean.jsonl
+uv run python -m tools.corpus_v2.process_wikimedia --xml ... --out datasets/corpus/sentence/wikibooks.jsonl
+uv run python -m tools.corpus_v2.clean_v2 --src ... --out datasets/corpus/sentence/wikibooks.clean.jsonl
 
 # bunsetsu 化 (v2 → 句単位、Ginza 使用)
 bash tools/corpus_v2/run_bunsetsu_all.sh
-# → datasets/corpus/v2/bunsetsu/{wikinews,aozora_dialogue,tatoeba,wikibooks,wiktionary}.jsonl
+# → datasets/corpus/bunsetsu/{wikinews,aozora_dialogue,tatoeba,wikibooks,wiktionary}.jsonl
 
 # 合成データ
-uv run python -m tools.corpus_v2.synth_numeric --out datasets/corpus/v2/synth/numeric.jsonl
-uv run python -m tools.corpus_v2.synth_numeric_ext --out datasets/corpus/v2/synth/numeric_ext.jsonl
+uv run python -m tools.corpus_v2.synth_numeric --out datasets/corpus/synth/numeric.jsonl
+uv run python -m tools.corpus_v2.synth_numeric_ext --out datasets/corpus/synth/numeric_ext.jsonl
 
 # 20M training mix 構築 (phase3_v2 dry-run 用)
 uv run python -m tools.build-train-mix-v2.build \
-    --output datasets/mixes/train_v2_20m.jsonl --total 20000000 \
-    --sentence-src datasets/mixes/train_v1_200m.jsonl \
-    --sentence-src datasets/corpus/v2/sentences/wikinews.clean.jsonl ... \
-    --bunsetsu-src datasets/corpus/v2/bunsetsu \
-    --synth-src datasets/corpus/v2/synth/numeric.jsonl \
-    --synth-src datasets/corpus/v2/synth/numeric_ext.jsonl \
+    --output datasets/mixes/student-20m.jsonl --total 20000000 \
+    --sentence-src datasets/mixes/scratch-200m.jsonl \
+    --sentence-src datasets/corpus/sentence/wikinews.clean.jsonl ... \
+    --bunsetsu-src datasets/corpus/bunsetsu \
+    --synth-src datasets/corpus/synth/numeric.jsonl \
+    --synth-src datasets/corpus/synth/numeric_ext.jsonl \
     --ratio-sentence 0.555 --ratio-bunsetsu2 0.278 \
     --ratio-bunsetsu1 0.055 --ratio-synth 0.111
 ```
@@ -284,7 +284,7 @@ wsl -- bash -c "bash /mnt/d/Dev/new-ime/tools/probe/sweep_probe_v2_kenlm.sh ctc_
 # CVAE 検証 probe (188 項目、domain 別 EM)
 uv run python -m tools.probe.run_cvae_probe --backend ctc_nat_90m
 
-# 旧 sentence-level ベンチ (eval_v3 / AJIMEE / manual)
+# 旧 sentence-level ベンチ (general / AJIMEE / manual)
 uv run python -m tools.eval.run_all_evals --manual 100 --evalv3 300 --ajimee 100
 ```
 

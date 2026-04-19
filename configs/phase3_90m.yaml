@@ -19,8 +19,8 @@ training:
   log_every: 100
 
 data:
-  train: datasets/eval_v3/train.jsonl
-  dev: datasets/eval_v3/dev.jsonl
+  train: datasets/eval/general/train.jsonl
+  dev: datasets/eval/general/dev.jsonl
   max_train_samples: 0
   max_dev_samples: 2000
 

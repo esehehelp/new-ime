@@ -43,7 +43,7 @@ items 相当のロス)。numeric を半分解決すれば 90M は zenz と並ぶ
 ## KenLM shallow fusion (sweep)
 
 CTC-NAT 90M step27500 に対し beam=5 + KenLM
-(`models/kenlm/kenlm_eval_v3_train_4gram_probing.bin`) で α × β grid sweep
+(`models/kenlm/kenlm_general_train_4gram_probing.bin`) で α × β grid sweep
 (α ∈ {0.2, 0.4, 0.6}, β ∈ {0.0, 0.3, 0.6})。
 
 | config | EM1 |

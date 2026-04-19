@@ -41,8 +41,8 @@ struct Args {
 
     /// Evaluation JSONL files used for contamination checks.
     #[arg(long, num_args = 0.., default_values_t = [
-        "datasets/eval_v3/dev.jsonl".to_string(),
-        "datasets/eval_v3/test.jsonl".to_string(),
+        "datasets/eval/general/dev.jsonl".to_string(),
+        "datasets/eval/general/test.jsonl".to_string(),
         "datasets/gold_1k.jsonl".to_string(),
     ])]
     eval_sets: Vec<String>,

@@ -22,7 +22,7 @@ Usage:
     uv run python -m scripts.sweep_interactive_ctc \
         --exe build/win32/interactive_ctc.exe \
         --onnx models/ctc_nat_30m_best_latest.onnx \
-        --lm   models/kenlm_eval_v3_train_4gram_probing.bin \
+        --lm   models/kenlm_general_train_4gram_probing.bin \
         --dict "models/user_dict.tsv,models/fixed_dict_mozc.tsv,models/fixed_dict_mozc_ut.tsv" \
         --probe datasets/probe_v1/probe.tsv \
         --alphas 0.0,0.2,0.4,0.6,0.8 \

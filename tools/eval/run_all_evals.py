@@ -22,12 +22,13 @@ sys.stdout.reconfigure(encoding="utf-8")
 from models.src.eval.ar_backend import ARCheckpointBackend
 from models.src.eval.bench_loaders import (
     load_ajimee_jwtd,
-    load_eval_v3,
+    load_general,
     load_manual_test,
     sample_items,
 )
 from models.src.eval.ctc_nat_backend import CTCNATBackend
 from models.src.eval.metrics import EvalResult
+from models.src.eval.teacher_backend import TeacherBackend
 from models.src.eval.zenz_backend import ZenzV2Backend
 
 
@@ -233,6 +234,20 @@ def build_models(args) -> list[tuple[str, callable]]:
                 chunk_size=8,
             ),
         ),
+        (
+            "ctc_nat_30m_v2-step49000-greedy",
+            lambda: CTCNATBackend(
+                "models/checkpoints/ctc_nat_30m_v2_dryrun/checkpoint_step_49000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+            ),
+        ),
+        (
+            "teacher-v1-150m-step100000-greedy",
+            lambda: TeacherBackend(
+                "models/checkpoints/teacher-v1-150m/checkpoint_step_100000.pt",
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+            ),
+        ),
     ]
     if not args.skip_beam:
         pool += [
@@ -265,13 +280,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manual", type=int, default=100, help="manual test sample count (max 100)")
     parser.add_argument("--ajimee", type=int, default=80, help="AJIMEE-Bench sample count")
-    parser.add_argument("--evalv3", type=int, default=80, help="eval_v3/dev sample count")
+    parser.add_argument("--general", type=int, default=80, help="general/dev sample count")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--ajimee-path",
         default="references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json",
     )
-    parser.add_argument("--evalv3-path", default="datasets/eval_v3/dev.jsonl")
+    parser.add_argument("--general-path", default="datasets/eval/general/dev.jsonl")
     parser.add_argument("--out-dir", default="results/eval_runs")
     parser.add_argument("--skip-beam", action="store_true", help="skip beam-search runs")
     parser.add_argument("--models", default="", help="comma list to filter model names")
@@ -283,16 +298,16 @@ def main() -> None:
     print("Loading benches...", flush=True)
     manual = load_manual_test()[: args.manual] if args.manual > 0 else []
     ajimee = sample_items(load_ajimee_jwtd(args.ajimee_path), args.ajimee, args.seed)
-    evalv3 = sample_items(load_eval_v3(args.evalv3_path), args.evalv3, args.seed)
+    evalv3 = sample_items(load_general(args.general_path), args.general, args.seed)
     benches: dict[str, list[dict]] = {}
     if manual:
         benches["manual_test"] = manual
     if ajimee:
         benches["ajimee_jwtd"] = ajimee
     if evalv3:
-        benches["eval_v3_dev"] = evalv3
+        benches["general_dev"] = evalv3
     print(
-        f"  manual={len(manual)} ajimee={len(ajimee)} eval_v3={len(evalv3)} "
+        f"  manual={len(manual)} ajimee={len(ajimee)} general={len(evalv3)} "
         f"(total {sum(len(v) for v in benches.values())} per model)",
         flush=True,
     )

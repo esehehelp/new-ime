@@ -10,10 +10,10 @@ pool の置換ではない) のため、mix pool 比率とは独立。
 
 | プール | pool 内比率 | 備考 |
 |---|---:|---|
-| sentence-level | **0.555** | `datasets/mixes/train_v1_200m.jsonl` (既存 phase3 mix) |
-| bunsetsu span=2 | **0.278** | `datasets/corpus/v2/bunsetsu/*.jsonl` (filter span_bunsetsu==2) |
+| sentence-level | **0.555** | `datasets/mixes/scratch-200m.jsonl` (既存 phase3 mix) |
+| bunsetsu span=2 | **0.278** | `datasets/corpus/bunsetsu/*.jsonl` (filter span_bunsetsu==2) |
 | bunsetsu span=1 | **0.055** | 同上 (filter span_bunsetsu==1) |
-| synth_numeric | **0.111** | `datasets/corpus/v2/synth/numeric.jsonl` |
+| synth_numeric | **0.111** | `datasets/corpus/synth/numeric.jsonl` |
 | **sum** | **1.000** | |
 
 (元の user 指定 "50/25/5/10 of all data + 10% KD" を pool 比率にすると
@@ -28,7 +28,7 @@ KD overlay は `--kd-every 4` → 25% of optimizer steps で発火 (mix pool と
 `tools/corpus_v2/run_bunsetsu_all.sh` が全 5 pool を処理済み:
 
 ```bash
-wc -l datasets/corpus/v2/bunsetsu/*.jsonl
+wc -l datasets/corpus/bunsetsu/*.jsonl
 # 想定合計: 約 8-10M 行 (span=1 + span=2 混在)
 ```
 
@@ -37,9 +37,9 @@ wiktionary_v2.jsonl が書かれていること。
 ### 2. synth_numeric + synth_numeric_ext 生成済み
 
 ```bash
-wc -l datasets/corpus/v2/synth/numeric.jsonl
+wc -l datasets/corpus/synth/numeric.jsonl
 # 36,831 行 (数詞×助数詞)
-wc -l datasets/corpus/v2/synth/numeric_ext.jsonl
+wc -l datasets/corpus/synth/numeric_ext.jsonl
 # 150,000 行 (時刻/日付/通貨/分数/小数/連番)
 # 合計 ~187K 行を synth pool として使用
 ```
@@ -47,7 +47,7 @@ wc -l datasets/corpus/v2/synth/numeric_ext.jsonl
 ### 3. 既存 phase3 sentence mix
 
 ```bash
-wc -l datasets/mixes/train_v1_200m.jsonl
+wc -l datasets/mixes/scratch-200m.jsonl
 # 200,000,000 行 / ~38 GB
 ```
 
@@ -61,7 +61,7 @@ synth pool は synth_numeric (37K) + synth_numeric_ext (150K) 合算。
 
 **注意: sentence pool 実効分布**
 
-既存 `datasets/mixes/train_v1_200m.jsonl` (200M) は旧 v1 mix で構築されており内部に
+既存 `datasets/mixes/scratch-200m.jsonl` (200M) は旧 v1 mix で構築されており内部に
 **chunks 60% (短文)** が含まれる。従って pool 内比率 sentence 0.555 は**外見上**
 の値で、実効長さ分布では:
 
@@ -81,17 +81,17 @@ cd tools && cargo build --release --bin build-train-mix-v2 && cd ..
 
 ```bash
 tools/target/release/build-train-mix-v2.exe \
-    --output datasets/mixes/train_v2_20m.jsonl \
+    --output datasets/mixes/student-20m.jsonl \
     --total 20000000 \
-    --sentence-src datasets/mixes/train_v1_200m.jsonl \
-    --sentence-src datasets/corpus/v2/sentences/wikinews.clean.jsonl \
-    --sentence-src datasets/corpus/v2/sentences/wikibooks.clean.jsonl \
-    --sentence-src datasets/corpus/v2/sentences/wiktionary.clean.jsonl \
-    --sentence-src datasets/corpus/v2/sentences/tatoeba.jsonl \
-    --sentence-src datasets/corpus/v2/sentences/aozora_dialogue.jsonl \
-    --bunsetsu-src datasets/corpus/v2/bunsetsu \
-    --synth-src datasets/corpus/v2/synth/numeric.jsonl \
-    --synth-src datasets/corpus/v2/synth/numeric_ext.jsonl \
+    --sentence-src datasets/mixes/scratch-200m.jsonl \
+    --sentence-src datasets/corpus/sentence/wikinews.clean.jsonl \
+    --sentence-src datasets/corpus/sentence/wikibooks.clean.jsonl \
+    --sentence-src datasets/corpus/sentence/wiktionary.clean.jsonl \
+    --sentence-src datasets/corpus/sentence/tatoeba.jsonl \
+    --sentence-src datasets/corpus/sentence/aozora_dialogue.jsonl \
+    --bunsetsu-src datasets/corpus/bunsetsu \
+    --synth-src datasets/corpus/synth/numeric.jsonl \
+    --synth-src datasets/corpus/synth/numeric_ext.jsonl \
     --ratio-sentence 0.555 \
     --ratio-bunsetsu2 0.278 \
     --ratio-bunsetsu1 0.055 \
@@ -104,7 +104,7 @@ tools/target/release/build-train-mix-v2.exe \
 
 確認:
 ```bash
-wc -l datasets/mixes/train_v2_20m.jsonl
+wc -l datasets/mixes/student-20m.jsonl
 # 20,000,000 行
 ```
 
@@ -114,8 +114,8 @@ wc -l datasets/mixes/train_v2_20m.jsonl
 
 ```powershell
 .\.venv\Scripts\python.exe -m models.src.training.train_ctc_nat `
-    --train datasets/mixes/train_v2_20m.jsonl `
-    --dev datasets/eval/eval_v3/dev.jsonl `
+    --train datasets/mixes/student-20m.jsonl `
+    --dev datasets/eval/general/dev.jsonl `
     --preset phase3_30m `
     --tokenizer-path models/checkpoints/ctc_nat_90m/checkpoint_step_27500_tokenizer.json `
     --batch-size 48 `
@@ -239,7 +239,7 @@ uv run python -m tools.probe.run_cvae_probe \
 | max-steps | 50000 | **160000** (~10-12h 3060) |
 | seq_len | 128 | 128 (teacher 90M の max_positions が 128 のため一致) |
 | max-context | 32 | **40** |
-| train 形式 | eval_v3/train.jsonl (2M) | **mixes/train_v2_20m.jsonl (20M)** |
+| train 形式 | general/train.jsonl (2M) | **mixes/student-20m.jsonl (20M)** |
 | checkpoint-every | 2000 | **1000** (160 ckpt、granular 監視) |
 | eval-every | (定例 2000) | **500** (より頻繁) |
 | kd-hard-threshold | 0.95 | **0.92** |

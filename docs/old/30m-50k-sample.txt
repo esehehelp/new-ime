@@ -1,8 +1,8 @@
 PS D:\Dev\new-ime> .\.venv\Scripts\python.exe -m src.training.train_ctc_nat `
->>     --train datasets/eval_v3/train.jsonl `
->>     --dev datasets/eval_v3/dev.jsonl `
+>>     --train datasets/eval/general/train.jsonl `
+>>     --dev datasets/eval/general/dev.jsonl `
 >>     --preset phase3_30m `
->>     --tokenizer-path datasets/tokenizers/eval_v3_shared_4k.json `
+>>     --tokenizer-path datasets/tokenizers/char-5k.json `
 >>     --batch-size 32 `
 >>     --grad-accum 4 `
 >>     --fp16 `

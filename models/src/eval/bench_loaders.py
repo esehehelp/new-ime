@@ -14,8 +14,8 @@ from pathlib import Path
 import jaconv
 
 
-def load_eval_v3(path: str) -> list[dict]:
-    """Our eval_v3 jsonl: {reading, surface, context, source}."""
+def load_general(path: str) -> list[dict]:
+    """datasets/eval/general jsonl: {reading, surface, context, source}."""
     items: list[dict] = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -25,9 +25,33 @@ def load_eval_v3(path: str) -> list[dict]:
                     "reading": d["reading"],
                     "context": d.get("context", ""),
                     "references": [d["surface"]],
-                    "source": d.get("source", "eval_v3"),
+                    "source": d.get("source", "general"),
                 }
             )
+    return items
+
+
+def load_probe(path: str) -> list[dict]:
+    """datasets/eval/probe/probe.json (AJIMEE-compatible + category field).
+
+    Each item carries: index, category, context_text, input (katakana),
+    expected_output (list), original_text, splitted_input_for_limited_input_length.
+    Input is katakana-normalized to hiragana so backends accept it directly.
+    """
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    items: list[dict] = []
+    for r in raw:
+        items.append(
+            {
+                "reading": jaconv.kata2hira(r["input"]),
+                "context": r.get("context_text", "") or "",
+                "references": list(r["expected_output"]),
+                "category": r["category"],
+                "source": "probe",
+                "_index": r.get("index", ""),
+            }
+        )
     return items
 
 

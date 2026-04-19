@@ -14,7 +14,7 @@ Three decoding knobs:
   split it into `chunk_size`-character segments and convert each segment
   with the previously-converted surface as rolling context. This
   compensates for a training distribution that is ~60% short-chunk
-  examples when we're asked to convert long-form inputs (e.g. eval_v3/dev
+  examples when we're asked to convert long-form inputs (e.g. general/dev
   Wikipedia sentences).
 
 KenLM fusion lives in `server/src/ctc_decoder.cpp` and is not plumbed here

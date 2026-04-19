@@ -22,6 +22,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from models.src.eval.ar_backend import ARCheckpointBackend
 from models.src.eval.ctc_nat_backend import CTCNATBackend
+from models.src.eval.teacher_backend import TeacherBackend
 from models.src.eval.zenz_backend import ZenzV2Backend
 
 
@@ -129,6 +130,12 @@ def build_models(filter_substr: str = "",
             lambda: _ctc("models/checkpoints/ctc_nat_30m/final.pt")),
         ("ctc_nat_90m-step27500",
             lambda: _ctc("models/checkpoints/ctc_nat_90m/checkpoint_step_27500.pt")),
+        ("ctc_nat_30m_v2-step49000",
+            lambda: _ctc("models/checkpoints/ctc_nat_30m_v2_dryrun/checkpoint_step_49000.pt")),
+        ("teacher-v1-150m-step100000",
+            lambda: TeacherBackend(
+                "models/checkpoints/teacher-v1-150m/checkpoint_step_100000.pt",
+                device=device)),
     ]
     if filter_substr:
         wanted = [w.strip() for w in filter_substr.split(",") if w.strip()]

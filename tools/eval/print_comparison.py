@@ -32,7 +32,7 @@ def main() -> None:
         "ar_v3_chunks_greedy",
         "ar_v3_chunks_beam10",
     ]
-    benches = ["manual_test", "ajimee_jwtd", "eval_v3_dev"]
+    benches = ["manual_test", "ajimee_jwtd", "general_dev"]
 
     for b in benches:
         print(f"\n=== {b} ===")

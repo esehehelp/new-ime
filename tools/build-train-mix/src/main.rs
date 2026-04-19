@@ -71,7 +71,7 @@ struct Args {
     /// Evaluation JSONL(s) for 6-gram contamination filter on un-filtered pools
     /// (chunks and legacy wiki/aozora). Empty list disables contamination
     /// filtering.
-    #[arg(long, num_args = 0.., default_values_t = ["datasets/eval_v3/test.jsonl".to_string()])]
+    #[arg(long, num_args = 0.., default_values_t = ["datasets/eval/general/test.jsonl".to_string()])]
     contamination_ref: Vec<String>,
 
     /// N for contamination n-gram check.

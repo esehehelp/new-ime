@@ -5,7 +5,7 @@ set -e
 cd /mnt/d/Dev/new-ime
 
 MODEL="${1:-ctc_nat_90m-step27500}"
-LM="models/kenlm/kenlm_eval_v3_train_4gram_probing.bin"
+LM="models/kenlm/kenlm_general_train_4gram_probing.bin"
 OUT="results/probe_v2_kenlm_sweep_${MODEL}"
 mkdir -p "$OUT"
 

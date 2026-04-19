@@ -5,7 +5,7 @@ fugashi, emit the same schema the other corpus-v2 pools use.
 
 Usage:
     uv run python -m tools.corpus_v2.process_tatoeba \
-        --src datasets/raw_v2/tatoeba/sentences.csv \
+        --src datasets/raw_current/tatoeba/sentences.csv \
         --out datasets/v2/tatoeba_v2.jsonl
 """
 

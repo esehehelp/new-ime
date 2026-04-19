@@ -12,19 +12,42 @@ last_updated: 2026-04-19
 
 | モデル | 設定 | EM1 | EM5 | p50 ms (WSL CPU) |
 |---|---|---:|---:|---:|
-| **zenz-v3.1-small** | beam=5 | **0.715** | 0.925 | 274 |
-| **zenz-v2.5-small** | beam=5 | **0.700** | 0.916 | 266 |
-| CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | **0.612** | 0.612 | 21 |
+| **CTC-NAT 30m_v2 step49000** | α=0.2, β=0.6, beam=5 + KenLM | **0.779** | 0.779 | 12 |
+| **CTC-NAT 30m_v2 step49000** | greedy (no LM) | **0.739** | 0.739 | 8 |
+| **teacher-v1-150m step100000** | greedy (AR) | **0.739** | 0.739 | 40 |
+| **zenz-v3.1-small** | beam=5 | 0.715 | 0.925 | 274 |
+| **zenz-v2.5-small** | beam=5 | 0.700 | 0.916 | 266 |
+| CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | 0.612 | 0.612 | 21 |
 | CTC-NAT 30M step50000 | α=0.4, β=0.3, beam=5 + KenLM | 0.499 | 0.499 | 26 |
 | CTC-NAT 90M step27500 | greedy (no LM) | 0.580 | 0.580 | 12 |
 | ar_v3_vast | beam=5 | 0.360 | 0.540 | 104 |
 
-- **zenz-small との差**: 90M best で -9pt、speed 13x 有利 (CPU)
-- **KenLM gain**: 90M で +3.2pt、30M で +12.4pt
+- **30m_v2 (新 mix, synth_numeric 含む) が greedy で zenz-v3.1 を +2.4pt 超え**。
+  KenLM 付きで +6.4pt、速度 23x 有利 (CPU)
+- **KenLM gain は 30m_v2 で +4.0pt** (旧 30M の +12.4pt から縮小) — numeric
+  を学習済みで LM 依存度が低下。α=0.6 で numeric 崩壊 (0.88→0.01) するため
+  強めの α は禁忌
+- **teacher 150m は numeric 0.96**、30m_v2 は 0.88 — 両者とも旧 90M の 0.02
+  から大幅改善
+- **edge カテゴリ退行**: 30m_v2 edge 0.39、teacher 0.18、旧 90M step27500
+  の 0.68 から退行。corpus_v2 の mix / tokenizer 変更を疑う
+  (`project_phase3_edge_regression` memo)
 - **CTC-NAT EM5==EM1**: beam が候補多様性を出せていない (Mask-CTC / 温度
   サンプリング未実装)
 
 詳細: `docs/probe_v2_4way_results.md`
+
+### 30m_v2 KenLM α×β sweep (probe_v2)
+
+| 設定 | EM1 | numeric | edge | homo | particle |
+|---|---:|---:|---:|---:|---:|
+| greedy | 0.739 | 0.880 | 0.394 | 0.562 | 0.500 |
+| **α=0.2 β=0.6** | **0.779** | 0.863 | 0.521 | 0.630 | 0.650 |
+| α=0.4 β=0.6 | 0.711 | 0.538 | 0.535 | 0.630 | 0.700 |
+| α=0.6 β=0.6 | 0.582 | 0.009 | 0.535 | 0.616 | 0.750 |
+
+phrase 単位では **α=0.2 が最適**。α を上げると particle / edge は伸びるが
+numeric が破壊されて総合では負ける。
 
 ## domain-conditional (cvae_probe, 188 項目, 10 domain)
 
@@ -56,7 +79,43 @@ domain 別 (greedy):
 
 詳細: `docs/cvae_probe_baseline.md`
 
-## 旧 sentence-level (参考値)
+## sentence-level (manual / ajimee / general)
+
+### 2026-04-19: 30m_v2 + KenLM α×β sweep (beam=5)
+
+`results/eval_runs_30mv2_kenlm_sweep/`。manual=100, ajimee=80, general_dev=80。
+
+| 設定 | manual EM | ajimee EM | general eval EM |
+|---|---:|---:|---:|
+| greedy (no LM) | 0.830 | 0.338 | 0.263 |
+| α=0.2 β=0.6 | 0.860 | 0.500 | 0.300 |
+| **α=0.4 β=0.6** | **0.870** | **0.575** | **0.300** |
+| α=0.4 β=0.3 | 0.870 | 0.575 | 0.300 |
+| α=0.6 β=0.6 | 0.870 | 0.525 | 0.250 |
+
+- **文単位の最適 α は 0.4** (phrase の 0.2 より大きい)。**α=0.6 は general eval で
+  baseline 以下に劣化**
+- **ajimee で +23.75pt** (0.338→0.575)。文単位 KenLM の効果が最大
+- **general の gain は +3.75pt** と小さい。長文 wiki は LM では埋めにくく、
+  chunk decoding との併用が必要
+- 単一設定で使うなら **α=0.4, β=0.6**。probe_v2 では 0.711 (最適 0.779 から
+  -6.8pt だが zenz 0.715 と同等)
+
+### 3-bench 4-way 比較 (2026-04-19)
+
+`results/eval_runs_2026_04_19_30mv2_teacher/`。greedy。
+
+| model | manual EM / p50 | ajimee EM / p50 | general eval EM / p50 |
+|---|---:|---:|---:|
+| zenz-v2.5-small | 0.890 / 197ms | 0.750 / 370ms | 0.375 / 593ms |
+| teacher-v1-150m step100000 | 0.850 / 80ms | 0.588 / 153ms | 0.363 / 265ms |
+| ctc_nat_30m_v2 step49000 | 0.830 / 21ms | 0.338 / 21ms | 0.263 / 20ms |
+| ctc_nat_30m_v2 + α=0.4 β=0.6 | 0.870 / ~15ms | 0.575 / ~22ms | 0.300 / 37ms |
+
+**CharAcc** は teacher 150m が general eval で 0.893 と zenz-small の 0.857 を
+**超えている**。bidirectional encoder による長文の局所整合性の優位。
+
+### 旧 sentence-level (参考値)
 
 2026-04-18 取得。CTC-NAT 90M step15000 + KenLM α=0.80 β=1.0 beam=8 (WSL CPU)。
 
@@ -64,14 +123,14 @@ domain 別 (greedy):
 |---|---:|---:|---:|
 | manual_test (100) | 0.700 | **0.870** | +17pt |
 | ajimee_jwtd (80) | 0.225 | **0.413** | +18.75pt |
-| eval_v3_dev (200) | 0.115 | **0.255** | +14pt |
+| general_dev (200) | 0.115 | **0.255** | +14pt |
 
-KenLM は eval_v3/train で学習。eval_v3/dev は hold-out 同ドメイン、
+KenLM は general/train で学習。general/dev は hold-out 同ドメイン、
 manual/ajimee は LM 未露出ゆえ genuine gain。
 
 ### zenz-v2.5-medium (参考)
 
-| model | manual_test EM | eval_v3_dev EM |
+| model | manual_test EM | general_dev EM |
 |---|---:|---:|
 | zenz-v2.5-medium (310M) | 0.86 | 0.575 |
 | zenz-v2.5-small (91M) | 0.80 | 0.50 |
@@ -83,5 +142,9 @@ manual/ajimee は LM 未露出ゆえ genuine gain。
 
 ## 更新履歴
 
+- 2026-04-19 (追記): ctc_nat_30m_v2 step49000 + teacher-v1-150m step100000 を
+  probe_v2 / 3-bench で評価、30m_v2 KenLM α×β sweep を probe_v2 と 3-bench
+  両方で実施。30m_v2 が phrase / sentence 両領域で zenz-small 比肩に到達、
+  edge カテゴリ退行を検出
 - 2026-04-19: probe_v2 467 項目 4-way + CVAE probe baseline 追加、docs 整理
 - 2026-04-18: CTC-NAT 90M + KenLM sweep、zenz-v2.5 3 sizes 対比 初回取得

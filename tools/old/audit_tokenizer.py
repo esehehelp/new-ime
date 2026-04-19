@@ -2,7 +2,7 @@
 
 Usage:
     uv run python scripts/audit_tokenizer.py \
-        --input datasets/eval_v3/train.jsonl \
+        --input datasets/eval/general/train.jsonl \
         --tokenizer datasets/shared_tokenizer.json
 """
 

@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 
 from models.src.eval.bench_loaders import (
     load_ajimee_jwtd,
-    load_eval_v3,
+    load_general,
     load_manual_test,
     sample_items,
 )
@@ -82,12 +82,12 @@ def main() -> None:
     parser.add_argument("--bench", default="manual,ajimee,evalv3")
     parser.add_argument("--manual", type=int, default=100)
     parser.add_argument("--ajimee", type=int, default=80)
-    parser.add_argument("--evalv3", type=int, default=200)
+    parser.add_argument("--general", type=int, default=200)
     parser.add_argument(
         "--ajimee-path",
         default="references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json",
     )
-    parser.add_argument("--evalv3-path", default="datasets/eval_v3/dev.jsonl")
+    parser.add_argument("--general-path", default="datasets/eval/general/dev.jsonl")
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
 
@@ -103,8 +103,8 @@ def main() -> None:
         benches["manual"] = load_manual_test()[: args.manual]
     if "ajimee" in wanted:
         benches["ajimee"] = sample_items(load_ajimee_jwtd(args.ajimee_path), args.ajimee, 42)
-    if "evalv3" in wanted:
-        benches["evalv3"] = sample_items(load_eval_v3(args.evalv3_path), args.evalv3, 42)
+    if "general" in wanted:
+        benches["general"] = sample_items(load_general(args.general_path), args.general, 42)
 
     print(f"checkpoint: {args.checkpoint}")
     print(f"lm_path:    {args.lm_path}")

@@ -11,7 +11,7 @@ Usage:
         --input datasets/src/fineweb2_ja/data/jpn_Jpan/train/000_00000.parquet [...] \
         --output datasets/fineweb2_ja_clean.jsonl \
         [--lang-score 0.9] [--max-docs 0] \
-        [--contamination-ref datasets/eval_v3/test.jsonl] \
+        [--contamination-ref datasets/eval/general/test.jsonl] \
         [--workers 0]
 """
 

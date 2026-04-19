@@ -14,7 +14,7 @@ Usage:
         --input datasets/src/hplt3_ja/10_1.jsonl.zst [...more shards...] \
         --output datasets/hplt3_ja_clean.jsonl \
         [--lang-prob 0.9] [--max-docs 0] \
-        [--contamination-ref datasets/eval_v3/test.jsonl] \
+        [--contamination-ref datasets/eval/general/test.jsonl] \
         [--workers 0]
 """
 

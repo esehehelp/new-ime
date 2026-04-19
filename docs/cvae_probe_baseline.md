@@ -1,6 +1,6 @@
 # CVAE 検証 probe — ベースライン測定
 
-`datasets/eval/cvae_probe.tsv` (188 項目、70 unique reading、10 domain) で
+`datasets/eval/cvae-probe/probe.tsv` (188 項目、70 unique reading、10 domain) で
 現行モデル (CVAE **未実装**) のベースラインを測定。
 
 **この probe の位置付け**: **CVAE 仮説の試金石**。実装後に probe EM を測って
@@ -60,7 +60,7 @@ aozora (literary 寄り) + chunks (general/formal 寄り) の混合で、legal/t
 ### 2. KenLM (domain-agnostic) の効果は方向性混在
 
 - 全体 -1.1pt、legal +8pt、news -34pt、formal -9pt
-- これは domain-agnostic な LM (eval_v3/train) を使った場合の結果。LM コーパスの
+- これは domain-agnostic な LM (general/train) を使った場合の結果。LM コーパスの
   domain 偏り (wiki/news 寄り) が probe 側の domain 別正解と一致しない所で崩れる
 
 **注意**: これは「KenLM では domain 問題を解けない」を示す結果ではない。**domain

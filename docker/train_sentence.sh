@@ -13,8 +13,8 @@ MAX_SAMPLES=${2:-0}
 echo "=== Sentence training: batch=$BATCH_SIZE max_samples=$MAX_SAMPLES ==="
 
 uv run python -m src.training.train_ar \
-  --train datasets/eval_v3/train.jsonl \
-  --dev datasets/eval_v3/dev.jsonl \
+  --train datasets/eval/general/train.jsonl \
+  --dev datasets/eval/general/dev.jsonl \
   --output checkpoints/ar_sentence \
   --epochs 1 \
   --batch-size "$BATCH_SIZE" \
