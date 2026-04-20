@@ -12,24 +12,62 @@ and train with causal LM loss on the surface portion.
 from __future__ import annotations
 
 import json
-import random
+import os
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 
+_OFFSETS_SUFFIX = ".offsets.npy"
+
+
+def _build_offset_index(jsonl_path: Path, index_path: Path) -> None:
+    """One-time sequential scan: record byte offset of every JSONL line.
+
+    Idempotent: callers must first check index_path mtime vs jsonl mtime
+    and only rebuild when stale. 200M-row / 46 GiB jsonl takes ~3-5 min on
+    SSD; result is ~1.6 GiB (uint64 × N_rows) on disk.
+    """
+    offsets: list[int] = []
+    with open(jsonl_path, "rb") as f:
+        pos = 0
+        for line in f:
+            if line.strip():
+                offsets.append(pos)
+            pos += len(line)
+    arr = np.asarray(offsets, dtype=np.uint64)
+    # np.save auto-appends ".npy" if missing, so round-trip through a tmp path
+    # that we then rename to the canonical `<jsonl>.offsets.npy` target.
+    tmp_stem = str(index_path) + ".tmp"   # e.g. "foo.offsets.npy.tmp"
+    np.save(tmp_stem, arr)                # writes "foo.offsets.npy.tmp.npy"
+    os.replace(tmp_stem + ".npy", index_path)
+
+
 class KanaKanjiDataset(Dataset):
-    """Dataset for kana-kanji conversion from JSONL files.
+    """Disk-backed Map-style Dataset for kana-kanji JSONL.
 
-    Each line: {"reading": "...", "surface": "...", "context": "..."}
+    Implementation:
+      1. On first use, build a line-offset index next to the source file as
+         `<jsonl_path>.offsets.npy` (one-time O(file size) scan).
+      2. `__getitem__(idx)` seeks the file to `offsets[idx]` and parses one
+         line. RAM stays ~constant regardless of file size.
+      3. `max_samples > 0` materialises a deterministic sorted subset of the
+         full offsets (via `np.random.default_rng(seed).choice`) — no bytes
+         beyond the subset array live in RAM.
+      4. Each DataLoader worker opens its own file descriptor lazily on the
+         first `__getitem__` call (safe across `fork()`; no shared seek
+         position).
 
-    Loading strategy:
-    - If ``max_samples`` is 0 (default): full load into memory. Suitable for
-      small files (eval splits, legacy train.jsonl at 20M rows).
-    - If ``max_samples > 0``: reservoir sampling during a single stream pass
-      (Knuth's Algorithm R). RAM stays bounded at ``max_samples`` regardless
-      of source file size. Required for Phase 3 train.jsonl (up to 1B rows).
+    Memory footprint:
+        full 200M-row mix    : offset mmap ≈ 1.6 GiB (kernel page cache, not
+                               counted as Python RSS)
+        60M subset           : offsets ~500 MiB materialised (kept alive
+                               through training; counted as RSS)
+        20M subset           : ~160 MiB
+    Payload bytes (the actual JSONL content) are never held in Python lists —
+    each row is re-parsed on demand and GC'd after the collator copies it.
     """
 
     def __init__(
@@ -39,40 +77,52 @@ class KanaKanjiDataset(Dataset):
         max_seq_len: int = 256,
         seed: int = 42,
     ):
-        self.data: list[dict] = []
+        self.path = Path(jsonl_path)
+        if not self.path.exists():
+            raise FileNotFoundError(f"Dataset jsonl not found: {self.path}")
         self.max_seq_len = max_seq_len
 
-        if max_samples and max_samples > 0:
-            rng = random.Random(seed)
-            reservoir: list[dict] = []
-            seen = 0
-            with open(jsonl_path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    seen += 1
-                    if len(reservoir) < max_samples:
-                        reservoir.append(row)
-                    else:
-                        j = rng.randrange(seen)
-                        if j < max_samples:
-                            reservoir[j] = row
-            self.data = reservoir
+        index_path = Path(str(self.path) + _OFFSETS_SUFFIX)
+        need_build = (
+            not index_path.exists()
+            or index_path.stat().st_mtime < self.path.stat().st_mtime
+        )
+        if need_build:
+            print(
+                f"[dataset] building offset index for {self.path.name} "
+                f"→ {index_path.name} (one-time)",
+                flush=True,
+            )
+            _build_offset_index(self.path, index_path)
+
+        all_offsets = np.load(index_path, mmap_mode="r")
+
+        if max_samples and 0 < max_samples < len(all_offsets):
+            rng = np.random.default_rng(seed)
+            pick = rng.choice(
+                len(all_offsets), size=int(max_samples), replace=False
+            )
+            pick.sort()   # sequential disk reads
+            self.offsets = np.asarray(all_offsets[pick], dtype=np.uint64)
         else:
-            with open(jsonl_path, encoding="utf-8") as f:
-                for line in f:
-                    self.data.append(json.loads(line))
+            self.offsets = all_offsets  # mmap'd view
+
+        self._fh = None  # lazy per-worker file descriptor
 
     def __len__(self) -> int:
-        return len(self.data)
+        return int(len(self.offsets))
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_fh"] = None  # don't pickle fd across fork
+        return state
 
     def __getitem__(self, idx: int) -> dict:
-        return self.data[idx]
+        if self._fh is None:
+            self._fh = open(self.path, "rb")
+        self._fh.seek(int(self.offsets[idx]))
+        line = self._fh.readline()
+        return json.loads(line)
 
 
 class ARCollator:
