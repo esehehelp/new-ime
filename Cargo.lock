@@ -101,16 +101,6 @@ dependencies = [
  "anyhow",
  "clap",
  "datacore",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "build-train-mix-v2"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
  "rand",
  "serde",
  "serde_json",
