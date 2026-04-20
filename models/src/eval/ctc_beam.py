@@ -55,22 +55,22 @@ def prefix_beam_search(
     lm_scorer: Optional[PrefixLMScorer] = None,
     lm_alpha: float = 0.0,
     lm_beta: float = 0.0,
+    diversity_lambda: float = 0.0,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
 ) -> List[Tuple[List[int], float]]:
     """Return the top-`beam_width` candidate token sequences.
 
-    Args:
-        log_probs: (T, V) log-probabilities for a single example. We operate
-            on a CPU float32 copy; move the tensor back to the caller's
-            device outside this function if needed.
-        blank_id: CTC blank index.
-        beam_width: output beam size.
-        top_k_per_step: only extend each beam entry with these many tokens
-            at each timestep. Caps the combinatorics; keep >= beam_width.
+    Diversity (Vijayakumar 2016-style MMR re-rank applied per timestep):
+        diversity_lambda > 0 subtracts lambda * |tokens ∩ top_prefix_tokens|
+        from each non-top candidate's rank score, pushing beam entries away
+        from the current best. lambda=0.0 disables.
 
-    Returns:
-        list of `(tokens, logp)` sorted by descending logp. `tokens` is the
-        collapsed CTC output (no blanks, adjacent duplicates merged across
-        CTC rules).
+    Temperature / nucleus (for top_k_per_step selection only — ranking uses
+    un-tempered logprobs so CTC scores remain comparable):
+        temperature > 1.0 flattens the distribution → more diverse expansions
+        top_p < 1.0 keeps only the minimal set of tokens whose cumulative
+        softmax mass >= top_p, per timestep.
     """
     if log_probs.dim() != 2:
         raise ValueError("log_probs must be 2-D (T, V)")
@@ -81,16 +81,40 @@ def prefix_beam_search(
     T, V = log_probs.shape
     top_k_per_step = min(top_k_per_step, V)
 
+    # Build the per-step top-K expansion set. We use tempered log-probs to
+    # decide *which* tokens to expand, but keep the original log-probs when
+    # scoring paths — otherwise CTC accumulation is not comparable across
+    # configurations.
+    if temperature != 1.0 or top_p < 1.0:
+        scaled = log_probs / max(1e-6, temperature)
+        sel_topk_probs = torch.empty(T, top_k_per_step)
+        sel_topk_idx = torch.empty(T, top_k_per_step, dtype=torch.long)
+        for t in range(T):
+            sp = torch.softmax(scaled[t], dim=-1)
+            sorted_p, sorted_idx = torch.sort(sp, descending=True)
+            if top_p < 1.0:
+                cum = torch.cumsum(sorted_p, dim=-1)
+                cutoff = int((cum < top_p).sum().item()) + 1
+                cutoff = max(1, min(cutoff, top_k_per_step))
+            else:
+                cutoff = top_k_per_step
+            kept = sorted_idx[:cutoff]
+            # pad with blank_id (will be skipped in expansion) up to top_k
+            pad = torch.full((top_k_per_step - cutoff,), blank_id, dtype=torch.long)
+            sel_topk_idx[t] = torch.cat([kept, pad])
+            sel_topk_probs[t] = log_probs[t].gather(0, sel_topk_idx[t])
+        topk_probs = sel_topk_probs.tolist()
+        topk_idx = sel_topk_idx.tolist()
+    else:
+        topk_probs_t, topk_idx_t = torch.topk(log_probs, top_k_per_step, dim=-1)
+        topk_probs = topk_probs_t.tolist()
+        topk_idx = topk_idx_t.tolist()
+
     # For each prefix tuple, track two scores:
     #   pb  — log prob of reaching this prefix and ending on blank
     #   pnb — log prob of reaching this prefix and ending on non-blank
     # The total log prob is logsumexp(pb, pnb).
     beam: dict[tuple[int, ...], tuple[float, float]] = {(): (0.0, NEG_INF)}
-
-    # Cache top-K token indices per timestep to cap inner loop size.
-    topk_probs, topk_idx = torch.topk(log_probs, top_k_per_step, dim=-1)
-    topk_probs = topk_probs.tolist()
-    topk_idx = topk_idx.tolist()
 
     for t in range(T):
         next_beam: dict[tuple[int, ...], list[float]] = {}
@@ -144,7 +168,30 @@ def prefix_beam_search(
             for p, (pb, pnb) in next_beam.items()
         ]
         scored.sort(key=lambda x: -x[1])
-        beam = {p: tuple(next_beam[p]) for p, _ in scored[:beam_width]}
+
+        # Diversity MMR: iteratively pick the next beam entry that maximises
+        # score - lambda * max token-overlap count with already-selected.
+        if diversity_lambda > 0.0 and len(scored) > 1:
+            selected: list[tuple[tuple[int, ...], float]] = []
+            remaining = scored[:]
+            # seed with the highest-scoring candidate
+            selected.append(remaining.pop(0))
+            while remaining and len(selected) < beam_width:
+                best_i = 0
+                best_adj = NEG_INF
+                for i, (p, s) in enumerate(remaining):
+                    p_set = set(p)
+                    overlap = max(
+                        (len(p_set & set(sp)) for sp, _ in selected), default=0
+                    )
+                    adj = s - diversity_lambda * overlap
+                    if adj > best_adj:
+                        best_adj = adj
+                        best_i = i
+                selected.append(remaining.pop(best_i))
+            beam = {p: tuple(next_beam[p]) for p, _ in selected}
+        else:
+            beam = {p: tuple(next_beam[p]) for p, _ in scored[:beam_width]}
 
     # Final ranking uses the same fused score as pruning, so returned order
     # matches the inner selection criterion.

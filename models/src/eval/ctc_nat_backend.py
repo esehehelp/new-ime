@@ -50,6 +50,11 @@ class CTCNATBackend(ConversionBackend):
         lm_alpha: float = 0.0,
         lm_beta: float = 0.0,
         lm_gate_min_conf: float = 0.0,
+        diversity_lambda: float = 0.0,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        mask_refine_k: int = 0,
+        mask_refine_alt: int = 2,
         name: str | None = None,
     ) -> None:
         ckpt_path = Path(checkpoint_path)
@@ -100,6 +105,11 @@ class CTCNATBackend(ConversionBackend):
         self.lm_alpha = float(lm_alpha)
         self.lm_beta = float(lm_beta)
         self.lm_gate_min_conf = float(lm_gate_min_conf)
+        self.diversity_lambda = float(diversity_lambda)
+        self.temperature = float(temperature)
+        self.top_p = float(top_p)
+        self.mask_refine_k = max(0, int(mask_refine_k))
+        self.mask_refine_alt = max(2, int(mask_refine_alt))
         if lm_path and (self.lm_alpha > 0.0 or self.lm_beta > 0.0):
             from models.src.eval.kenlm_scorer import KenLMCharScorer
             self.lm_scorer = KenLMCharScorer(lm_path, self.tokenizer)
@@ -122,15 +132,19 @@ class CTCNATBackend(ConversionBackend):
         return self._name
 
     @torch.no_grad()
-    def _decode_one(self, reading: str, context: str) -> str:
+    def _decode_one(self, reading: str, context: str, top_k: int = 5) -> list[str]:
         ids = self.tokenizer.encode_with_special(context[-self.max_context :], reading)
         ids = ids[: self.max_seq_len]
         input_ids = torch.tensor([ids], dtype=torch.long, device=self.device)
         attention_mask = torch.ones_like(input_ids)
 
-        if self.beam_width <= 1 and self.lm_scorer is None:
+        if (
+            self.beam_width <= 1
+            and self.lm_scorer is None
+            and self.mask_refine_k <= 0
+        ):
             decoded = self.model.greedy_decode(input_ids, attention_mask)
-            return self.tokenizer.decode(decoded[0])
+            return [self.tokenizer.decode(decoded[0])]
 
         # Single forward pass; both the gate check and the beam need logits.
         result = self.model(input_ids=input_ids, attention_mask=attention_mask)
@@ -152,10 +166,6 @@ class CTCNATBackend(ConversionBackend):
                 prev = tok
             return self.tokenizer.decode(tokens)
 
-        # Low-confidence gate: when greedy mean top-1 logp (over non-blank
-        # emission positions) is above the threshold, skip the beam+LM pass.
-        # Values are natural-log; gate=0.0 disables the gate, negative
-        # thresholds enable it.
         if self.lm_scorer is not None and self.lm_gate_min_conf < 0.0:
             nonblank = top1_id != self.model.blank_id
             if nonblank.any():
@@ -163,10 +173,19 @@ class CTCNATBackend(ConversionBackend):
             else:
                 mean_conf = top1_lp.mean().item()
             if mean_conf >= self.lm_gate_min_conf:
-                return _collapse_greedy()
+                return [_collapse_greedy()]
+
+        if self.beam_width <= 1 and self.mask_refine_k > 0:
+            return self._mask_refine(
+                log_probs, top1_id, top1_lp,
+                input_len=int(attention_mask[0].sum().item()),
+                k=self.mask_refine_k,
+                top_k=top_k,
+                alt_j=self.mask_refine_alt,
+            )
 
         if self.beam_width <= 1:
-            return _collapse_greedy()
+            return [_collapse_greedy()]
 
         beam = prefix_beam_search(
             log_probs,
@@ -176,11 +195,76 @@ class CTCNATBackend(ConversionBackend):
             lm_scorer=self.lm_scorer,
             lm_alpha=self.lm_alpha,
             lm_beta=self.lm_beta,
+            diversity_lambda=self.diversity_lambda,
+            temperature=self.temperature,
+            top_p=self.top_p,
         )
         if not beam:
-            return ""
-        tokens, _ = beam[0]
-        return self.tokenizer.decode(tokens)
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for tokens, _score in beam:
+            s = self.tokenizer.decode(tokens)
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+            if len(out) >= top_k:
+                break
+        return out
+
+    def _mask_refine(
+        self,
+        log_probs: torch.Tensor,
+        top1_id: torch.Tensor,
+        top1_lp: torch.Tensor,
+        input_len: int,
+        k: int,
+        top_k: int,
+        alt_j: int = 2,
+    ) -> list[str]:
+        """Generate up to top_k surface candidates by perturbing the argmax path.
+
+        For the k lowest-confidence non-blank frames (by top1 − top2 log-prob
+        gap), substitute top-1 with each of the top-2 .. top-alt_j alternates
+        and re-collapse via the CTC rule. Seeds with the plain greedy decode.
+        alt_j=2 means single alt (top-2), alt_j=4 means top-2/3/4.
+        """
+        blank = self.model.blank_id
+        base_ids = top1_id.tolist()[:input_len]
+
+        def _collapse(seq: list[int]) -> list[int]:
+            out: list[int] = []
+            prev = -1
+            for tok in seq:
+                if tok != blank and tok != prev:
+                    out.append(tok)
+                prev = tok
+            return out
+
+        cands: list[str] = [self.tokenizer.decode(_collapse(base_ids))]
+        seen = set(cands)
+
+        topj_lp, topj_id = log_probs[:input_len].topk(alt_j, dim=-1)
+        gap = (topj_lp[:, 0] - topj_lp[:, 1]).tolist()
+        nonblank_frames = [
+            t for t in range(input_len) if base_ids[t] != blank
+        ]
+        nonblank_frames.sort(key=lambda t: gap[t])
+
+        for t in nonblank_frames[:k]:
+            for j in range(1, alt_j):
+                alt_id = int(topj_id[t, j].item())
+                if alt_id == base_ids[t] or alt_id == blank:
+                    continue
+                swapped = list(base_ids)
+                swapped[t] = alt_id
+                s = self.tokenizer.decode(_collapse(swapped))
+                if s and s not in seen:
+                    seen.add(s)
+                    cands.append(s)
+                if len(cands) >= top_k:
+                    return cands
+        return cands
 
     @staticmethod
     def _merge_with_overlap(
@@ -217,19 +301,18 @@ class CTCNATBackend(ConversionBackend):
     def convert(self, reading: str, context: str) -> list[str]:
         # Short inputs or no-chunk mode: single-shot decode.
         if self.chunk_threshold <= 0 or len(reading) < self.chunk_threshold:
-            text = self._decode_one(reading, context)
-            return [text] if text else []
+            return self._decode_one(reading, context)
 
-        # Chunk mode: slide a window of `chunk_size` over the reading by
-        # `chunk_stride` characters. Each window is decoded independently
-        # with the running surface as context, and overlapping outputs are
-        # merged via the longest suffix/prefix match.
+        # Chunk mode: top-1 per chunk (diversity via top-K currently only for
+        # single-shot decode; chunk-mode merging across K hypotheses would be
+        # combinatorial — not worth it for the long-form path).
         pieces: list[str] = []
         rolling_ctx = context
         start = 0
         while start < len(reading):
             chunk = reading[start : start + self.chunk_size]
-            piece = self._decode_one(chunk, rolling_ctx)
+            cands = self._decode_one(chunk, rolling_ctx, top_k=1)
+            piece = cands[0] if cands else ""
             pieces.append(piece)
             rolling_ctx = (rolling_ctx + piece)[-self.max_context :]
             if start + self.chunk_size >= len(reading):
