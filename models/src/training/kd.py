@@ -33,7 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.src.data.dataset import ARCollator
-from models.src.data.tokenizer import BLANK_ID, PAD_ID, SharedCharTokenizer
+from models.src.data.tokenizer import BLANK_ID, CLS_ID, PAD_ID, SEP_ID, SharedCharTokenizer
 from models.src.training.train_ar import SimpleGPT2
 
 
@@ -479,6 +479,184 @@ class CTCTeacher(nn.Module):
                 / attention_mask.float().sum(dim=-1).clamp_min(1.0),
         )
         return logits, mean_conf
+
+
+@dataclass
+class Seq2SeqTeacherConfig:
+    """Hyperparameters for a TeacherSeq2Seq (encoder-decoder) teacher.
+
+    Uses SharedCharTokenizer (same as student) → teacher output tokens can be
+    fed directly as CTC targets after stripping BOS/EOS, skipping the AR
+    teacher's text round-trip.
+    """
+    checkpoint_path: str
+    max_context_chars: int = 40
+    max_seq_len: int = 192
+    max_new_tokens: int = 128
+    fp16: bool = True
+
+
+class Seq2SeqTeacher(nn.Module):
+    """Frozen TeacherSeq2Seq teacher for online KD via text round-trip.
+
+    Produces per-sample greedy surface text + mean top-1 confidence, matching
+    the :class:`ARTeacher.generate` contract so :func:`encode_texts_for_student`
+    + :func:`compute_kd_ctc_loss` plug in unchanged.
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        tokenizer: SharedCharTokenizer,
+        config: Seq2SeqTeacherConfig,
+        device: torch.device,
+    ):
+        super().__init__()
+        self.model = model
+        self.tokenizer = tokenizer
+        self.config = config
+        self.device = device
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.model.eval()
+        self.dtype = torch.float16 if config.fp16 and device.type == "cuda" else torch.float32
+        if self.dtype == torch.float16:
+            self.model = self.model.half()
+        self.model = self.model.to(device)
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        config: Seq2SeqTeacherConfig,
+        device: torch.device,
+        student_tokenizer: SharedCharTokenizer,
+    ) -> "Seq2SeqTeacher":
+        from models.src.model.teacher_seq2seq import TEACHER_PRESETS, TeacherSeq2Seq
+
+        ckpt_path = Path(config.checkpoint_path)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Seq2Seq teacher checkpoint not found: {ckpt_path}")
+
+        tok_path = Path(str(ckpt_path).replace(".pt", "_tokenizer.json"))
+        if not tok_path.exists():
+            raise FileNotFoundError(
+                f"Seq2Seq teacher tokenizer sidecar not found: {tok_path}"
+            )
+        teacher_tokenizer = SharedCharTokenizer.load(str(tok_path))
+        if teacher_tokenizer.vocab_size != student_tokenizer.vocab_size:
+            raise ValueError(
+                f"Seq2Seq teacher vocab size {teacher_tokenizer.vocab_size} does not "
+                f"match student {student_tokenizer.vocab_size}. Seq2Seq KD requires "
+                f"identical tokenizers."
+            )
+        for probe_id in (0, teacher_tokenizer.vocab_size // 2,
+                         teacher_tokenizer.vocab_size - 1):
+            s_char = student_tokenizer.id_to_token.get(probe_id, "")
+            t_char = teacher_tokenizer.id_to_token.get(probe_id, "")
+            if s_char != t_char:
+                raise ValueError(
+                    f"Tokenizer mismatch at id {probe_id}: student={s_char!r} "
+                    f"teacher={t_char!r}."
+                )
+
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        preset_name = checkpoint.get("preset")
+        # train_teacher.py saves `preset` as the class name ("TeacherSeq2Seq")
+        # rather than the TEACHER_PRESETS key. Fall back to dim-based matching
+        # against the known presets using token_embedding hidden size.
+        vocab_size = int(checkpoint.get("vocab_size") or teacher_tokenizer.vocab_size)
+        if preset_name not in TEACHER_PRESETS:
+            state = checkpoint["model_state_dict"]
+            try:
+                hidden = int(state["token_embedding.weight"].shape[1])
+            except KeyError as exc:
+                raise ValueError(
+                    f"cannot infer preset from checkpoint (missing token_embedding.weight): "
+                    f"{ckpt_path}"
+                ) from exc
+            matched = [k for k, p in TEACHER_PRESETS.items() if p.hidden_size == hidden]
+            if not matched:
+                raise ValueError(
+                    f"no TEACHER_PRESETS match hidden_size={hidden} "
+                    f"(checkpoint preset={preset_name!r})"
+                )
+            preset_name = matched[0]
+        model = TeacherSeq2Seq.from_preset(preset_name, vocab_size=vocab_size)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        return cls(model=model, tokenizer=teacher_tokenizer,
+                   config=config, device=device)
+
+    def train(self, mode: bool = True) -> "Seq2SeqTeacher":
+        super().train(False)
+        self.model.eval()
+        return self
+
+    @torch.no_grad()
+    def generate(
+        self,
+        contexts: Sequence[str],
+        readings: Sequence[str],
+        max_new_tokens: int | None = None,
+    ) -> tuple[list[str], list[float]]:
+        """Batched greedy generation; returns (texts, confidences)."""
+        if len(contexts) != len(readings):
+            raise ValueError("contexts and readings must have the same length")
+        batch_size = len(contexts)
+        if batch_size == 0:
+            return [], []
+
+        max_new = max_new_tokens or self.config.max_new_tokens
+        cap = self.config.max_seq_len
+
+        # Encode (context, reading) via SharedCharTokenizer, pad to max_enc.
+        enc_ids: list[list[int]] = []
+        for ctx, reading in zip(contexts, readings):
+            ctx_trim = ctx[-self.config.max_context_chars :] if ctx else ""
+            ids = self.tokenizer.encode_with_special(ctx_trim, reading)[:cap]
+            enc_ids.append(ids)
+        max_enc = max((len(x) for x in enc_ids), default=1)
+        if max_enc == 0:
+            return ["" for _ in range(batch_size)], [0.0 for _ in range(batch_size)]
+
+        input_ids = torch.full(
+            (batch_size, max_enc), PAD_ID, dtype=torch.long, device=self.device
+        )
+        attention_mask = torch.zeros(
+            (batch_size, max_enc), dtype=torch.long, device=self.device
+        )
+        for i, ids in enumerate(enc_ids):
+            if not ids:
+                continue
+            input_ids[i, : len(ids)] = torch.tensor(ids, dtype=torch.long, device=self.device)
+            attention_mask[i, : len(ids)] = 1
+
+        with torch.amp.autocast(
+            device_type=self.device.type,
+            enabled=self.dtype == torch.float16,
+            dtype=self.dtype if self.dtype == torch.float16 else torch.float32,
+        ):
+            tokens, mean_conf = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new,
+            )
+        # tokens: (B, 1+gen_len) with BOS prefix; strip BOS and everything from
+        # first EOS onward. Decode via SharedCharTokenizer.
+        token_lists = tokens.tolist()
+        bos_id = getattr(self.model, "bos_id", CLS_ID)
+        eos_id = getattr(self.model, "eos_id", SEP_ID)
+        texts: list[str] = []
+        for row in token_lists:
+            if row and row[0] == bos_id:
+                row = row[1:]
+            out_ids: list[int] = []
+            for tid in row:
+                if tid == eos_id or tid == PAD_ID:
+                    break
+                out_ids.append(tid)
+            texts.append(self.tokenizer.decode(out_ids))
+        confidences = [float(x) for x in mean_conf.tolist()]
+        return texts, confidences
 
 
 def compute_kd_kl_loss(

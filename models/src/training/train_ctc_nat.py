@@ -16,6 +16,7 @@ import argparse
 from collections import deque
 import math
 import os
+import re
 from dataclasses import dataclass
 import time
 
@@ -275,6 +276,85 @@ def smoke_dataloader(path: str, tokenizer: SharedCharTokenizer, batch_size: int,
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collator)
 
 
+_CKPT_STEP_RE = re.compile(r"^checkpoint_step_(\d+)\.pt$")
+
+
+@torch.no_grad()
+def evaluate_probe_em1(
+    model: "CTCNAT",
+    probe_items: list[dict],
+    tokenizer: "SharedCharTokenizer",
+    device: torch.device,
+    use_cvae: bool,
+    max_items: int = 0,
+    max_seq_len: int = 128,
+    max_context: int = 40,
+) -> dict[str, float]:
+    """Run greedy CTC decode over probe_v3 items and return EM1 + per-cat EM1.
+
+    Uses the same `model.greedy_decode` path as the production backend, so
+    numbers are directly comparable to probe runner output.
+    """
+    from collections import defaultdict
+    items = probe_items[:max_items] if max_items > 0 else probe_items
+    model.eval()
+    overall_hits = 0
+    per_cat_hits: dict[str, int] = defaultdict(int)
+    per_cat_total: dict[str, int] = defaultdict(int)
+    for it in items:
+        ids = tokenizer.encode_with_special(
+            it["context"][-max_context:] if it["context"] else "",
+            it["reading"],
+        )[:max_seq_len]
+        input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+        attention_mask = torch.ones_like(input_ids)
+        cvae_kwargs = {}
+        if use_cvae:
+            cvae_kwargs.update(
+                writer_ids=torch.zeros(1, dtype=torch.long, device=device),
+                domain_ids=torch.zeros(1, dtype=torch.long, device=device),
+                source_ids=torch.zeros(1, dtype=torch.long, device=device),
+            )
+        decoded = model.greedy_decode(input_ids, attention_mask, **cvae_kwargs)
+        pred = tokenizer.decode(decoded[0])
+        hit = int(pred in it["references"])
+        overall_hits += hit
+        cat = it.get("category", "_unk")
+        per_cat_hits[cat] += hit
+        per_cat_total[cat] += 1
+    out = {"em1": overall_hits / max(len(items), 1), "n": len(items)}
+    for c in sorted(per_cat_total.keys()):
+        out[f"em1_{c}"] = per_cat_hits[c] / max(per_cat_total[c], 1)
+    return out
+
+
+def _rolling_keep_checkpoints(output_dir: str, keep_last_k: int) -> None:
+    """Delete old numbered checkpoints, keeping only the last K.
+
+    best.pt / final.pt / *_tokenizer.json are never touched. keep_last_k=0
+    disables rolling-keep (preserves historical all-steps behaviour).
+    """
+    if keep_last_k <= 0 or not os.path.isdir(output_dir):
+        return
+    entries: list[tuple[int, str]] = []
+    for name in os.listdir(output_dir):
+        m = _CKPT_STEP_RE.match(name)
+        if m:
+            entries.append((int(m.group(1)), name))
+    if len(entries) <= keep_last_k:
+        return
+    entries.sort(key=lambda x: x[0])
+    to_delete = entries[: len(entries) - keep_last_k]
+    for _, name in to_delete:
+        pt_path = os.path.join(output_dir, name)
+        tok_path = pt_path.replace(".pt", "_tokenizer.json")
+        for p in (pt_path, tok_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
 def save_checkpoint(
     path: str,
     model: CTCNAT,
@@ -300,6 +380,7 @@ def save_checkpoint(
         "vocab_size": tokenizer.vocab_size,
         "tokenizer_path": getattr(args, "tokenizer_path", ""),
         "kd": {
+            "teacher_type": getattr(args, "kd_teacher_type", "ar"),
             "teacher_path": getattr(args, "kd_teacher_path", "") or "",
             "teacher_vocab": getattr(args, "kd_teacher_vocab", "") or "",
             "alpha": float(getattr(args, "kd_alpha", 0.0)),
@@ -369,6 +450,7 @@ def validate_resume_compatibility(
     # Strict: changing these across resume changes the loss definition or
     # picks a different teacher, so the previous gradients no longer apply.
     kd_strict = [
+        ("teacher_type", "kd_teacher_type", "ar"),
         ("teacher_path", "kd_teacher_path", ""),
         ("teacher_vocab", "kd_teacher_vocab", ""),
         ("gate_mode", "kd_gate_mode", "low_conf"),
@@ -545,9 +627,13 @@ def build_kd(
     """Construct the KD teacher + config from CLI args (teacher is optional).
 
     Teacher type is selected by `--kd-teacher-type`:
-      * "ar"  (default): classic AR teacher via text round-trip + CTC loss.
-      * "ctc": CTC-NAT teacher via direct logit KL. Requires the teacher's
-               tokenizer sidecar (`*_tokenizer.json`) to match the student.
+      * "ar"      (default): decoder-only AR (SimpleGPT2) teacher via text
+                  round-trip + CTC loss. Teacher has its own ARCollator vocab.
+      * "seq2seq": TeacherSeq2Seq (encoder-decoder) teacher via text
+                  round-trip + CTC loss. Shares SharedCharTokenizer with the
+                  student → no vocab remap.
+      * "ctc":    CTC-NAT teacher via direct logit KL. Requires the teacher's
+                  tokenizer sidecar (`*_tokenizer.json`) to match the student.
     """
     kd_config = KDConfig(
         alpha=args.kd_alpha,
@@ -565,6 +651,30 @@ def build_kd(
         return None, kd_config
 
     teacher_type = getattr(args, "kd_teacher_type", "ar")
+    if teacher_type == "seq2seq":
+        from models.src.training.kd import Seq2SeqTeacher, Seq2SeqTeacherConfig
+        teacher_config = Seq2SeqTeacherConfig(
+            checkpoint_path=args.kd_teacher_path,
+            max_context_chars=args.max_context,
+            max_seq_len=args.kd_teacher_max_seq_len,
+            max_new_tokens=args.kd_max_new_tokens,
+            fp16=args.fp16,
+        )
+        teacher = Seq2SeqTeacher.from_checkpoint(
+            teacher_config, device=device,
+            student_tokenizer=student_tokenizer,
+        )
+        print(
+            f"KD teacher (Seq2Seq) loaded: {args.kd_teacher_path} "
+            f"(vocab={teacher.tokenizer.vocab_size}, fp16={teacher_config.fp16}) "
+            f"α={kd_config.alpha}, threshold={kd_config.hard_threshold}, "
+            f"mode={kd_config.gate_mode}, start={kd_config.start_step}, "
+            f"warmup={kd_config.warmup_steps}, alpha_final={kd_config.alpha_final}, "
+            f"decay_start={kd_config.alpha_decay_start}, "
+            f"decay_steps={kd_config.alpha_decay_steps}, every={kd_config.every}"
+        )
+        return teacher, kd_config
+
     if teacher_type == "ctc":
         teacher_config = CTCTeacherConfig(
             checkpoint_path=args.kd_teacher_path,
@@ -615,6 +725,19 @@ def train_local(args: argparse.Namespace) -> None:
     num_workers = resolve_num_workers(args.num_workers, device)
     pin_memory = device.type == "cuda"
     tokenizer = build_tokenizer(args)
+
+    # Probe auto-eval items (loaded once; evaluated via greedy decode at
+    # eval-every intervals when --probe-eval-every > 0).
+    probe_items: list[dict] = []
+    if getattr(args, "probe_eval_every", 0) > 0 and getattr(args, "probe_eval_path", ""):
+        from models.src.eval.bench_loaders import load_probe
+        probe_items = load_probe(args.probe_eval_path)
+        print(
+            f"[probe] loaded {len(probe_items)} items from {args.probe_eval_path} "
+            f"(eval every {args.probe_eval_every} steps; "
+            f"best.pt selected by probe EM1)"
+        )
+
     model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae, max_positions=args.max_seq_len).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     # LR schedule: warmup then optional decay. `flat` (default, legacy) holds
@@ -627,11 +750,25 @@ def train_local(args: argparse.Namespace) -> None:
         if step < warmup:
             return (step + 1) / warmup
         schedule = getattr(args, "lr_schedule", "flat")
+        floor = max(0.0, min(1.0, getattr(args, "lr_min_ratio", 0.0)))
         if schedule == "cosine":
             total = max(args.max_steps, warmup + 1)
             progress = (step - warmup) / max(total - warmup, 1)
             progress = min(max(progress, 0.0), 1.0)
-            return 0.5 * (1.0 + math.cos(math.pi * progress))
+            # Cosine from 1.0 at warmup end to `floor` at max_steps (floor=0.0
+            # reproduces the legacy decay-to-zero behaviour).
+            cos_unit = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return floor + (1.0 - floor) * cos_unit
+        if schedule == "cosine_warm_restarts":
+            period = max(int(getattr(args, "lr_restart_period", 80000)), 1)
+            decay = float(getattr(args, "lr_restart_decay", 0.9))
+            rel = step - warmup
+            cycle = rel // period
+            rel_in_cycle = rel % period
+            progress = rel_in_cycle / period
+            cos_unit = 0.5 * (1.0 + math.cos(math.pi * progress))
+            amplitude = decay ** cycle
+            return floor + (amplitude - floor) * cos_unit
         return 1.0
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
@@ -945,7 +1082,34 @@ def train_local(args: argparse.Namespace) -> None:
                         f"  sample{idx}: ref={sample['reference'][:40]} "
                         f"pred={sample['prediction'][:40]}"
                     )
-                metric_key = metrics.get("exact_match_top1", 0.0)
+
+                # Optional probe_v3 auto-eval. When --probe-eval-every > 0 and
+                # we're on an eval-every boundary that is also a probe-eval
+                # multiple, run greedy decode over probe items and use the
+                # resulting EM1 as the best.pt selection metric instead of dev.
+                probe_em1 = None
+                if (
+                    getattr(args, "probe_eval_every", 0) > 0
+                    and step % args.probe_eval_every == 0
+                    and probe_items
+                ):
+                    probe_summary = evaluate_probe_em1(
+                        model, probe_items, tokenizer, device,
+                        use_cvae=args.use_cvae,
+                        max_items=getattr(args, "probe_eval_limit", 0),
+                        max_seq_len=args.max_seq_len,
+                        max_context=args.max_context,
+                    )
+                    probe_em1 = probe_summary["em1"]
+                    cat_bits = " ".join(
+                        f"{k[4:]}={v:.2f}" for k, v in probe_summary.items()
+                        if k.startswith("em1_")
+                    )
+                    print(
+                        f"[probe {step}] EM1={probe_em1:.4f} n={probe_summary['n']} {cat_bits}"
+                    )
+
+                metric_key = probe_em1 if probe_em1 is not None else metrics.get("exact_match_top1", 0.0)
                 if metric_key > best_metric:
                     best_metric = metric_key
                     save_checkpoint(
@@ -972,6 +1136,7 @@ def train_local(args: argparse.Namespace) -> None:
                     best_metric=best_metric,
                     args=args,
                 )
+                _rolling_keep_checkpoints(args.output, getattr(args, "keep_last_k", 0))
 
     try:
         if warmup_loader is not None:
@@ -1056,13 +1221,34 @@ def main() -> None:
     parser.add_argument("--warmup-steps", type=int, default=1000)
     parser.add_argument(
         "--lr-schedule",
-        choices=["flat", "cosine"],
+        choices=["flat", "cosine", "cosine_warm_restarts"],
         default="flat",
         help=(
             "LR schedule after warmup: 'flat' holds peak (legacy, caused "
-            "LR plateau in 30M training), 'cosine' decays to 0 across "
-            "--max-steps."
+            "LR plateau in 30M training). 'cosine' decays to --lr-min-ratio "
+            "across --max-steps. 'cosine_warm_restarts' restarts every "
+            "--lr-restart-period steps with amplitude * --lr-restart-decay "
+            "per cycle."
         ),
+    )
+    parser.add_argument(
+        "--lr-min-ratio",
+        type=float,
+        default=0.0,
+        help="Cosine LR floor as fraction of peak. 0.0 legacy (decay-to-zero). 0.1 "
+             "recommended for long runs to avoid end-of-schedule lr=0 plateau.",
+    )
+    parser.add_argument(
+        "--lr-restart-period",
+        type=int,
+        default=80000,
+        help="Steps per cosine cycle when --lr-schedule=cosine_warm_restarts.",
+    )
+    parser.add_argument(
+        "--lr-restart-decay",
+        type=float,
+        default=0.9,
+        help="Peak amplitude multiplier per cycle (SGDR-style) for warm restarts.",
     )
     parser.add_argument("--tiny-overfit-samples", type=int, default=0)
     parser.add_argument("--short-sample-max-chars", type=int, default=0)
@@ -1070,8 +1256,35 @@ def main() -> None:
     parser.add_argument("--warmup-short-sample-max-chars", type=int, default=0)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--checkpoint-every", type=int, default=2000)
+    parser.add_argument(
+        "--keep-last-k",
+        type=int,
+        default=0,
+        help="Rolling-keep only the last K numbered checkpoints. 0 disables "
+             "(keeps every checkpoint, legacy). best.pt / final.pt are never deleted.",
+    )
     parser.add_argument("--eval-every", type=int, default=2000)
     parser.add_argument("--eval-batches", type=int, default=20)
+    parser.add_argument(
+        "--probe-eval-path",
+        default="",
+        help="Path to probe_v3 JSON (AJIMEE-compatible items). When set with "
+             "--probe-eval-every > 0, the train loop runs greedy decode over "
+             "these items at eval-every intervals and uses the resulting EM1 "
+             "as the best.pt selection metric (replacing dev EM).",
+    )
+    parser.add_argument(
+        "--probe-eval-every",
+        type=int,
+        default=0,
+        help="Interval (steps) between probe auto-evals. 0 disables.",
+    )
+    parser.add_argument(
+        "--probe-eval-limit",
+        type=int,
+        default=0,
+        help="Cap probe items per auto-eval (0 = all).",
+    )
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--loss-window", type=int, default=100)
     parser.add_argument("--print-samples", type=int, default=3)
@@ -1085,14 +1298,16 @@ def main() -> None:
         help="Max context chars fed to both the student encoder and the AR teacher",
     )
 
-    kd_group = parser.add_argument_group("online KD (AR or CTC teacher)")
+    kd_group = parser.add_argument_group("online KD (AR / Seq2Seq / CTC teacher)")
     kd_group.add_argument(
         "--kd-teacher-type",
-        choices=["ar", "ctc"],
+        choices=["ar", "seq2seq", "ctc"],
         default="ar",
         help=(
             "Teacher kind. 'ar' = autoregressive SimpleGPT2 (vocab-bridged via "
             "text round-trip + CTC loss against teacher text). "
+            "'seq2seq' = TeacherSeq2Seq encoder-decoder (shares SharedCharTokenizer "
+            "with student; text round-trip + CTC loss). "
             "'ctc' = CTC-NAT teacher (same tokenizer as student required; KD "
             "via direct logit KL, much faster forward pass)."
         ),
