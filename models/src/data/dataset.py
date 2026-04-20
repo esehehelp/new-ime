@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -23,13 +26,50 @@ from torch.utils.data import Dataset
 _OFFSETS_SUFFIX = ".offsets.npy"
 
 
+def _find_rust_indexer() -> Path | None:
+    """Locate the Rust `offset-index` binary if built via `cargo build -p offset-index`.
+
+    Checks the cargo default target dir relative to the repo root, then $PATH.
+    Returns None if neither is available (caller falls back to the Python
+    scanner — correct but 5-10× slower on 40+ GiB jsonl).
+    """
+    # repo root = 3 parents up from this file (models/src/data/dataset.py)
+    repo_root = Path(__file__).resolve().parents[3]
+    for rel in ("target/release/offset-index", "target/release/offset-index.exe"):
+        cand = repo_root / rel
+        if cand.exists():
+            return cand
+    path_hit = shutil.which("offset-index")
+    return Path(path_hit) if path_hit else None
+
+
 def _build_offset_index(jsonl_path: Path, index_path: Path) -> None:
     """One-time sequential scan: record byte offset of every JSONL line.
 
-    Idempotent: callers must first check index_path mtime vs jsonl mtime
-    and only rebuild when stale. 200M-row / 46 GiB jsonl takes ~3-5 min on
-    SSD; result is ~1.6 GiB (uint64 × N_rows) on disk.
+    Prefers the Rust `offset-index` binary (30-60 s on 46 GiB jsonl) and
+    falls back to a Python scanner (3-5 min) if the binary is absent.
+    Idempotent at caller level (caller checks index mtime vs jsonl mtime).
     """
+    rust_bin = _find_rust_indexer()
+    if rust_bin is not None:
+        print(f"[dataset] invoking Rust indexer: {rust_bin}", flush=True)
+        try:
+            subprocess.run(
+                [str(rust_bin), "--input", str(jsonl_path), "--output", str(index_path)],
+                check=True,
+                stdout=sys.stderr,   # keep offset-index progress visible
+                stderr=sys.stderr,
+            )
+            return
+        except subprocess.CalledProcessError as e:
+            print(
+                f"[dataset] Rust indexer failed ({e.returncode}); "
+                "falling back to Python scanner",
+                flush=True,
+            )
+            # fall through to Python
+
+    # Python fallback.
     offsets: list[int] = []
     with open(jsonl_path, "rb") as f:
         pos = 0

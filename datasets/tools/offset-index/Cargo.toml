@@ -1,0 +1,12 @@
+[package]
+name = "offset-index"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "offset-index"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+anyhow.workspace = true

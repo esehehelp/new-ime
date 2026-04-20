@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "datasets/tools/datacore",
     "datasets/tools/mix",
+    "datasets/tools/offset-index",
     "datasets/tools/process-zenz",
     "datasets/tools/audit",
 ]
