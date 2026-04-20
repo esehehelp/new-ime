@@ -1,150 +1,186 @@
 ---
 status: current
-last_updated: 2026-04-19
+last_updated: 2026-04-20
 ---
 
 # ベンチマーク比較 (living doc)
 
-現状の最良結果を集約。probe_v2 (phrase-level)・cvae_probe (domain)・
-旧 sentence-level bench (参考) の 3 層。新しい測定が出たら更新。
+2026-04-20 の全モデル × 2-bench 画一計測を canonical とする。過去スナップショットは
+末尾「履歴」節に保存。
 
-## phrase-level (probe_v2, 467 項目, 7 category)
+## 前提 (uniform methodology)
 
-| モデル | 設定 | EM1 | EM5 | p50 ms (WSL CPU) |
-|---|---|---:|---:|---:|
-| **CTC-NAT 30m_v2 step49000** | α=0.2, β=0.6, beam=5 + KenLM | **0.779** | 0.779 | 12 |
-| **CTC-NAT 30m_v2 step49000** | greedy (no LM) | **0.739** | 0.739 | 8 |
-| **teacher-150m-teacher step100000** | greedy (AR) | **0.739** | 0.739 | 40 |
-| **zenz-v3.1-small** | beam=5 | 0.715 | 0.925 | 274 |
-| **zenz-v2.5-small** | beam=5 | 0.700 | 0.916 | 266 |
-| CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | 0.612 | 0.612 | 21 |
-| CTC-NAT 30M step50000 | α=0.4, β=0.3, beam=5 + KenLM | 0.499 | 0.499 | 26 |
-| CTC-NAT 90M step27500 | greedy (no LM) | 0.580 | 0.580 | 12 |
-| ar_v3_vast | beam=5 | 0.360 | 0.540 | 104 |
+### 計測環境
 
-- **30m_v2 (新 mix, synth_numeric 含む) が greedy で zenz-v3.1 を +2.4pt 超え**。
-  KenLM 付きで +6.4pt、速度 23x 有利 (CPU)
-- **KenLM gain は 30m_v2 で +4.0pt** (旧 30M の +12.4pt から縮小) — numeric
-  を学習済みで LM 依存度が低下。α=0.6 で numeric 崩壊 (0.88→0.01) するため
-  強めの α は禁忌
-- **teacher 150m は numeric 0.96**、30m_v2 は 0.88 — 両者とも旧 90M の 0.02
-  から大幅改善
-- **edge カテゴリ退行**: 30m_v2 edge 0.39、teacher 0.18、旧 90M step27500
-  の 0.68 から退行。corpus_v2 の mix / tokenizer 変更を疑う
-  (`project_phase3_edge_regression` memo)
-- **CTC-NAT EM5==EM1**: beam が候補多様性を出せていない (Mask-CTC / 温度
-  サンプリング未実装)
+| 項目 | 値 |
+|---|---|
+| OS | Windows 11 + WSL (Ubuntu) |
+| Python | 3.12 |
+| PyTorch | 2.11.0 **+cpu** (torch.cuda.is_available() == False) |
+| device | CPU のみ (明示的に `device="cpu"`) |
+| thread 制御 | 明示設定なし (WSL 既定) |
 
-詳細: `docs/probe_v2_4way_results.md`
+### ベンチ
 
-### 30m_v2 KenLM α×β sweep (probe_v2)
+| bench | path | n items |
+|---|---|---|
+| probe_v3 | `datasets/eval/probe/probe.json` | 348 (7 categories, all items) |
+| AJIMEE JWTD_v2 | `references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json` | 200 (no sampling) |
 
-| 設定 | EM1 | numeric | edge | homo | particle |
+- 両 bench とも full evaluation (サンプリング・切出しなし)
+- 入力: katakana → `jaconv.kata2hira` で hiragana 化
+- context: `context_text` フィールド (空の item はそのまま空)
+- 正解判定: `references` list のいずれかと完全一致で EM1、top-5 内に含まれれば EM5
+
+### モデル選択基準
+
+各 checkpoint dir の **最新 step** を採用。ただし `ctc-nat-90m-scratch` のみ
+**step30000 が全入力で崩壊** (空文字 / 単一字) のため、最後に正常だった step27500 を
+採用。
+
+| model_cfg | checkpoint |
+|---|---|
+| ctc-nat-30m-student | checkpoint_step_160000.pt |
+| ctc-nat-30m-scratch | checkpoint_step_50000.pt |
+| ctc-nat-90m-scratch | checkpoint_step_27500.pt (step30000 broken) |
+| ar-31m-scratch | checkpoint_step_80000.pt |
+| teacher-150m-teacher | checkpoint_step_200000.pt |
+| zenz-v2.5-xsmall | `references/zenz-v2.5-xsmall` (HF) |
+| zenz-v2.5-small | `references/zenz-v2.5-small` (HF) |
+| zenz-v2.5-medium | `references/zenz-v2.5-medium` (HF) |
+| zenz-v3.1-small | `references/zenz-v3.1-small` (HF) |
+
+### デコーディング設定
+
+| backend | config | 値 |
+|---|---|---|
+| CTC-NAT (greedy) | beam_width=1, no LM | - |
+| CTC-NAT (kenlm) | beam_width=5, α=0.2, β=0.6, top_k_per_step=16 | KenLM: `models/kenlm/kenlm_general_train_4gram_probing.bin` |
+| CTC-NAT (surface dedup) | top-5 surface (dedup) 返却 | 2026-04-20 fix: 旧 backend は beam[0] のみ返し EM5=EM1 だった |
+| AR (greedy) | beam_width=1 | length_penalty=0.6, repetition_penalty=1.2 |
+| AR (beam5) | beam_width=5 | 同上 |
+| Teacher (AR ed) | greedy | TeacherBackend 既定 |
+| zenz (GPT-2 AR) | num_beams=5, num_return_sequences=5, max_new_tokens=80, max_context_chars=40 | prompt: `INPUT + reading + [CTX+ctx] + OUTPUT` (AzooKey 準拠) |
+
+### 指標
+
+- **EM1**: top-1 と `references` の完全一致率
+- **EM5**: top-5 のいずれかが `references` と完全一致する率
+- **CharAcc**: top-1 とのレーベンシュタイン正規化文字正解率
+- **p50 ms**: 1 item あたり wall-clock レイテンシ中央値 (backend.convert 呼び出し範囲)
+
+### 実行
+
+```bash
+cd /mnt/d/Dev/new-ime
+PYTHONPATH=. python3 tools/misc/bench_all.py
+```
+
+出力: `results/bench_all/{model_cfg}__{bench}.json` + `summary.json`
+
+---
+
+## 結果: probe_v3 (348 items)
+
+| model_cfg | params | EM1 | EM5 | CharAcc | p50 ms |
 |---|---:|---:|---:|---:|---:|
-| greedy | 0.739 | 0.880 | 0.394 | 0.562 | 0.500 |
-| **α=0.2 β=0.6** | **0.779** | 0.863 | 0.521 | 0.630 | 0.650 |
-| α=0.4 β=0.6 | 0.711 | 0.538 | 0.535 | 0.630 | 0.700 |
-| α=0.6 β=0.6 | 0.582 | 0.009 | 0.535 | 0.616 | 0.750 |
+| zenz-v2.5-medium beam=5 | 310M | **0.727** | **0.862** | **0.958** | 1162 |
+| zenz-v3.1-small beam=5 | 91M | 0.695 | 0.842 | 0.952 | 423 |
+| zenz-v2.5-small beam=5 | 91M | 0.693 | 0.833 | 0.951 | 403 |
+| teacher-150m-teacher step200000 greedy | 150M | 0.681 | 0.681 | 0.944 | 253 |
+| zenz-v2.5-xsmall beam=5 | 30M | 0.675 | 0.802 | 0.946 | 120 |
+| ctc-nat-30m-student step160000 kenlm | 30M | 0.655 | 0.753 | 0.940 | **17** |
+| ctc-nat-30m-student step160000 greedy | 30M | 0.603 | 0.603 | 0.938 | **9** |
+| ar-31m-scratch step80000 beam5 | 31M | 0.575 | 0.764 | 0.902 | 270 |
+| ar-31m-scratch step80000 greedy | 31M | 0.563 | 0.563 | 0.900 | 72 |
+| ctc-nat-30m-scratch step50000 kenlm | 30M | 0.543 | 0.658 | 0.903 | 17 |
+| ctc-nat-90m-scratch step27500 kenlm | 90M | 0.500 | 0.618 | 0.900 | 30 |
+| ctc-nat-30m-scratch step50000 greedy | 30M | 0.419 | 0.419 | 0.887 | 10 |
+| ctc-nat-90m-scratch step27500 greedy | 90M | 0.365 | 0.365 | 0.887 | 22 |
 
-phrase 単位では **α=0.2 が最適**。α を上げると particle / edge は伸びるが
-numeric が破壊されて総合では負ける。
+### per-category EM1 (probe_v3)
 
-## domain-conditional (cvae_probe, 188 項目, 10 domain)
+| model_cfg | edge | general | homophone | names | numeric | particle | tech |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ctc-nat-30m-student step160000 kenlm | 0.650 | 0.667 | 0.460 | 0.673 | 0.600 | 0.906 | 0.682 |
+| ctc-nat-30m-student step160000 greedy | 0.575 | 0.587 | 0.405 | 0.618 | 0.554 | 0.875 | 0.682 |
 
-CVAE **未実装** の baseline。47% の reading で domain 間正解分岐あり。
+(他モデルの per-category は `results/bench_all/{model_cfg}__probe.json` 参照)
 
-| モデル | 設定 | EM1 |
-|---|---|---:|
-| CTC-NAT 90M step27500 | greedy | 0.585 |
-| CTC-NAT 90M step27500 | α=0.2, β=0.6, beam=5 + KenLM | 0.574 |
+---
 
-domain 別 (greedy):
+## 結果: AJIMEE JWTD_v2 (200 items, full)
 
-| domain | n | EM1 |
+| model_cfg | EM1 | EM5 | CharAcc | p50 ms |
+|---|---:|---:|---:|---:|
+| zenz-v2.5-medium beam=5 | **0.875** | **0.970** | **0.982** | 1281 |
+| zenz-v3.1-small beam=5 | 0.860 | 0.930 | 0.983 | 432 |
+| zenz-v2.5-small beam=5 | 0.840 | 0.955 | 0.977 | 427 |
+| teacher-150m-teacher step200000 greedy | 0.715 | 0.715 | 0.964 | 299 |
+| zenz-v2.5-xsmall beam=5 | 0.695 | 0.845 | 0.953 | 131 |
+| ctc-nat-30m-student step160000 kenlm | 0.650 | 0.815 | 0.959 | **22** |
+| ctc-nat-30m-student step160000 greedy | 0.550 | 0.550 | 0.949 | **10** |
+| ctc-nat-90m-scratch step27500 kenlm | 0.535 | 0.675 | 0.939 | 38 |
+| ar-31m-scratch step80000 beam5 | 0.480 | 0.725 | 0.882 | 289 |
+| ctc-nat-30m-scratch step50000 kenlm | 0.480 | 0.640 | 0.909 | 22 |
+| ar-31m-scratch step80000 greedy | 0.470 | 0.470 | 0.883 | 78 |
+| ctc-nat-90m-scratch step27500 greedy | 0.295 | 0.295 | 0.906 | 26 |
+| ctc-nat-30m-scratch step50000 greedy | 0.280 | 0.280 | 0.882 | 10 |
+
+---
+
+## 付記: 2026-04-20 backend fix
+
+- `CTCNATBackend._decode_one` は旧実装で beam 探索結果のうち `beam[0]` 1 件のみ返していた
+  → `convert()` が常に長さ 1 の list を返し、CTC モデル全ての EM5 が構造的に EM1 と同値
+- 本版では beam 全件を surface 化し dedup した top-5 を返す。2026-04-20 計測はすべて修正後
+- 旧 backend で取得した probe_v3 の数字 (EM5=EM1 固定) と比較する場合は注意
+
+---
+
+## 過去スナップショット
+
+### 2026-04-19: probe_v2 (467 項目, 7 category) — 旧 canonical
+
+> probe_v3 (348 items, AJIMEE 互換 + category 付き長文) 導入により canonical から降格。
+> probe_v2 は AJIMEE に寄せた短句中心なので直接比較不可。
+
+| モデル | 設定 | EM1 | EM5 | p50 ms |
+|---|---|---:|---:|---:|
+| CTC-NAT 30m_v2 step49000 | α=0.2, β=0.6, beam=5 + KenLM | 0.779 | 0.779 | 12 |
+| CTC-NAT 30m_v2 step49000 | greedy | 0.739 | 0.739 | 8 |
+| teacher-150m step100000 | greedy (AR) | 0.739 | 0.739 | 40 |
+| zenz-v3.1-small | beam=5 | 0.715 | 0.925 | 274 |
+| zenz-v2.5-small | beam=5 | 0.700 | 0.916 | 266 |
+
+### 2026-04-19: 3-bench (manual/ajimee-80/general-80) — 廃止
+
+> AJIMEE を full 200 に、general は別 bench 化したため廃止。参考値として残置。
+
+| model | manual EM | ajimee-80 EM | general-80 EM |
+|---|---:|---:|---:|
+| zenz-v2.5-small | 0.890 | 0.750 | 0.375 |
+| teacher-150m step100000 | 0.850 | 0.588 | 0.363 |
+| ctc-nat-30m-student step49000 greedy | 0.830 | 0.338 | 0.263 |
+| ctc-nat-30m-student step49000 + α=0.4 β=0.6 | 0.870 | 0.575 | 0.300 |
+
+### 2026-04-18: CTC-NAT 90M step15000 + KenLM sweep — 廃止
+
+> 90M step15000 checkpoint は対象外 (step30000 崩壊、step27500 を現 canonical に)。
+
+| bench | baseline EM | best EM (α=0.80 β=1.0 beam=8) |
 |---|---:|---:|
-| formal | 22 | 0.77 |
-| medical | 11 | 0.73 |
-| general | 40 | 0.70 |
-| casual | 15 | 0.67 |
-| news | 6 | 0.67 |
-| literary | 19 | 0.53 |
-| tech | 21 | 0.52 |
-| business | 14 | 0.50 |
-| academic | 27 | 0.48 |
-| legal | 13 | 0.15 |
+| manual_test (100) | 0.700 | 0.870 |
+| ajimee_jwtd (80) | 0.225 | 0.413 |
+| general_dev (200) | 0.115 | 0.255 |
 
-理論上限 (z perfect) = 1.00。baseline → 上限で +42pt が**理論最大幅**。CVAE
-実装で実際に取れる gain の期待値は未知 (10-30pt が妥当レンジ、
-下は posterior collapse の 0pt)。
-
-詳細: `docs/cvae_probe_baseline.md`
-
-## sentence-level (manual / ajimee / general)
-
-### 2026-04-19: 30m_v2 + KenLM α×β sweep (beam=5)
-
-`results/eval_runs_30mv2_kenlm_sweep/`。manual=100, ajimee=80, general_dev=80。
-
-| 設定 | manual EM | ajimee EM | general eval EM |
-|---|---:|---:|---:|
-| greedy (no LM) | 0.830 | 0.338 | 0.263 |
-| α=0.2 β=0.6 | 0.860 | 0.500 | 0.300 |
-| **α=0.4 β=0.6** | **0.870** | **0.575** | **0.300** |
-| α=0.4 β=0.3 | 0.870 | 0.575 | 0.300 |
-| α=0.6 β=0.6 | 0.870 | 0.525 | 0.250 |
-
-- **文単位の最適 α は 0.4** (phrase の 0.2 より大きい)。**α=0.6 は general eval で
-  baseline 以下に劣化**
-- **ajimee で +23.75pt** (0.338→0.575)。文単位 KenLM の効果が最大
-- **general の gain は +3.75pt** と小さい。長文 wiki は LM では埋めにくく、
-  chunk decoding との併用が必要
-- 単一設定で使うなら **α=0.4, β=0.6**。probe_v2 では 0.711 (最適 0.779 から
-  -6.8pt だが zenz 0.715 と同等)
-
-### 3-bench 4-way 比較 (2026-04-19)
-
-`results/eval_runs_2026_04_19_30mv2_teacher/`。greedy。
-
-| model | manual EM / p50 | ajimee EM / p50 | general eval EM / p50 |
-|---|---:|---:|---:|
-| zenz-v2.5-small | 0.890 / 197ms | 0.750 / 370ms | 0.375 / 593ms |
-| teacher-150m-teacher step100000 | 0.850 / 80ms | 0.588 / 153ms | 0.363 / 265ms |
-| ctc-nat-30m-student step49000 | 0.830 / 21ms | 0.338 / 21ms | 0.263 / 20ms |
-| ctc-nat-30m-student + α=0.4 β=0.6 | 0.870 / ~15ms | 0.575 / ~22ms | 0.300 / 37ms |
-
-**CharAcc** は teacher 150m が general eval で 0.893 と zenz-small の 0.857 を
-**超えている**。bidirectional encoder による長文の局所整合性の優位。
-
-### 旧 sentence-level (参考値)
-
-2026-04-18 取得。CTC-NAT 90M step15000 + KenLM α=0.80 β=1.0 beam=8 (WSL CPU)。
-
-| bench | CTC baseline EM | best EM | Δ |
-|---|---:|---:|---:|
-| manual_test (100) | 0.700 | **0.870** | +17pt |
-| ajimee_jwtd (80) | 0.225 | **0.413** | +18.75pt |
-| general_dev (200) | 0.115 | **0.255** | +14pt |
-
-KenLM は general/train で学習。general/dev は hold-out 同ドメイン、
-manual/ajimee は LM 未露出ゆえ genuine gain。
-
-### zenz-v2.5-medium (参考)
-
-| model | manual_test EM | general_dev EM |
-|---|---:|---:|
-| zenz-v2.5-medium (310M) | 0.86 | 0.575 |
-| zenz-v2.5-small (91M) | 0.80 | 0.50 |
-| CTC-NAT 90M step15000 + KenLM | 0.87 | 0.26 |
-
-**注**: manual_test で zenz-medium を僅差で超えているが、probe_v2 (phrase-level)
-では逆転している。main 比較指標は probe_v2 に一本化する方針 (vision.md の
-位置付け参照)。
+---
 
 ## 更新履歴
 
-- 2026-04-19 (追記): ctc-nat-30m-student step49000 + teacher-150m-teacher step100000 を
-  probe_v2 / 3-bench で評価、30m_v2 KenLM α×β sweep を probe_v2 と 3-bench
-  両方で実施。30m_v2 が phrase / sentence 両領域で zenz-small 比肩に到達、
-  edge カテゴリ退行を検出
-- 2026-04-19: probe_v2 467 項目 4-way + CVAE probe baseline 追加、docs 整理
-- 2026-04-18: CTC-NAT 90M + KenLM sweep、zenz-v2.5 3 sizes 対比 初回取得
+- 2026-04-20: 9 モデル × 2 bench (probe_v3 full 348 / AJIMEE full 200) の画一計測を
+  canonical 化。CTCNATBackend の EM5 構造問題 (beam top-1 のみ返却) を修正、
+  surface top-5 dedup 実装。ctc-nat-90m-scratch step30000 崩壊を検出
+- 2026-04-19: ctc-nat-30m-student step49000 + teacher-150m step100000 の 3-bench
+  評価、30m_v2 KenLM α×β sweep 実施
+- 2026-04-18: CTC-NAT 90M + KenLM sweep、zenz-v2.5 3 sizes 初回対比
