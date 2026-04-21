@@ -1534,7 +1534,16 @@ def train_local(args: argparse.Namespace) -> None:
                     "stop_batches": 0,
                 }
 
-            if step % args.eval_every == 0:
+            eval_due = step % args.eval_every == 0
+            probe_due = (
+                getattr(args, "probe_eval_every", 0) > 0
+                and step % args.probe_eval_every == 0
+                and probe_items
+            )
+
+            metrics = None
+            samples: list = []
+            if eval_due:
                 metrics, samples = evaluate_model(
                     model,
                     dev_loader,
@@ -1552,22 +1561,20 @@ def train_local(args: argparse.Namespace) -> None:
                     f"pred_len={metrics.get('mean_decoded_chars', 0):.1f}/"
                     f"{metrics.get('mean_target_chars', 0):.1f}"
                 )
+
+            if eval_due or probe_due:
                 for idx, sample in enumerate(samples, start=1):
                     print(
                         f"  sample{idx}: ref={sample['reference'][:40]} "
                         f"pred={sample['prediction'][:40]}"
                     )
 
-                # Optional probe_v3 auto-eval. When --probe-eval-every > 0 and
-                # we're on an eval-every boundary that is also a probe-eval
-                # multiple, run greedy decode over probe items and use the
-                # resulting EM1 as the best.pt selection metric instead of dev.
+                # Probe auto-eval fires on its own cadence (probe_due),
+                # independent of eval_every — the outer `if eval_due or
+                # probe_due:` gate lets probes run at step % probe_eval_every
+                # == 0 even when that step is not a dev-eval step.
                 probe_em1 = None
-                if (
-                    getattr(args, "probe_eval_every", 0) > 0
-                    and step % args.probe_eval_every == 0
-                    and probe_items
-                ):
+                if probe_due:
                     probe_summary = evaluate_probe_em1(
                         model, probe_items, tokenizer, device,
                         use_cvae=args.use_cvae,
@@ -1584,8 +1591,9 @@ def train_local(args: argparse.Namespace) -> None:
                         f"[probe {step}] EM1={probe_em1:.4f} n={probe_summary['n']} {cat_bits}"
                     )
 
-                metric_key = probe_em1 if probe_em1 is not None else metrics.get("exact_match_top1", 0.0)
-                if metric_key > best_metric:
+                dev_em = metrics.get("exact_match_top1", 0.0) if metrics is not None else None
+                metric_key = probe_em1 if probe_em1 is not None else dev_em
+                if metric_key is not None and metric_key > best_metric:
                     best_metric = metric_key
                     save_checkpoint(
                         os.path.join(args.output, "best.pt"),
