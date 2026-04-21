@@ -1,0 +1,14 @@
+[package]
+name = "kkc-train"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+kkc-data = { path = "../kkc-data" }
+kkc-model = { path = "../kkc-model" }
+kkc-tokenizer = { path = "../kkc-tokenizer" }

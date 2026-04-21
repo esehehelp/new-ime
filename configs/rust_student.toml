@@ -1,0 +1,25 @@
+[dataset]
+train_shard = "datasets/mixes/student-20m.kkc"
+
+[tokenizer]
+path = "datasets/tokenizers/shared_char.json"
+max_kanji = 6000
+vocab_size = 4801
+
+[model]
+preset = "phase3_20m"
+
+[runtime]
+param_dtype_bytes = 2
+grad_dtype_bytes = 4
+adam_state_bytes = 8
+activation_dtype_bytes = 2
+prefetch_queue = 4
+
+[train]
+batch_size = 32
+max_input_len = 128
+max_target_len = 128
+grad_accum = 4
+block_rows = 4096
+seed = 42

@@ -1,0 +1,8 @@
+[package]
+name = "kkc-model"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true

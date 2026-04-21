@@ -71,6 +71,7 @@ models/*
 !models/src/
 !models/tests/
 !models/tools/
+!models/rust/
 
 # Other large artifacts
 tools/onnxruntime-win-x64-*/

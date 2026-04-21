@@ -12,6 +12,10 @@ members = [
     "datasets/tools/synth-homophone",
     "datasets/tools/synth-numeric-units",
     "datasets/tools/synth-name",
+    "models/rust/kkc-tokenizer",
+    "models/rust/kkc-data",
+    "models/rust/kkc-model",
+    "models/rust/kkc-train",
     "engine/tools/interactive-rs",
     "engine/win32-rs/engine-core",
     "engine/win32-rs/tsf",
@@ -39,6 +43,11 @@ zstd = "0.13"
 flate2 = "1"
 xz2 = "0.1"
 libloading = "0.8"
+toml = "0.8"
+thiserror = "1"
+memmap2 = "0.9"
+rayon = "1"
+rand = "0.8"
 
 [profile.release]
 opt-level = 3
