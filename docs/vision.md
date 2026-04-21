@@ -266,7 +266,7 @@ dev loss が non-monotonic で best.pt が true best にならないことを確
 - MoE PoC (200M 以上のデータ前提)
 - モバイル対応 (将来)
 
-### 5B 路線 (2 年計画)
+### 5B 路線
 
 - Layer 1 (2-3B): Web crawl + MeCab
 - Layer 2 (1-1.5B): LLM 整形 + ラベル付与
@@ -308,14 +308,6 @@ probe_v3 / AJIMEE 本家 / 公開 dev set で評価純潔性を担保。
 | 1.58-bit 品質劣化 | int8 ORT (30-40 MB) |
 | CVAE posterior collapse | domain-specific KenLM / domain embedding / LoRA 分離 |
 | KenLM 効果薄 | ユーザ辞書強化のみ |
-
-## 採用しない選択
-
-- **llama.cpp**: decoder-only 前提、encoder-decoder 非対応
-- **1.58-bit を初期から**: QAT 再学習コストは fp16 完走後にのみ発生する方が安全
-- **AR beam search**: 40-60x の速度ペナルティ、length normalization でも改善限定
-- **DAT**: 30m CTC-NAT で十分、実行時切り替え UX の複雑化に見合わない
-- **teacher 150M を production に**: 精度 +3pt 未満、レイテンシ 5x 以上
 
 ## 関連 docs
 
