@@ -55,6 +55,7 @@ class CTCNATBackend(ConversionBackend):
         top_p: float = 1.0,
         mask_refine_k: int = 0,
         mask_refine_alt: int = 2,
+        lm_paths_by_domain: dict[str, str] | None = None,
         name: str | None = None,
     ) -> None:
         ckpt_path = Path(checkpoint_path)
@@ -110,7 +111,12 @@ class CTCNATBackend(ConversionBackend):
         self.top_p = float(top_p)
         self.mask_refine_k = max(0, int(mask_refine_k))
         self.mask_refine_alt = max(2, int(mask_refine_alt))
-        if lm_path and (self.lm_alpha > 0.0 or self.lm_beta > 0.0):
+        self.lm_estimator = None
+        if lm_paths_by_domain and (self.lm_alpha > 0.0 or self.lm_beta > 0.0):
+            from models.src.eval.kenlm_mixture import CategoryEstimator, KenLMMixtureScorer
+            self.lm_scorer = KenLMMixtureScorer(lm_paths_by_domain, self.tokenizer)
+            self.lm_estimator = CategoryEstimator(available_domains=set(lm_paths_by_domain))
+        elif lm_path and (self.lm_alpha > 0.0 or self.lm_beta > 0.0):
             from models.src.eval.kenlm_scorer import KenLMCharScorer
             self.lm_scorer = KenLMCharScorer(lm_path, self.tokenizer)
 
@@ -187,6 +193,10 @@ class CTCNATBackend(ConversionBackend):
         if self.beam_width <= 1:
             return [_collapse_greedy()]
 
+        # KenLM-MoE: pick per-input mixture weights before beam search.
+        if self.lm_estimator is not None and self.lm_scorer is not None:
+            weights = self.lm_estimator.estimate(reading, context)
+            self.lm_scorer.set_weights(weights)
         beam = prefix_beam_search(
             log_probs,
             blank_id=self.model.blank_id,
