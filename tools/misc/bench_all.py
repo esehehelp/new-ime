@@ -102,7 +102,20 @@ def evaluate(backend, items: list[dict], top_k: int = 5) -> dict:
     return s
 
 
-def ctc(ckpt: str, *, lm: bool) -> CTCNATBackend:
+def ctc(ckpt: str, *, lm: bool, moe: bool = False) -> CTCNATBackend:
+    """PyTorch CTCNATBackend. Optional single-LM or MoE (3-way) KenLM."""
+    if moe:
+        lm_paths = {
+            "general": LM_PATH,
+            "tech": "models/kenlm/kenlm_tech_4gram.bin",
+            "entity": "models/kenlm/kenlm_entity_4gram.bin",
+        }
+        return CTCNATBackend(
+            ckpt, device=DEVICE,
+            beam_width=LM_BEAM,
+            lm_paths_by_domain=lm_paths,
+            lm_alpha=LM_ALPHA, lm_beta=LM_BETA,
+        )
     return CTCNATBackend(
         ckpt, device=DEVICE,
         beam_width=LM_BEAM if lm else 1,
@@ -112,42 +125,73 @@ def ctc(ckpt: str, *, lm: bool) -> CTCNATBackend:
     )
 
 
+# Production-track v2 checkpoint.
+V2_CKPT = "models/checkpoints/ctc-nat-30m-student/checkpoint_step_160000.pt"
+V2_ONNX_FP32 = "models/onnx/ctc-nat-30m-student-step160000.fp32.onnx"
+V2_ONNX_INT8 = "models/onnx/ctc-nat-30m-student-step160000.int8.onnx"
+V2_ONNX_TOKENIZER = "models/onnx/ctc-nat-30m-student-step160000.fp32.tokenizer.json"
+
+
+def _onnx_greedy(onnx_path: str):
+    """Minimal onnxruntime greedy backend adapter matching ConversionBackend.
+
+    Defined inline because full KenLM-on-ONNX integration is in
+    tools/misc/bench_onnx_kenlm_sweep.py (separate sweep runner). This wrapper
+    gives us parity / int8-no-LM numbers alongside the PyTorch numbers.
+    """
+    import onnxruntime as ort
+    import numpy as np
+    from models.src.data.tokenizer import BLANK_ID, SharedCharTokenizer
+    tokenizer = SharedCharTokenizer.load(V2_ONNX_TOKENIZER)
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = 4
+    sess = ort.InferenceSession(onnx_path, sess_options=so, providers=["CPUExecutionProvider"])
+    SEQ = 128
+    MAX_CTX = 40
+
+    class _OnnxGreedy:
+        name = f"onnx_greedy({onnx_path})"
+
+        def convert(self, reading: str, context: str) -> list[str]:
+            ctx = context[-MAX_CTX:] if context else ""
+            ids = tokenizer.encode_with_special(ctx, reading)[:SEQ]
+            ilen = len(ids)
+            x = np.zeros((1, SEQ), dtype=np.int64)
+            m = np.zeros((1, SEQ), dtype=np.int64)
+            x[0, :ilen] = ids
+            m[0, :ilen] = 1
+            out = sess.run(["logits"], {"input_ids": x, "attention_mask": m})[0]
+            argmax = out[0, :ilen].argmax(axis=-1).tolist()
+            toks, prev = [], -1
+            for t in argmax:
+                if t != BLANK_ID and t != prev:
+                    toks.append(t)
+                prev = t
+            return [tokenizer.decode(toks)]
+    return _OnnxGreedy()
+
+
 REGISTRY: list[tuple[str, callable]] = [
-    # --- CTC-NAT (own), latest step per checkpoint dir ---
+    # ====================================================================
+    # Production-track v2 (ctc-nat-30m-student step160000) — primary model.
+    # PyTorch fp16 reference path + ONNX fp32/int8 export variants + KenLM
+    # single vs MoE decoder. This is the group used to decide the v1.0 ship
+    # configuration.
+    # ====================================================================
     ("ctc-nat-30m-student-step160000__greedy",
-        lambda: ctc("models/checkpoints/ctc-nat-30m-student/checkpoint_step_160000.pt", lm=False)),
+        lambda: ctc(V2_CKPT, lm=False)),
     ("ctc-nat-30m-student-step160000__kenlm",
-        lambda: ctc("models/checkpoints/ctc-nat-30m-student/checkpoint_step_160000.pt", lm=True)),
+        lambda: ctc(V2_CKPT, lm=True)),
+    ("ctc-nat-30m-student-step160000__kenlm-moe",
+        lambda: ctc(V2_CKPT, lm=False, moe=True)),
+    ("ctc-nat-30m-student-step160000__onnx-fp32-greedy",
+        lambda: _onnx_greedy(V2_ONNX_FP32)),
+    ("ctc-nat-30m-student-step160000__onnx-int8-greedy",
+        lambda: _onnx_greedy(V2_ONNX_INT8)),
 
-    ("ctc-nat-30m-scratch-step50000__greedy",
-        lambda: ctc("models/checkpoints/ctc-nat-30m-scratch/checkpoint_step_50000.pt", lm=False)),
-    ("ctc-nat-30m-scratch-step50000__kenlm",
-        lambda: ctc("models/checkpoints/ctc-nat-30m-scratch/checkpoint_step_50000.pt", lm=True)),
-
-    # 90m step30000 is broken (empty / single-char outputs across all inputs).
-    # step27500 is the last working checkpoint; kept as the 90m entry.
-    ("ctc-nat-90m-scratch-step27500__greedy",
-        lambda: ctc("models/checkpoints/ctc-nat-90m-scratch/checkpoint_step_27500.pt", lm=False)),
-    ("ctc-nat-90m-scratch-step27500__kenlm",
-        lambda: ctc("models/checkpoints/ctc-nat-90m-scratch/checkpoint_step_27500.pt", lm=True)),
-
-    # --- AR (own) ---
-    ("ar-31m-scratch-step80000__greedy",
-        lambda: ARCheckpointBackend(
-            "models/checkpoints/ar-31m-scratch/checkpoint_step_80000.pt",
-            device=DEVICE, beam_width=1)),
-    ("ar-31m-scratch-step80000__beam5",
-        lambda: ARCheckpointBackend(
-            "models/checkpoints/ar-31m-scratch/checkpoint_step_80000.pt",
-            device=DEVICE, beam_width=5)),
-
-    # --- Teacher (own, AR encoder-decoder) ---
-    ("teacher-150m-teacher-step200000__greedy",
-        lambda: TeacherBackend(
-            "models/checkpoints/teacher-150m-teacher/checkpoint_step_200000.pt",
-            device=DEVICE)),
-
-    # --- zenz (reference) ---
+    # ====================================================================
+    # Reference (competitors, not shipping): zenz family across size tiers.
+    # ====================================================================
     ("zenz-v2.5-xsmall__beam5",
         lambda: ZenzV2Backend("references/zenz-v2.5-xsmall",
             device=DEVICE, num_beams=5, num_return=5)),
@@ -160,6 +204,37 @@ REGISTRY: list[tuple[str, callable]] = [
     ("zenz-v3.1-small__beam5",
         lambda: ZenzV2Backend("references/zenz-v3.1-small",
             device=DEVICE, num_beams=5, num_return=5)),
+
+    # ====================================================================
+    # Upper bound: AR encoder-decoder teacher (150M). Not shipped — serves
+    # as the accuracy ceiling reference for the CTC-NAT student.
+    # ====================================================================
+    ("teacher-150m-teacher-step200000__greedy",
+        lambda: TeacherBackend(
+            "models/checkpoints/teacher-150m-teacher/checkpoint_step_200000.pt",
+            device=DEVICE)),
+
+    # ====================================================================
+    # Legacy references (not canonical; run only with --models filter to
+    # reproduce historical tables).
+    #   - ar-31m-scratch   : decoder-only AR baseline (SimpleGPT2 31M)
+    #   - ctc-nat-30m-scratch : pre-v2 CTC-NAT without KD (Phase 3 early)
+    # Dropped from canonical (EM1 < student, obsolete):
+    #   - ctc-nat-30m-bunsetsu-v3 (failed run, autopsied in docs)
+    #   - ctc-nat-90m-scratch  (step30000 broken; step27500 < student)
+    # ====================================================================
+    ("ar-31m-scratch-step80000__greedy",
+        lambda: ARCheckpointBackend(
+            "models/checkpoints/ar-31m-scratch/checkpoint_step_80000.pt",
+            device=DEVICE, beam_width=1)),
+    ("ar-31m-scratch-step80000__beam5",
+        lambda: ARCheckpointBackend(
+            "models/checkpoints/ar-31m-scratch/checkpoint_step_80000.pt",
+            device=DEVICE, beam_width=5)),
+    ("ctc-nat-30m-scratch-step50000__greedy",
+        lambda: ctc("models/checkpoints/ctc-nat-30m-scratch/checkpoint_step_50000.pt", lm=False)),
+    ("ctc-nat-30m-scratch-step50000__kenlm",
+        lambda: ctc("models/checkpoints/ctc-nat-30m-scratch/checkpoint_step_50000.pt", lm=True)),
 ]
 
 
