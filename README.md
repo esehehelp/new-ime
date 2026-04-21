@@ -25,10 +25,6 @@
 - **推論**: ONNX Runtime / bitnet.cpp / 比較用ベンチハーネス
 - **IME 統合**: 研究段階では `interactive.cpp` を中心とした CLI / デモ優先
 
-設計詳細は `docs/vision.md` (未来目標の単一ソース)、現在進行中の実行手順は
-`docs/phase3_v2_dryrun_runbook.md`。過去の計画 / 完了 phase のアーカイブは
-`docs/old/` 配下。
-
 ## アーキテクチャ
 
 ```
@@ -51,25 +47,6 @@
         │
    漢字かな混じり出力 (top-K 候補)
 ```
-
-## 現状 (2026-04-19)
-
-| 領域 | 状態 |
-|-------|------|
-| データパイプライン (v1) | `datasets/mixes/scratch-200m.jsonl` 200M rows (chunks + zenz_llmjp + wiki + aozora + fineweb2 + hplt3)、コンポーネントは `datasets/corpus/legacy/` |
-| データパイプライン (v2 corpus) | wikinews/aozora_dialogue/wikibooks/wiktionary/tatoeba の yomi 付与 + bunsetsu 化進行中 (6 pool、約 7M 句) |
-| 合成データ | synth_numeric (37K: 数詞×助数詞) + synth_numeric_ext (150K: 時刻/日付/通貨/分数/小数/連番) |
-| AR (Phase 2) | 完了 — 31.9M, general eval EM 0.412、KD teacher として保管 |
-| CTC-NAT 90M step27500 | probe_v2 (467 項目) EM1=0.612 (+KenLM α=0.2 β=0.6 beam=5)、zenz-v2.5-small の 0.70 から 9pt 差、レイテンシ 13x 速 |
-| CTC-NAT 30M step50000 | probe_v2 EM1=0.499 (+KenLM α=0.4 β=0.3 beam=5) |
-| **phase3_v2 dry-run** | 準備完了、bunsetsu 完走待ち。30M scratch + 90M CTC teacher + 20M mix + 16K step。実行手順は `docs/phase3_v2_dryrun_runbook.md` |
-| CVAE probe | 188 項目、baseline EM1=0.585、domain-disagreement 47%。CVAE 実装後の評価基盤 |
-| Windows TSF DLL (AR 版) | 動作確認済、CLI `interactive_ctc.exe` が dry-run 出口 (TSF 統合は v1 範囲外) |
-| fcitx5 プラグイン | ソース実装済、未ビルド |
-
-ベンチ集約は `docs/benchmark_comparison.md` (living doc)。詳細は
-`docs/probe_v2_4way_results.md`, `docs/cvae_probe_baseline.md`。
-過去 Phase / plan の詳細は `docs/old/` 配下。
 
 ## プロジェクト構成
 
@@ -225,74 +202,6 @@ g++ -std=c++20 -I engine/src -o test_composing models/tests/cpp/test_composing_t
 g++ -std=c++20 -I engine/server/src -o test_ctc models/tests/cpp/test_ctc_decoder.cpp engine/server/src/ctc_decoder.cpp && ./test_ctc
 ```
 
-### Windows エンジン (MSVC, 動作確認済)
-
-```cmd
-cd engine\win32
-rem AR 版 (動作確認済、v1 スコープ外)
-build.bat
-interactive.exe
-
-rem CTC-NAT 版 (phase3_v2 dry-run の出口)
-build_ctc.bat
-interactive_ctc.exe
-```
-
-### Linux fcitx5 プラグイン (未ビルド検証)
-
-```bash
-cmake -B build -DENABLE_FCITX5=ON
-cmake --build build
-```
-
-## データパイプライン
-
-v1 パイプライン (phase3/train.jsonl 200M) の旧コマンド群は `docs/old/data_pipeline.md`
-参照。MeCab feature は **`features[17]` (仮名形出現形)** を使用。`features[6/7/8/9]`
-は不正 (詳細は `docs/old/phase2_results.md`)。
-
-v2 corpus パイプライン (現行):
-
-```bash
-# v2 raw → yomi + sentence-level clean (既に完了)
-uv run python -m datasets.tools.corpus.process_wikimedia --xml ... --out datasets/corpus/sentence/wikibooks.jsonl
-uv run python -m datasets.tools.corpus.clean_v2 --src ... --out datasets/corpus/sentence/wikibooks.clean.jsonl
-
-# bunsetsu 化 (v2 → 句単位、Ginza 使用)
-bash datasets/tools/corpus/run_bunsetsu_all.sh
-# → datasets/corpus/bunsetsu/{wikinews,aozora_dialogue,tatoeba,wikibooks,wiktionary}.jsonl
-
-# 合成データ
-uv run python -m datasets.tools.corpus.synth_numeric --out datasets/corpus/synth/numeric.jsonl
-uv run python -m datasets.tools.corpus.synth_numeric_ext --out datasets/corpus/synth/numeric_ext.jsonl
-
-# 20M training mix 構築 (phase3_v2 dry-run 用)
-cargo run --release --bin build-train-mix -- \
-    --output datasets/mixes/student-20m.jsonl --total 20000000 \
-    --sentence-src datasets/mixes/scratch-200m.jsonl \
-    --sentence-src datasets/corpus/sentence/wikinews.clean.jsonl ... \
-    --bunsetsu-src datasets/corpus/bunsetsu \
-    --synth-src datasets/corpus/synth/numeric.jsonl \
-    --synth-src datasets/corpus/synth/numeric_ext.jsonl \
-    --ratio-sentence 0.555 --ratio-bunsetsu2 0.278 \
-    --ratio-bunsetsu1 0.055 --ratio-synth 0.111
-```
-
-詳細な手順は `docs/phase3_v2_dryrun_runbook.md`。
-
-## 評価
-
-```bash
-# phrase-level probe (category × EM、AJIMEE 互換 JSON 形式)
-uv run python -m datasets.tools.probe.run --models ctc-nat-90m-scratch-step27500
-
-# CVAE 検証 probe (188 項目、domain 別 EM)
-uv run python -m datasets.tools.probe.run_cvae_probe --backend ctc-nat-90m-scratch
-
-# sentence-level ベンチ (general / AJIMEE / manual)
-uv run python -m models.tools.eval.run_all_evals --manual 100 --general 300 --ajimee 100
-```
-
 ## 参考文献
 
 - [Mask-Predict (CMLM)](https://arxiv.org/abs/1904.09324) — Ghazvininejad et al. 2019
@@ -321,5 +230,5 @@ uv run python -m models.tools.eval.run_all_evals --manual 100 --general 300 --aj
 - Wikipedia 由来データや、それを含む派生成果物は ShareAlike 条件の影響を受ける
 - KenLM は LGPL 2.1 — 本リポジトリには source 不在だが、binary 再配布時は
   LGPL 義務発生。詳細 `LICENSE_NOTICES.md`
-- 配布や再学習に使う前に、必ず `MODEL_LICENSE`, `DATA_LICENSES.md`,
+- 配布や再学習に使う前に、 `MODEL_LICENSE`, `DATA_LICENSES.md`,
   `ATTRIBUTION.md`, `LICENSE_NOTICES.md` を確認すること
