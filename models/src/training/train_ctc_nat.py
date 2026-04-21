@@ -478,7 +478,17 @@ def validate_resume_compatibility(
         ckpt_val = kd_prev.get(ckpt_key, default) if kd_prev else default
         cur_val = getattr(args, arg_key, default)
         if _diff(ckpt_val, cur_val, default):
-            mismatches.append(f"kd.{ckpt_key}: ckpt={ckpt_val} current={cur_val}")
+            if getattr(args, "allow_resume_kd_swap", False):
+                print(
+                    f"[resume] WARNING: kd.{ckpt_key} mismatch (ckpt={ckpt_val!r} "
+                    f"current={cur_val!r}) — allowed via --allow-resume-kd-swap. "
+                    "Optimizer/scheduler state inherited but the KD objective is "
+                    "now defined by the new teacher; expect transient instability "
+                    "for the first few hundred steps.",
+                    flush=True,
+                )
+            else:
+                mismatches.append(f"kd.{ckpt_key}: ckpt={ckpt_val} current={cur_val}")
 
     for ckpt_key, arg_key, default in kd_tunable:
         ckpt_val = kd_prev.get(ckpt_key, default) if kd_prev else default
@@ -1195,6 +1205,14 @@ def main() -> None:
     parser.add_argument("--dev", default="", help="Dev JSONL path")
     parser.add_argument("--output", default="checkpoints/ctc_nat_local", help="Output directory")
     parser.add_argument("--resume", default="", help="Resume from checkpoint")
+    parser.add_argument(
+        "--allow-resume-kd-swap",
+        action="store_true",
+        help="Demote KD strict-match (teacher_type / teacher_path / teacher_vocab / "
+             "gate_mode) to warnings when resuming. Use when intentionally changing "
+             "the KD teacher between runs (v2 → v2.1 style). Optimizer/scheduler "
+             "state is still inherited; only the KD objective changes.",
+    )
     parser.add_argument("--preset", choices=sorted(PRESETS.keys()), default="phase3_20m")
     parser.add_argument("--use-cvae", action="store_true")
     parser.add_argument("--batch-size", type=int, default=8)
