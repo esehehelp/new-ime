@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -116,6 +117,7 @@ class KanaKanjiDataset(Dataset):
         max_samples: int = 0,
         max_seq_len: int = 256,
         seed: int = 42,
+        preload: bool = False,
     ):
         self.path = Path(jsonl_path)
         if not self.path.exists():
@@ -148,6 +150,37 @@ class KanaKanjiDataset(Dataset):
             self.offsets = all_offsets  # mmap'd view
 
         self._fh = None  # lazy per-worker file descriptor
+        # When `preload` is set, read + json.loads every sample into a Python
+        # list at __init__ time. Eliminates per-step disk seeks and JSON parse
+        # from the dataloader hot path. Costs ~1 KiB per sample (Python dict
+        # overhead), so 30M samples ≈ 30 GiB RAM — only turn this on when the
+        # cgroup budget explicitly permits it.
+        self._preloaded: list[dict] | None = None
+        if preload:
+            print(
+                f"[dataset] preloading {len(self.offsets)} samples into RAM "
+                f"(streaming disabled, ~{len(self.offsets) * 1000 // (1024**3)} GiB estimated)",
+                flush=True,
+            )
+            t0 = time.time()
+            fh = open(self.path, "rb")
+            preloaded: list[dict] = [None] * len(self.offsets)  # type: ignore[list-item]
+            for i, off in enumerate(self.offsets):
+                fh.seek(int(off))
+                preloaded[i] = json.loads(fh.read(4096).split(b"\n", 1)[0])
+                if (i + 1) % 1_000_000 == 0:
+                    rate = (i + 1) / max(time.time() - t0, 1e-6)
+                    print(
+                        f"[dataset]   preloaded {i + 1}/{len(self.offsets)} "
+                        f"({rate / 1000:.0f}k rows/s)",
+                        flush=True,
+                    )
+            fh.close()
+            self._preloaded = preloaded
+            print(
+                f"[dataset] preload done in {time.time() - t0:.1f}s",
+                flush=True,
+            )
 
     def __len__(self) -> int:
         return int(len(self.offsets))
@@ -158,6 +191,8 @@ class KanaKanjiDataset(Dataset):
         return state
 
     def __getitem__(self, idx: int) -> dict:
+        if self._preloaded is not None:
+            return self._preloaded[idx]
         if self._fh is None:
             self._fh = open(self.path, "rb")
         self._fh.seek(int(self.offsets[idx]))

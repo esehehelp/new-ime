@@ -703,8 +703,11 @@ def make_dataloader(
     short_sample_max_chars: int = 0,
     max_context: int = 40,
     pin_memory: bool = False,
+    preload: bool = False,
 ):
-    dataset = KanaKanjiDataset(path, max_samples=max_samples, seed=seed)
+    dataset = KanaKanjiDataset(
+        path, max_samples=max_samples, seed=seed, preload=preload
+    )
     if short_sample_max_chars > 0:
         dataset.data = [
             sample
@@ -926,6 +929,7 @@ def train_local(args: argparse.Namespace) -> None:
         short_sample_max_chars=args.short_sample_max_chars,
         max_context=args.max_context,
         pin_memory=pin_memory,
+        preload=bool(getattr(args, "preload_dataset", False)),
     )
     eval_path = args.dev
     eval_max_samples = args.max_dev_samples
@@ -1732,6 +1736,14 @@ def main() -> None:
     parser.add_argument("--warmup-short-sample-steps", type=int, default=0)
     parser.add_argument("--warmup-short-sample-max-chars", type=int, default=0)
     parser.add_argument("--fp16", action="store_true")
+    parser.add_argument(
+        "--preload-dataset",
+        action="store_true",
+        help="Read + json.loads every sampled training row into a Python list "
+             "at startup instead of streaming from the mmap'd jsonl. Eliminates "
+             "per-step disk seek and JSON parse from the dataloader hot path. "
+             "Requires enough cgroup RAM: ~1 KiB per sample (30M rows ≈ 30 GiB).",
+    )
     parser.add_argument("--checkpoint-every", type=int, default=2000)
     parser.add_argument(
         "--keep-last-k",
