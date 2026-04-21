@@ -32,7 +32,9 @@ sweep 取得 (本ファイル 4.2 節に結果掲載)。
 | model | params | 用途 |
 |---|---|---|
 | zenz-v2.5-xsmall | 30M | 同サイズ帯の主要比較 |
+| jinen-v1-xsmall | 35.8M | 同サイズ帯の追加比較 (HF GPT-2, BPE) |
 | zenz-v2.5-small | 91M | 3x params 帯 |
+| jinen-v1-small | 110M | 3x params 帯の追加比較 (HF GPT-2, BPE) |
 | zenz-v2.5-medium | 310M | 10x params 帯 |
 | zenz-v3.1-small | 91M | 最新 91M |
 
@@ -112,7 +114,11 @@ PYTHONPATH=. python3 tools/misc/bench_all.py
 
 ## 3. 結果: canonical (2026-04-21 post-probe-update)
 
-2026-04-21 probe_v3 更新版での測定。全 14 model_cfg × 2 bench、WSL CPU、35 min。
+2026-04-21 probe_v3 更新版での測定。canonical 表は全 14 model_cfg × 2 bench、WSL CPU、35 min。
+加えて 2026-04-21 に `jinen-v1-{xsmall,small}` を **同一データセット / 同一 beam 条件**
+(`CPU only`, `probe_v3 full`, `AJIMEE full`, `num_beams=5`, `num_return=5`) で
+補足測定した。`jinen` は Hugging Face (`transformers`) 実装のため native Windows CPU
+(`.venv`) で実行。精度は比較可能、latency は canonical WSL CPU 数値と完全同一条件ではない点に注意。
 
 ### 3.1 probe_v3 (348 items)
 
@@ -123,9 +129,11 @@ PYTHONPATH=. python3 tools/misc/bench_all.py
 | zenz-v2.5-small beam=5 | 91M | 0.713 | 0.848 | 0.959 | 376 |
 | teacher-150m-teacher step200000 greedy | 150M | 0.698 | 0.698 | 0.950 | 288 |
 | zenz-v2.5-xsmall beam=5 | 30M | 0.695 | 0.813 | 0.953 | 118 |
+| jinen-v1-small beam=5 | 110M | 0.672 | 0.776 | 0.944 | 278 |
 | **ctc-nat-30m-student step160000 kenlm-moe** | **30M** | **0.669** | **0.770** | **0.948** | **22** |
 | ctc-nat-30m-student step160000 kenlm (single) | 30M | 0.658 | 0.759 | 0.943 | 17 |
 | ctc-nat-30m-student step160000 greedy (PT) | 30M | 0.609 | 0.609 | 0.942 | **10** |
+| jinen-v1-xsmall beam=5 | 35.8M | 0.609 | 0.747 | 0.929 | 115 |
 | ctc-nat-30m-student step160000 onnx-fp32 greedy | 30M | 0.609 | 0.609 | 0.942 | 23 |
 | ctc-nat-30m-student step160000 onnx-int8 greedy | 30M | 0.603 | 0.603 | 0.940 | 13 |
 | ar-31m-scratch step80000 beam5 | 31M | 0.575 | 0.756 | 0.899 | 281 |
@@ -142,9 +150,11 @@ PYTHONPATH=. python3 tools/misc/bench_all.py
 | zenz-v2.5-small beam=5 | 0.840 | 0.955 | 0.977 | 418 |
 | teacher-150m-teacher step200000 greedy | 0.715 | 0.715 | 0.964 | 322 |
 | zenz-v2.5-xsmall beam=5 | 0.695 | 0.845 | 0.953 | 139 |
+| **jinen-v1-small beam=5** | **0.655** | **0.835** | **0.952** | 309 |
 | **ctc-nat-30m-student step160000 kenlm-moe** | **0.655** | 0.810 | 0.959 | **26** |
 | ctc-nat-30m-student step160000 kenlm (single) | 0.650 | 0.815 | 0.959 | 20 |
 | ctc-nat-30m-student step160000 greedy (PT) | 0.550 | 0.550 | 0.949 | **11** |
+| jinen-v1-xsmall beam=5 | 0.395 | 0.525 | 0.917 | 124 |
 | ctc-nat-30m-student step160000 onnx-fp32 greedy | 0.550 | 0.550 | 0.949 | 22 |
 | ctc-nat-30m-student step160000 onnx-int8 greedy | 0.515 | 0.515 | 0.945 | 13 |
 | ar-31m-scratch step80000 beam5 | 0.480 | 0.725 | 0.882 | 321 |
@@ -164,7 +174,9 @@ AJIMEE は category 属性を持たないため probe_v3 のみ。
 | ctc-nat-30m-student onnx-fp32 | 0.575 | 0.587 | 0.405 | 0.618 | 0.585 | 0.875 | 0.682 |
 | ctc-nat-30m-student onnx-int8 | 0.575 | 0.600 | 0.405 | 0.618 | 0.554 | 0.875 | 0.659 |
 | zenz-v2.5-xsmall (30M) | 0.825 | 0.667 | 0.460 | 0.709 | 0.661 | 0.875 | 0.727 |
+| jinen-v1-xsmall (35.8M) | 0.725 | 0.613 | 0.432 | 0.618 | 0.523 | 0.812 | 0.614 |
 | zenz-v2.5-small (91M) | 0.800 | 0.680 | 0.486 | 0.727 | 0.661 | 0.906 | 0.795 |
+| jinen-v1-small (110M) | 0.825 | 0.653 | 0.486 | 0.673 | 0.615 | 0.781 | 0.727 |
 | zenz-v2.5-medium (310M) | 0.825 | 0.707 | 0.540 | 0.818 | 0.677 | 0.875 | 0.841 |
 | zenz-v3.1-small (91M) | 0.775 | 0.667 | 0.486 | 0.818 | 0.661 | 0.875 | 0.795 |
 | teacher-150m-teacher greedy (150M) | 0.775 | 0.667 | 0.486 | 0.727 | 0.661 | 0.906 | 0.727 |
@@ -197,6 +209,12 @@ AJIMEE は category 属性を持たないため probe_v3 のみ。
 - AJIMEE: zenz-xsmall 0.695 vs v2 MoE 0.655 → **-0.040**
 - 速度: **v2 MoE は xsmall の 5.4x 速い** (22ms vs 118ms probe)
 - v1.0 位置付け: **速度一手、精度やや劣後** という profile 継続
+
+**jinen 補足比較 (2026-04-21)**:
+- `jinen-v1-small` は probe 0.672 / AJIMEE 0.655 で、**probe は v2 MoE より +0.003、AJIMEE は同値**
+- `jinen-v1-small` は `zenz-v2.5-xsmall` より probe -0.023 / AJIMEE -0.040 だが、`jinen-v1-xsmall` より大幅に高精度
+- `jinen-v1-xsmall` は probe 0.609 / AJIMEE 0.395 と、同サイズ比較では精度不足
+- latency は `jinen-v1-small` 278ms / 309ms、`jinen-v1-xsmall` 115ms / 124ms。**v2 MoE より大幅に遅い**
 
 **Upper bound (teacher)**:
 - teacher-150m probe 0.698 / AJIMEE 0.715 → student とのギャップ probe 0.03 / AJIMEE 0.06

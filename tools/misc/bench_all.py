@@ -28,6 +28,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 from models.src.eval.ar_backend import ARCheckpointBackend
 from models.src.eval.bench_loaders import load_ajimee_jwtd, load_probe
 from models.src.eval.ctc_nat_backend import CTCNATBackend
+from models.src.eval.jinen_backend import JinenV1Backend
 from models.src.eval.metrics import EvalResult
 from models.src.eval.teacher_backend import TeacherBackend
 from models.src.eval.zenz_backend import ZenzV2Backend
@@ -195,8 +196,14 @@ REGISTRY: list[tuple[str, callable]] = [
     ("zenz-v2.5-xsmall__beam5",
         lambda: ZenzV2Backend("references/zenz-v2.5-xsmall",
             device=DEVICE, num_beams=5, num_return=5)),
+    ("jinen-v1-xsmall__beam5",
+        lambda: JinenV1Backend("togatogah/jinen-v1-xsmall",
+            device=DEVICE, num_beams=5, num_return=5)),
     ("zenz-v2.5-small__beam5",
         lambda: ZenzV2Backend("references/zenz-v2.5-small",
+            device=DEVICE, num_beams=5, num_return=5)),
+    ("jinen-v1-small__beam5",
+        lambda: JinenV1Backend("togatogah/jinen-v1-small",
             device=DEVICE, num_beams=5, num_return=5)),
     ("zenz-v2.5-medium__beam5",
         lambda: ZenzV2Backend("references/zenz-v2.5-medium",
