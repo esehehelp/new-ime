@@ -6,6 +6,9 @@ members = [
     "datasets/tools/offset-index",
     "datasets/tools/process-zenz",
     "datasets/tools/audit",
+    "datasets/tools/bench-onnx",
+    "datasets/tools/extract-domain",
+    "engine/tools/interactive-rs",
 ]
 # Standalone crates build out of tree.
 exclude = [
@@ -29,6 +32,7 @@ anyhow = "1"
 zstd = "0.13"
 flate2 = "1"
 xz2 = "0.1"
+libloading = "0.8"
 
 [profile.release]
 opt-level = 3
