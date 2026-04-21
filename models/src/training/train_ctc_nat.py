@@ -510,12 +510,17 @@ def load_checkpoint(
     model: CTCNAT,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler=None,
+    reset_scheduler: bool = False,
 ):
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    if scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
+    if (
+        scheduler is not None
+        and checkpoint.get("scheduler_state_dict") is not None
+        and not bool(reset_scheduler)
+    ):
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     return checkpoint
 
@@ -894,7 +899,13 @@ def train_local(args: argparse.Namespace) -> None:
     start_epoch = 0
     best_metric = float("-inf")
     if args.resume:
-        checkpoint = load_checkpoint(args.resume, model, optimizer, scheduler)
+        checkpoint = load_checkpoint(
+            args.resume,
+            model,
+            optimizer,
+            scheduler,
+            reset_scheduler=bool(getattr(args, "reset_scheduler", False)),
+        )
         validate_resume_compatibility(checkpoint, args, tokenizer=tokenizer)
         start_step = checkpoint.get("step", 0)
         start_epoch = checkpoint.get("epoch", 0)
@@ -1565,6 +1576,15 @@ def main() -> None:
     parser.add_argument("--dev", default="", help="Dev JSONL path")
     parser.add_argument("--output", default="checkpoints/ctc_nat_local", help="Output directory")
     parser.add_argument("--resume", default="", help="Resume from checkpoint")
+    parser.add_argument(
+        "--reset-scheduler",
+        action="store_true",
+        help="On resume, discard the saved scheduler state and rebuild a fresh "
+             "schedule from the current CLI args (--lr / --warmup-steps / "
+             "--lr-schedule / --max-steps). Use when extending a finished run "
+             "past its original max-steps — otherwise the cosine schedule "
+             "stays pinned at its minimum LR for the entire resumed phase.",
+    )
     parser.add_argument(
         "--allow-resume-kd-swap",
         action="store_true",
