@@ -191,6 +191,91 @@ def resolve_refine_loss_weight(args: argparse.Namespace, step: int) -> float:
     return base * scale
 
 
+def build_refinement_batch_from_proposal_tensors(
+    target_ids: torch.Tensor,
+    target_lengths: torch.Tensor,
+    proposal_token_ids: torch.Tensor,
+    proposal_min_log_prob: torch.Tensor,
+    proposal_min_margin: torch.Tensor,
+    proposal_lengths: torch.Tensor,
+    mask_ratio: float,
+    mask_id: int = MASK_ID,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Tensor-input version of `build_refinement_batch_from_proposal`.
+
+    Takes the output of `CTCNAT.collapse_alignment_tensors` directly (no
+    per-frame Python loop or dataclass construction). Rows whose collapsed
+    proposal length matches the target length use the proposal hypothesis
+    with the lowest-confidence positions masked; the rest fall back to the
+    plain target-masked path.
+    """
+    device = target_ids.device
+    hypothesis_ids, hypothesis_attention_mask, mask_positions = build_refinement_batch(
+        target_ids,
+        target_lengths,
+        mask_ratio=mask_ratio,
+        mask_id=mask_id,
+    )
+    used_proposal_rows = torch.zeros(target_ids.shape[0], dtype=torch.bool, device=device)
+
+    proposal_lengths = proposal_lengths.to(device)
+    target_lengths = target_lengths.to(device)
+    proposal_token_ids = proposal_token_ids.to(device)
+    proposal_min_log_prob = proposal_min_log_prob.to(device)
+    proposal_min_margin = proposal_min_margin.to(device)
+
+    match_rows = (proposal_lengths == target_lengths) & (target_lengths > 0)
+    if not bool(match_rows.any().item()):
+        return (
+            hypothesis_ids,
+            hypothesis_attention_mask.long(),
+            mask_positions,
+            used_proposal_rows,
+        )
+
+    seq_len = hypothesis_ids.shape[1]
+    match_idx = match_rows.nonzero(as_tuple=False).squeeze(1).tolist()
+    # Convert the small tensors to numpy once to avoid device sync inside loop.
+    tgt_lens_list = target_lengths.detach().cpu().tolist()
+    prop_ids_cpu = proposal_token_ids.detach().cpu()
+    prop_conf_cpu = proposal_min_log_prob.detach().cpu()
+    prop_margin_cpu = proposal_min_margin.detach().cpu()
+
+    for row_idx in match_idx:
+        tgt_len = int(tgt_lens_list[row_idx])
+        if tgt_len <= 0:
+            continue
+
+        proposal_slice = prop_ids_cpu[row_idx, :tgt_len]
+        hypothesis_ids[row_idx, :tgt_len] = proposal_slice.to(device)
+        hypothesis_ids[row_idx, tgt_len:seq_len] = PAD_ID
+        hypothesis_attention_mask[row_idx, :tgt_len] = 1
+        hypothesis_attention_mask[row_idx, tgt_len:seq_len] = 0
+        mask_positions[row_idx] = False
+
+        num_masks = max(1, int(round(tgt_len * mask_ratio)))
+        num_masks = min(num_masks, tgt_len)
+        # Rank by (min_log_prob asc, min_margin asc, idx asc) — i.e. least
+        # confident + smallest margin first, stable on ties.
+        conf_slice = prop_conf_cpu[row_idx, :tgt_len]
+        margin_slice = prop_margin_cpu[row_idx, :tgt_len]
+        # Primary sort by conf_slice, secondary by margin, stable.
+        order = torch.argsort(margin_slice, stable=True)
+        order = order[torch.argsort(conf_slice[order], stable=True)]
+        ranked = order[:num_masks].to(device)
+
+        mask_positions[row_idx, ranked] = True
+        hypothesis_ids[row_idx, ranked] = mask_id
+        used_proposal_rows[row_idx] = True
+
+    return (
+        hypothesis_ids,
+        hypothesis_attention_mask.long(),
+        mask_positions,
+        used_proposal_rows,
+    )
+
+
 def build_refinement_batch_from_proposal(
     target_ids: torch.Tensor,
     target_lengths: torch.Tensor,
@@ -1088,16 +1173,19 @@ def train_local(args: argparse.Namespace) -> None:
                         mask_ratio=refine_mask_ratio,
                     )
                 else:
-                    proposal_alignments = model.collapse_with_alignment(
+                    alignment = CTCNAT.collapse_alignment_tensors(
                         result["logits"].detach(),
                         batch["attention_mask"].sum(dim=1).long(),
                         BLANK_ID,
                     )
                     hyp_ids, hyp_attn, mask_positions, used_proposal_rows = (
-                        build_refinement_batch_from_proposal(
+                        build_refinement_batch_from_proposal_tensors(
                             batch["target_ids"],
                             batch["target_lengths"],
-                            proposal_alignments,
+                            alignment["token_ids"],
+                            alignment["min_log_prob"],
+                            alignment["min_margin"],
+                            alignment["lengths"],
                             mask_ratio=refine_mask_ratio,
                         )
                     )
