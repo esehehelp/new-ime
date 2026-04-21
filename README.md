@@ -81,7 +81,7 @@ new-ime/
 │   │   ├── composing_text.*   #     ローマ字→ひらがな
 │   │   ├── preedit.*
 │   │   └── server_connector.* #     IPC クライアント
-│   ├── win32/                 #   Windows TSF 統合 (DLL 動作確認済)
+│   ├── win32/                 #   Windows C++ 推論 DLL / CLI
 │   │   ├── ffi_impl.cpp       #     ONNX Runtime C++ FFI
 │   │   ├── interactive.cpp    #     AR 版対話デモ
 │   │   ├── interactive_ctc.cpp #    CTC-NAT 版対話デモ (dry-run 出口)
@@ -152,7 +152,7 @@ new-ime/
 │   └── tests/                 # Python + C++ テスト
 ├── engine/                    # IME エンジン一式 (C++)
 │   ├── src/                   #   fcitx5 InputMethodEngineV2 プラグイン
-│   ├── win32/                 #   Windows TSF 統合 (ffi_impl / interactive*)
+│   ├── win32/                 #   Windows C++ 推論 DLL / CLI
 │   ├── server/                #   推論サーバー + CTC decoder + KenLM
 │   ├── protocol/              #   protobuf IPC
 │   ├── new-ime-addon.conf
@@ -165,12 +165,8 @@ new-ime/
 ├── docs/                      # ドキュメント
 │   ├── vision.md              #   最終構成ビジョン
 │   ├── benchmark_comparison.md      # 現状ベンチ集約 (living doc)
-│   ├── phase3_v2_dryrun_runbook.md  # dry-run 実行手順
-│   ├── probe_v2_4way_results.md     # probe_v2 測定詳細
-│   ├── cvae_probe_baseline.md       # CVAE probe ベースライン
 │   └── old/                   #   過去 plan / superseded 資料
 ├── Cargo.toml                 # Rust workspace ルート
-└── CHANGELOG.md
 │       ├── roadmap.md               # 旧 Phase 0-5 ロードマップ
 │       ├── phase3_plan.md           # 旧 Phase 3 計画
 │       ├── phase2_results.md        # Phase 2 AR 実験結果
@@ -181,7 +177,6 @@ new-ime/
 │       ├── sweep_probe_v1_results.md # probe_v1 sweep (v2 で置換)
 │       ├── external_review_notes.md # 外部 review ノート
 │       └── 30m-50k-sample.txt       # 前回 30M training log
-├── CHANGELOG.md
 ├── CMakeLists.txt             # C++ ビルド
 └── pyproject.toml             # Python (uv)
 ```

@@ -1,6 +1,0 @@
-LIBRARY "new-ime-tsf"
-EXPORTS
-    DllCanUnloadNow
-    DllGetClassObject
-    DllRegisterServer
-    DllUnregisterServer

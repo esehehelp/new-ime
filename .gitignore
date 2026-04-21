@@ -63,6 +63,9 @@ Thumbs.db
 # Training and bench logs
 logs/
 
+# Archived docs
+docs/old/
+
 # Models — broad ignore, コードとテストとツールのみ track
 models/*
 !models/src/
