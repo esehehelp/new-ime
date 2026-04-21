@@ -14,7 +14,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::fs::{File, rename};
+use std::fs::{rename, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -31,7 +31,7 @@ struct Args {
     output: Option<PathBuf>,
 
     /// Emit a progress line every N bytes scanned.
-    #[arg(long, default_value_t = 1_073_741_824u64)]   // 1 GiB
+    #[arg(long, default_value_t = 1_073_741_824u64)] // 1 GiB
     progress_bytes: u64,
 
     /// Read buffer size (bytes). Larger reduces syscall overhead.
@@ -64,7 +64,7 @@ fn write_npy_u64<W: Write>(mut out: W, data: &[u64]) -> std::io::Result<()> {
         data.len()
     );
     let preamble_len = magic.len() + version.len() + 2; // + u16 header_len
-    let unpadded = preamble_len + dict.len() + 1;       // + trailing '\n'
+    let unpadded = preamble_len + dict.len() + 1; // + trailing '\n'
     let padded_to = ((unpadded + 63) / 64) * 64;
     let pad = padded_to - unpadded;
     let mut header = String::with_capacity(dict.len() + pad + 1);
@@ -74,8 +74,7 @@ fn write_npy_u64<W: Write>(mut out: W, data: &[u64]) -> std::io::Result<()> {
     }
     header.push('\n');
     assert_eq!((preamble_len + header.len()) % 64, 0);
-    let header_len = u16::try_from(header.len())
-        .expect("header fits in u16 for this shape size");
+    let header_len = u16::try_from(header.len()).expect("header fits in u16 for this shape size");
 
     out.write_all(magic)?;
     out.write_all(&version)?;
@@ -151,7 +150,8 @@ fn main() -> Result<()> {
     write_npy_u64(&mut buf_out, &offsets).context("write npy")?;
     buf_out.flush()?;
     drop(buf_out);
-    rename(&tmp, &output).with_context(|| format!("rename {} → {}", tmp.display(), output.display()))?;
+    rename(&tmp, &output)
+        .with_context(|| format!("rename {} → {}", tmp.display(), output.display()))?;
 
     let out_size = std::fs::metadata(&output)?.len();
     eprintln!(
@@ -172,8 +172,7 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         write_npy_u64(&mut buf, &[1u64, 2u64, 3u64]).unwrap();
         // magic + version + len + header_bytes should be 64-byte aligned.
-        let header_len =
-            u16::from_le_bytes([buf[8], buf[9]]) as usize;
+        let header_len = u16::from_le_bytes([buf[8], buf[9]]) as usize;
         assert_eq!((10 + header_len) % 64, 0);
         // body starts right after
         let body_start = 10 + header_len;

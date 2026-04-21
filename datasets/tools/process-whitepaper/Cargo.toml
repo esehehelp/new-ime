@@ -1,0 +1,28 @@
+[package]
+name = "process-whitepaper"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "process-whitepaper"
+path = "src/main.rs"
+
+[dependencies]
+datacore = { path = "../datacore" }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+zstd.workspace = true
+# HTTP + HTML scraping for ministry PDF discovery.
+reqwest = { version = "0.12", features = ["blocking", "gzip", "rustls-tls"], default-features = false }
+scraper = "0.20"
+url = "2.5"
+indicatif = "0.17"
+# MeCab-compatible tokenizer (pure Rust) for generating hiragana readings at
+# the `ingest` stage. The dict file is downloaded separately into
+# `datasets/raw/vibrato-dict/` (see `process-whitepaper ingest --help`).
+vibrato = "0.5"
+# tar + xz for unpacking the vibrato ipadic dist.
+tar = "0.4"
+xz2 = "0.1"

@@ -105,23 +105,22 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let contamination = if !args.contamination_ref.is_empty()
-        && Path::new(&args.contamination_ref).exists()
-    {
-        eprintln!(
-            "Loading contamination reference from {}",
-            args.contamination_ref
-        );
-        let mut s = NgramSet::new(args.contamination_n);
-        s.extend_from_jsonl(Path::new(&args.contamination_ref))?;
-        eprintln!("Contamination n-grams: {}", s.len());
-        s
-    } else {
-        NgramSet::new(args.contamination_n)
-    };
+    let contamination =
+        if !args.contamination_ref.is_empty() && Path::new(&args.contamination_ref).exists() {
+            eprintln!(
+                "Loading contamination reference from {}",
+                args.contamination_ref
+            );
+            let mut s = NgramSet::new(args.contamination_n);
+            s.extend_from_jsonl(Path::new(&args.contamination_ref))?;
+            eprintln!("Contamination n-grams: {}", s.len());
+            s
+        } else {
+            NgramSet::new(args.contamination_n)
+        };
 
-    let input = File::open(&args.input)
-        .with_context(|| format!("open {}", args.input.display()))?;
+    let input =
+        File::open(&args.input).with_context(|| format!("open {}", args.input.display()))?;
     let reader = BufReader::with_capacity(8 * 1024 * 1024, input);
 
     let output_format = OutputFormat::from_path(&args.output);
@@ -224,10 +223,7 @@ mod tests {
         // "福澤諭吉" = 4 chars, MIN_SURFACE_LEN=5
         let row = zenz("フクザワユキチ", "福澤諭吉", None);
         let contamination = NgramSet::new(6);
-        assert_eq!(
-            process_zenz_row(row, &contamination),
-            RowDecision::SkipLen
-        );
+        assert_eq!(process_zenz_row(row, &contamination), RowDecision::SkipLen);
     }
 
     #[test]
@@ -235,10 +231,7 @@ mod tests {
         // reading "ア" = 1 char, MIN_READING_LEN=2
         let row = zenz("ア", "あああああ", None);
         let contamination = NgramSet::new(6);
-        assert_eq!(
-            process_zenz_row(row, &contamination),
-            RowDecision::SkipLen
-        );
+        assert_eq!(process_zenz_row(row, &contamination), RowDecision::SkipLen);
     }
 
     #[test]

@@ -1,0 +1,16 @@
+[package]
+name = "synth-homophone"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "synth-homophone"
+path = "src/main.rs"
+
+[dependencies]
+datacore = { path = "../datacore" }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+ahash.workspace = true

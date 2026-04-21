@@ -164,6 +164,9 @@ mod tests {
     fn surface_ngrams_order() {
         let ngrams = surface_ngrams("あいうえおかき", 3);
         let collected: Vec<String> = ngrams.into_iter().collect();
-        assert_eq!(collected, vec!["あいう", "いうえ", "うえお", "えおか", "おかき"]);
+        assert_eq!(
+            collected,
+            vec!["あいう", "いうえ", "うえお", "えおか", "おかき"]
+        );
     }
 }

@@ -109,8 +109,10 @@ fn contains_kanji(text: &str) -> bool {
 fn build_eval_indices(
     paths: &[String],
     eval_limit: usize,
-) -> Result<(std::collections::HashSet<(String, String, String)>, std::collections::HashSet<String>)>
-{
+) -> Result<(
+    std::collections::HashSet<(String, String, String)>,
+    std::collections::HashSet<String>,
+)> {
     let mut lexical: std::collections::HashSet<(String, String, String)> =
         std::collections::HashSet::new();
     let mut sixgrams: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -183,10 +185,7 @@ fn audit_pool(
         if overlapped {
             sixgram_overlap += 1;
         }
-        let tag = row
-            .source
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let tag = row.source.clone().unwrap_or_else(|| "unknown".to_string());
         *sources.entry(tag).or_insert(0) += 1;
     }
 
@@ -202,7 +201,11 @@ fn audit_pool(
         if tag == "unknown" {
             continue;
         }
-        attribution_candidates.push(PathBuf::from("datasets/src").join(tag).join("ATTRIBUTION.md"));
+        attribution_candidates.push(
+            PathBuf::from("datasets/src")
+                .join(tag)
+                .join("ATTRIBUTION.md"),
+        );
     }
     let has_attribution_file = attribution_candidates.iter().any(|p| p.exists());
 
@@ -252,8 +255,7 @@ fn main() -> Result<()> {
     let serialized = serde_json::to_string_pretty(&report)?;
     println!("{}", serialized);
     if !args.json.is_empty() {
-        std::fs::write(&args.json, &serialized)
-            .with_context(|| format!("write {}", args.json))?;
+        std::fs::write(&args.json, &serialized).with_context(|| format!("write {}", args.json))?;
     }
     Ok(())
 }

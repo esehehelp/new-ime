@@ -14,6 +14,7 @@
 //!
 //! Contamination defaults include probe_v3 + AJIMEE + general/{dev,test}.jsonl.
 
+use ahash::AHashMap;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use datacore::NgramSet;
@@ -22,12 +23,15 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use serde::Deserialize;
 use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
-#[command(about = "v3 training mix builder (chunks/zenz/wiki/bunsetsu/fineweb/hplt + contamination).")]
+#[command(
+    about = "v3 training mix builder (chunks/zenz/wiki/bunsetsu/fineweb/hplt + contamination)."
+)]
 struct Args {
     /// Output JSONL path.
     #[arg(long)]
@@ -61,26 +65,65 @@ struct Args {
     ])]
     bunsetsu_paths: Vec<String>,
 
-    // Ratios (must sum to 1.0). v3 defaults.
+    /// Synth pool: python-generated synth (numeric_ext) + new Rust-generated
+    /// synth (homophone, numeric_units, name). All bunsetsu-schema. Pure
+    /// synthesis, no contamination filter needed.
+    #[arg(long, num_args = 0.., default_values_t = [
+        "datasets/corpus/synth/numeric.jsonl".to_string(),
+        "datasets/corpus/synth/numeric_ext.jsonl".to_string(),
+        "datasets/corpus/synth/homophone.jsonl".to_string(),
+        "datasets/corpus/synth/numeric_units.jsonl".to_string(),
+        "datasets/corpus/synth/name.jsonl".to_string(),
+    ])]
+    synth_paths: Vec<String>,
+
+    // Ratios (must sum to 1.0). v3.1 defaults (synth added, bunsetsu
+    // reduced to make room — synth now carries the short-phrase coverage
+    // previously provided by bunsetsu span-1 rows).
     #[arg(long, default_value_t = 0.10)]
     ratio_chunks: f64,
     #[arg(long, default_value_t = 0.15)]
     ratio_zenz: f64,
     #[arg(long, default_value_t = 0.15)]
     ratio_wiki: f64,
-    #[arg(long, default_value_t = 0.30)]
+    #[arg(long, default_value_t = 0.20)]
     ratio_bunsetsu: f64,
     #[arg(long, default_value_t = 0.20)]
     ratio_fineweb2: f64,
     #[arg(long, default_value_t = 0.10)]
     ratio_hplt: f64,
+    /// Proportion of the output that comes from the synth pool (numeric,
+    /// homophone, unit, name). Replaces what the Python 20M mix used to
+    /// allocate to synth (~11%). 0.0 disables the pool entirely.
+    #[arg(long, default_value_t = 0.10)]
+    ratio_synth: f64,
 
-    /// Surface length floor (chars). Lines below are skipped.
-    #[arg(long, default_value_t = 1usize)]
+    /// Surface length floor (chars). Lines below are skipped. v2.x default
+    /// bumped 1→5 to drop ultra-short lexical fragments (bunsetsu pools
+    /// contributed lots of 1-3 char entries that dominate the long tail
+    /// and hurt homophone recall).
+    #[arg(long, default_value_t = 5usize)]
     min_surface_len: usize,
     /// Surface length ceiling (chars). Lines above are skipped.
     #[arg(long, default_value_t = 128usize)]
     max_surface_len: usize,
+    /// Reading length floor (chars). Filters near-empty readings that slip
+    /// past the surface-len check (e.g. hiragana-only fragments where
+    /// `reading == surface` and both are 1-2 chars).
+    #[arg(long, default_value_t = 2usize)]
+    min_reading_len: usize,
+    /// Global default dedup cap. A (reading, surface) pair may appear at
+    /// most this many times within a single pool's output. 0 disables. The
+    /// default cap=3 lets genuinely-common collocations through but kills
+    /// wiktionary/wikibooks-style lexical repetition. Individual pools can
+    /// override this via `--dedup-cap-<pool>`.
+    #[arg(long, default_value_t = 3u32)]
+    dedup_cap: u32,
+    /// Override dedup cap for the synth pool. Synth is intentionally
+    /// template-based repetition, so the default 3 would drop 99% of it.
+    /// 0 disables dedup for synth entirely.
+    #[arg(long, default_value_t = 0u32)]
+    dedup_cap_synth: u32,
 
     /// 6-gram contamination JSONL refs (rows with a `surface` field).
     #[arg(long, num_args = 0.., default_values_t = [
@@ -117,6 +160,9 @@ struct Args {
     filter_fineweb2: bool,
     #[arg(long, default_value_t = false)]
     filter_hplt: bool,
+    /// Pure synth is never contaminated with eval sets by construction.
+    #[arg(long, default_value_t = false)]
+    filter_synth: bool,
 
     /// Rows held in shuffle buffer before flush.
     #[arg(long, default_value_t = 100_000usize)]
@@ -157,12 +203,14 @@ fn extend_contamination_from_probe_json(set: &mut NgramSet, path: &Path) -> Resu
     Ok(count)
 }
 
-/// Minimal row view: we only need `surface` for filtering + length checks.
-/// The raw JSONL line is emitted verbatim (no re-encoding).
+/// Minimal row view: we only need `surface` / `reading` for filtering +
+/// length checks. The raw JSONL line is emitted verbatim (no re-encoding).
 #[derive(Deserialize)]
 struct RowSurface {
     #[serde(default)]
     surface: String,
+    #[serde(default)]
+    reading: String,
 }
 
 struct FilePool {
@@ -170,6 +218,9 @@ struct FilePool {
     paths: Vec<PathBuf>,
     source_tag: &'static str,
     filter_contamination: bool,
+    /// Pool-specific dedup cap override. When set, takes precedence over the
+    /// CLI's global `--dedup-cap` for this pool only.
+    dedup_cap_override: Option<u32>,
     current_reader: Option<BufReader<File>>,
     path_order: Vec<usize>,
     path_cursor: usize,
@@ -178,6 +229,10 @@ struct FilePool {
     skipped_contam: u64,
     skipped_length: u64,
     skipped_parse: u64,
+    skipped_dedup: u64,
+    /// (reading, surface) → emit count, capped by `dedup_cap` in the
+    /// calling CLI. Uses AHashMap for fast hashing on small keys.
+    seen: AHashMap<u64, u32>,
 }
 
 impl FilePool {
@@ -193,6 +248,7 @@ impl FilePool {
             paths,
             source_tag,
             filter_contamination,
+            dedup_cap_override: None,
             current_reader: None,
             path_order: Vec::new(),
             path_cursor: 0,
@@ -201,7 +257,14 @@ impl FilePool {
             skipped_contam: 0,
             skipped_length: 0,
             skipped_parse: 0,
+            skipped_dedup: 0,
+            seen: AHashMap::with_capacity(1 << 20),
         }
+    }
+
+    fn with_dedup_override(mut self, cap: u32) -> Self {
+        self.dedup_cap_override = Some(cap);
+        self
     }
 
     fn reshuffle_and_open(&mut self) -> Result<()> {
@@ -234,11 +297,22 @@ impl FilePool {
         contamination: &NgramSet,
         min_len: usize,
         max_len: usize,
-    ) -> Result<()> {
+        min_reading_len: usize,
+        dedup_cap: u32,
+    ) -> Result<NextLine> {
         if self.current_reader.is_none() {
             self.reshuffle_and_open()?;
         }
+        // A pool is "dead" if we scan this many consecutive lines without any
+        // emit. That happens when every (reading, surface) pair has hit the
+        // dedup cap. Without this guard, next_line spins forever and the
+        // whole mix hangs (observed at 73M/200M with bunsetsu+cap=3).
+        const DEAD_THRESHOLD: u64 = 20_000_000;
+        let mut consecutive_skip: u64 = 0;
         loop {
+            if consecutive_skip > DEAD_THRESHOLD {
+                return Ok(NextLine::Exhausted);
+            }
             scratch.clear();
             let reader = self.current_reader.as_mut().unwrap();
             let n = reader
@@ -256,6 +330,7 @@ impl FilePool {
                 Ok(r) => r,
                 Err(_) => {
                     self.skipped_parse += 1;
+                    consecutive_skip += 1;
                     continue;
                 }
             };
@@ -266,6 +341,12 @@ impl FilePool {
             let surf_len = row.surface.chars().count();
             if surf_len < min_len || surf_len > max_len {
                 self.skipped_length += 1;
+                consecutive_skip += 1;
+                continue;
+            }
+            if min_reading_len > 0 && row.reading.chars().count() < min_reading_len {
+                self.skipped_length += 1;
+                consecutive_skip += 1;
                 continue;
             }
             if self.filter_contamination
@@ -273,14 +354,39 @@ impl FilePool {
                 && contamination.contains_overlap(&row.surface)
             {
                 self.skipped_contam += 1;
+                consecutive_skip += 1;
                 continue;
+            }
+            let effective_cap = self.dedup_cap_override.unwrap_or(dedup_cap);
+            if effective_cap > 0 {
+                let mut hasher = ahash::AHasher::default();
+                row.reading.hash(&mut hasher);
+                0u8.hash(&mut hasher);
+                row.surface.hash(&mut hasher);
+                let key = hasher.finish();
+                let slot = self.seen.entry(key).or_insert(0);
+                if *slot >= effective_cap {
+                    self.skipped_dedup += 1;
+                    consecutive_skip += 1;
+                    continue;
+                }
+                *slot += 1;
             }
             if !scratch.ends_with('\n') {
                 scratch.push('\n');
             }
-            return Ok(());
+            return Ok(NextLine::Yielded);
         }
     }
+}
+
+/// Result of a single `next_line` call. `Exhausted` means the pool can no
+/// longer produce new rows (every line hits dedup cap / length / contam) and
+/// the main loop should stop asking this pool for more rows.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum NextLine {
+    Yielded,
+    Exhausted,
 }
 
 fn main() -> Result<()> {
@@ -292,7 +398,8 @@ fn main() -> Result<()> {
         + args.ratio_wiki
         + args.ratio_bunsetsu
         + args.ratio_fineweb2
-        + args.ratio_hplt;
+        + args.ratio_hplt
+        + args.ratio_synth;
     if (ratio_sum - 1.0).abs() > 1e-6 {
         bail!("ratios must sum to 1.0, got {:.6}", ratio_sum);
     }
@@ -328,8 +435,7 @@ fn main() -> Result<()> {
     );
 
     // Assemble pools in fixed order. Same order as ratios / targets below.
-    let bunsetsu_paths: Vec<PathBuf> =
-        args.bunsetsu_paths.iter().map(PathBuf::from).collect();
+    let bunsetsu_paths: Vec<PathBuf> = args.bunsetsu_paths.iter().map(PathBuf::from).collect();
     let specs: Vec<(FilePool, f64)> = vec![
         (
             FilePool::new(
@@ -391,11 +497,21 @@ fn main() -> Result<()> {
             ),
             args.ratio_hplt,
         ),
+        (
+            FilePool::new(
+                "synth",
+                args.synth_paths.iter().map(PathBuf::from).collect(),
+                "synth",
+                args.filter_synth,
+                args.seed ^ 0x7777,
+            )
+            .with_dedup_override(args.dedup_cap_synth),
+            args.ratio_synth,
+        ),
     ];
     let mut pools: Vec<(FilePool, f64)> = Vec::new();
     for (pool, ratio) in specs {
-        let existing: Vec<PathBuf> =
-            pool.paths.iter().filter(|p| p.exists()).cloned().collect();
+        let existing: Vec<PathBuf> = pool.paths.iter().filter(|p| p.exists()).cloned().collect();
         if existing.is_empty() || ratio <= 0.0 {
             eprintln!(
                 "[warn] dropping pool {} (ratio={:.3}, paths_exist={}/{})",
@@ -489,14 +605,33 @@ fn main() -> Result<()> {
         }
 
         let (pool, _ratio) = &mut pools[idx];
-        pool.next_line(
+        match pool.next_line(
             &mut scratch,
             &contamination,
             args.min_surface_len,
             args.max_surface_len,
-        )?;
-        buffer.push(scratch.clone());
-        served[idx] += 1;
+            args.min_reading_len,
+            args.dedup_cap,
+        )? {
+            NextLine::Yielded => {
+                buffer.push(scratch.clone());
+                served[idx] += 1;
+            }
+            NextLine::Exhausted => {
+                // Pool can't produce new rows (dedup cap saturated, or all
+                // remaining lines fail filters). Mark its remaining target
+                // as served so weighted-choice stops picking it. The total
+                // row count at the end will be lower than args.total.
+                eprintln!(
+                    "[warn] pool {} exhausted at served={}/target={} (remaining={} rows won't emit)",
+                    pool.name,
+                    served[idx],
+                    targets[idx],
+                    targets[idx] as i64 - served[idx] as i64
+                );
+                targets[idx] = served[idx];
+            }
+        }
 
         if buffer.len() >= args.shuffle_buffer {
             buffer.shuffle(&mut rng);
@@ -547,8 +682,15 @@ fn main() -> Result<()> {
     for ((pool, _), (tgt, got)) in pools.iter().zip(targets.iter().zip(served.iter())) {
         let pct = *got as f64 / (*tgt).max(1) as f64 * 100.0;
         println!(
-            "    {:<12} served={}  target={}  ({:.1}%)  skip_contam={}  skip_length={}  skip_parse={}",
-            pool.name, got, tgt, pct, pool.skipped_contam, pool.skipped_length, pool.skipped_parse
+            "    {:<12} served={}  target={}  ({:.1}%)  skip_contam={}  skip_length={}  skip_parse={}  skip_dedup={}",
+            pool.name,
+            got,
+            tgt,
+            pct,
+            pool.skipped_contam,
+            pool.skipped_length,
+            pool.skipped_parse,
+            pool.skipped_dedup
         );
     }
 

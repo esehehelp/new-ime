@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -40,9 +41,9 @@ std::vector<std::string> split_utf8_chars(std::string_view s) {
 } // namespace
 
 struct KenLMCharScorer::Impl {
-    lm::ngram::Model model;
+    std::unique_ptr<lm::base::Model> model;
     explicit Impl(const std::string& path)
-        : model(path.c_str()) {}
+        : model(lm::ngram::LoadVirtual(path.c_str())) {}
 };
 
 KenLMCharScorer::KenLMCharScorer(const std::string& lm_path)
@@ -58,14 +59,15 @@ float KenLMCharScorer::score(std::string_view prefix) {
     if (it != cache_.end()) return it->second;
 
     auto chars = split_utf8_chars(prefix);
-    const auto& vocab = impl_->model.BaseVocabulary();
-    lm::ngram::State state = impl_->model.BeginSentenceState();
-    lm::ngram::State next;
+    const auto& vocab = impl_->model->BaseVocabulary();
+    std::vector<uint8_t> state(impl_->model->StateSize());
+    std::vector<uint8_t> next(impl_->model->StateSize());
+    impl_->model->BeginSentenceWrite(state.data());
     float total_log10 = 0.0f;
     for (const auto& ch : chars) {
         lm::WordIndex w = vocab.Index(ch);
-        total_log10 += impl_->model.BaseScore(&state, w, &next);
-        state = next;
+        total_log10 += impl_->model->BaseScore(state.data(), w, next.data());
+        state.swap(next);
     }
     float natlog = total_log10 * LOG_10;
     cache_.emplace(std::move(key), natlog);

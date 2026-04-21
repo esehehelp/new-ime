@@ -15,6 +15,8 @@ typedef void (*FnVoidInt)(int);
 typedef void (*FnVoidBool)(bool);
 typedef const char* (*FnStrVoid)(void);
 typedef void (*FnFreeStr)(const char*);
+typedef int (*FnIntVoid)(void);
+typedef void (*FnVoidStrInt)(const char*, int);
 
 int main() {
     SetConsoleOutputCP(65001); // UTF-8
@@ -35,6 +37,11 @@ int main() {
     auto pSetContext = (FnVoidStr)GetProcAddress(dll, "SetContext");
     auto pSelectCandidate = (FnVoidInt)GetProcAddress(dll, "SelectCandidate");
     auto pFreeString = (FnFreeStr)GetProcAddress(dll, "FreeString");
+    auto pGetCompositionText = (FnStrVoid)GetProcAddress(dll, "GetCompositionText");
+    auto pGetCompositionCursor = (FnIntVoid)GetProcAddress(dll, "GetCompositionCursor");
+    auto pSetCompositionText = (FnVoidStrInt)GetProcAddress(dll, "SetCompositionText");
+    auto pGetStateJson = (FnStrVoid)GetProcAddress(dll, "GetStateJson");
+    auto pCommitSelectedCandidate = (FnStrVoid)GetProcAddress(dll, "CommitSelectedCandidate");
 
     if (!pInitialize || !pAppendText || !pGetComposedText || !pGetCandidates) {
         printf("Failed to find functions in DLL\n");
@@ -42,10 +49,13 @@ int main() {
         return 1;
     }
     printf("Functions loaded OK\n");
+    printf("Stateful API: %s\n",
+           (pGetCompositionText && pGetCompositionCursor && pSetCompositionText &&
+            pGetStateJson && pCommitSelectedCandidate) ? "available" : "missing");
 
     // Initialize with model directory
     printf("\nInitializing...\n");
-    pInitialize("C:\\Users\\admin\\Dev\\new-ime\\models", nullptr);
+    pInitialize("..\\..\\models", nullptr);
     printf("Initialized\n");
 
     // Test cases
@@ -71,6 +81,23 @@ int main() {
         const char* cands = pGetCandidates();
         printf("  candidates: %s\n\n", cands ? cands : "(null)");
         if (cands) pFreeString(cands);
+    }
+
+    if (pSetCompositionText && pGetCompositionText && pGetCompositionCursor &&
+        pGetStateJson && pCommitSelectedCandidate) {
+        printf("Stateful API smoke test\n");
+        pSetCompositionText("てすと", 2);
+        const char* composition = pGetCompositionText();
+        const char* state = pGetStateJson();
+        int cursor = pGetCompositionCursor();
+        const char* committed = pCommitSelectedCandidate();
+        printf("  composition: %s\n", composition ? composition : "(null)");
+        printf("  cursor: %d\n", cursor);
+        printf("  state: %s\n", state ? state : "(null)");
+        printf("  committed: %s\n", committed ? committed : "(null)");
+        if (composition) pFreeString(composition);
+        if (state) pFreeString(state);
+        if (committed) pFreeString(committed);
     }
 
     pShutdown();

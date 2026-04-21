@@ -34,7 +34,7 @@ int main() {
     auto FreeString = (FnFreeStr)GetProcAddress(dll, "FreeString");
 
     printf("Initializing model...\n");
-    Initialize("C:\\Users\\admin\\Dev\\new-ime\\models", nullptr);
+    Initialize("..\\..\\models", nullptr);
     printf("Ready!\n\n");
 
     printf("=== new-ime Interactive Demo ===\n");

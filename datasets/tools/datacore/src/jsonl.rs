@@ -88,13 +88,15 @@ pub fn open_output(
         }
     }
     let fmt = format.unwrap_or_else(|| OutputFormat::from_path(path));
-    let raw = BufWriter::with_capacity(8 * 1024 * 1024, File::create(path).with_context(|| format!("create {}", path.display()))?);
+    let raw = BufWriter::with_capacity(
+        8 * 1024 * 1024,
+        File::create(path).with_context(|| format!("create {}", path.display()))?,
+    );
     match fmt {
         OutputFormat::Raw => Ok(Writer::Raw(raw)),
         OutputFormat::Zstd => {
             let level = compression_level.clamp(1, 22);
-            let enc = zstd::stream::Encoder::new(raw, level)
-                .context("init zstd encoder")?;
+            let enc = zstd::stream::Encoder::new(raw, level).context("init zstd encoder")?;
             // Single-threaded zstd; multithreading requires a feature on the
             // zstd-sys crate we don't enable here. For 20GB+ outputs, the
             // bottleneck is typically downstream I/O anyway.
@@ -280,7 +282,10 @@ mod tests {
             Row::new("かみ".into(), "神".into(), "前".into(), None),
         ];
         write_jsonl(&p, &rows);
-        let back: Vec<_> = JsonlLines::open(&p).unwrap().collect::<Result<Vec<_>>>().unwrap();
+        let back: Vec<_> = JsonlLines::open(&p)
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(back.len(), 2);
         assert_eq!(back[0].reading, "あい");
         assert_eq!(back[1].context, "前");

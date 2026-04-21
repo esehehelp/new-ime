@@ -189,7 +189,23 @@
       "Bash(set -e)",
       "Bash(cargo metadata *)",
       "Bash(git reset *)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(git stash *)",
+      "Bash(tar -cf - --exclude='.venv' --exclude='.git' --exclude='target' --exclude='build' --exclude='datasets/corpus' --exclude='datasets/mixes' --exclude='models/checkpoints' --exclude='models/kenlm' --exclude='models/onnx' --exclude='models/dicts' --exclude='logs' --exclude='__pycache__' --exclude='results' --exclude='*.pyc' --exclude='.ruff_cache' --exclude='docs/old' --exclude='engine/server/third_party' --exclude='models/tests' --exclude='datasets/eval/legacy' --exclude='tools/onnxruntime-win-x64-1.22.0' --exclude='models/tools/audit-tokenizer/target' --exclude='models/tools/postprocess/target' --exclude='datasets/tools/chunk-generator/target' models tools datasets/tools datasets/eval pyproject.toml configs references/AJIMEE-Bench/JWTD_v2/v1)",
+      "Bash(kill -9 22804 32132)",
+      "Bash(rm -f D:/Dev/new-ime/datasets/eval/general/dev.clean.jsonl.offsets.npy)",
+      "Bash(.venv/Scripts/python.exe -c \"import onnxruntime, onnx; print\\('ort:', onnxruntime.__version__, 'onnx:', onnx.__version__\\); from onnxruntime.quantization import quantize_dynamic; print\\('quantize_dynamic ok'\\)\")",
+      "Bash(D:/Dev/new-ime/target/release/bench-onnx.exe --onnx D:/Dev/new-ime/models/onnx/ctc-nat-30m-student-step160000.fp32.onnx --tokenizer D:/Dev/new-ime/models/onnx/ctc-nat-30m-student-step160000.fp32.tokenizer.json --probe D:/Dev/new-ime/datasets/eval/probe/probe.json --output-json D:/Dev/new-ime/results/onnx_int8_bench/fp32.json)",
+      "Bash(.venv/Scripts/python.exe -m models.src.training.train_ctc_nat --help)",
+      "PowerShell(Get-WinEvent *)",
+      "Bash(awk '{print $1, $2, $3}')",
+      "Bash(awk '/^ 0001:/ { split\\($1, a, \":\"\\); off = strtonum\\(\"0x\" a[2]\\); print off, $2, $3 }' D:/Dev/new-ime/build/win32/new-ime-engine.map)",
+      "Bash(awk '/^ 0001:/ && $1 ~ /^ 0001:[0-9a-f]/ { split\\($1, a, \":\"\\); off = strtonum\\(\"0x\" a[2]\\); if \\(off < 0x11000 && off > 0x1000\\) print off, $2 }' D:/Dev/new-ime/build/win32/new-ime-engine.map)",
+      "Bash(awk ' *)",
+      "Bash(awk '/^ 0001:[0-9a-f]+ +[^ ]+ +[0-9a-f]+ +/ { print $1, $2, $3 }' D:/Dev/new-ime/build/win32/new-ime-engine.map)",
+      "Bash(awk '{print $1, $2}')",
+      "Bash(awk *)",
+      "Bash(/d/Dev/new-ime/tools/target/release/build-train-mix-v2.exe --help)"
     ]
   }
 }

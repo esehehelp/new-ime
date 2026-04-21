@@ -8,7 +8,13 @@ members = [
     "datasets/tools/audit",
     "datasets/tools/bench-onnx",
     "datasets/tools/extract-domain",
+    "datasets/tools/process-whitepaper",
+    "datasets/tools/synth-homophone",
+    "datasets/tools/synth-numeric-units",
+    "datasets/tools/synth-name",
     "engine/tools/interactive-rs",
+    "engine/win32-rs/engine-core",
+    "engine/win32-rs/tsf",
 ]
 # Standalone crates build out of tree.
 exclude = [
