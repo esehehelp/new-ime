@@ -733,7 +733,9 @@ def make_dataloader(
     )
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["prefetch_factor"] = int(
+            __import__("os").environ.get("NEWIME_PREFETCH_FACTOR", "4")
+        )
     return DataLoader(
         **loader_kwargs,
     )
