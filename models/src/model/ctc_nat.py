@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from models.src.model.cvae import CVAEConditioner
-from models.src.model.decoder import NATDecoder
+from models.src.model.decoder import MaskCTCRefinementDecoder, NATDecoder
 from models.src.model.encoder import BertEncoder, MockEncoder, SmallEncoder
 
 
@@ -22,6 +23,25 @@ class CTCNATPreset:
     num_heads: int
     ffn_size: int
     max_positions: int
+
+
+@dataclass(frozen=True)
+class CTCAlignmentToken:
+    token_id: int
+    start_frame: int
+    end_frame: int
+    min_log_prob: float
+    mean_log_prob: float
+    min_margin: float
+    mean_margin: float
+
+    @property
+    def frame_count(self) -> int:
+        return self.end_frame - self.start_frame + 1
+
+    @property
+    def confidence(self) -> float:
+        return math.exp(self.min_log_prob)
 
 
 PRESETS: dict[str, CTCNATPreset] = {
@@ -109,7 +129,24 @@ class CTCNAT(nn.Module):
             candidate = encoder.get_input_embedding()
             if candidate.num_embeddings == output_vocab_size:
                 tied_embedding = candidate
+        self.refine_decoder = MaskCTCRefinementDecoder(
+            vocab_size=output_vocab_size,
+            hidden_size=hidden_size,
+            num_layers=decoder_layers,
+            num_heads=decoder_heads,
+            ffn_size=decoder_ffn_size,
+            dropout=dropout,
+            max_positions=max_positions,
+            embedding=tied_embedding,
+        )
         self.ctc_head = CTCHead(hidden_size, output_vocab_size, tied_embedding=tied_embedding)
+        self.refine_head = CTCHead(hidden_size, output_vocab_size, tied_embedding=tied_embedding)
+        # Per-token binary head: "should this position be re-masked for the
+        # next refinement iteration?" Positive label = refined argmax != target.
+        self.remask_head = nn.Linear(hidden_size, 1)
+        # Sequence-level scalar: "refinement converged (argmax matches target
+        # everywhere inside valid span)." Pooled via mean over valid positions.
+        self.stop_head = nn.Linear(hidden_size, 1)
         self.blank_id = blank_id
         self.output_vocab_size = output_vocab_size
         self.cvae = (
@@ -117,6 +154,131 @@ class CTCNAT(nn.Module):
             if use_cvae
             else None
         )
+
+    @staticmethod
+    def collapse_predictions(
+        predictions: torch.Tensor,
+        input_lengths: torch.Tensor,
+        blank_id: int,
+    ) -> list[list[int]]:
+        """Collapse frame-level CTC predictions into token sequences."""
+        decoded: list[list[int]] = []
+        for b in range(predictions.shape[0]):
+            tokens: list[int] = []
+            prev_token = -1
+            limit = int(input_lengths[b].item())
+            for t in range(limit):
+                token = int(predictions[b, t].item())
+                if token != blank_id and token != prev_token:
+                    tokens.append(token)
+                prev_token = token
+            decoded.append(tokens)
+        return decoded
+
+    @staticmethod
+    def collapse_with_alignment(
+        logits: torch.Tensor,
+        input_lengths: torch.Tensor,
+        blank_id: int,
+    ) -> list[list[CTCAlignmentToken]]:
+        """Collapse CTC frames and keep token-level confidence/alignment stats."""
+        log_probs = F.log_softmax(logits, dim=-1)
+        top2_log_probs, top2_ids = log_probs.topk(k=min(2, logits.shape[-1]), dim=-1)
+        top2_log_probs_cpu = top2_log_probs.detach().cpu()
+        top2_ids_cpu = top2_ids.detach().cpu()
+        input_lengths_cpu = input_lengths.detach().cpu()
+
+        collapsed: list[list[CTCAlignmentToken]] = []
+        for b in range(logits.shape[0]):
+            batch_tokens: list[CTCAlignmentToken] = []
+            limit = int(input_lengths_cpu[b].item())
+            current_id: int | None = None
+            start_frame = 0
+            log_prob_sum = 0.0
+            margin_sum = 0.0
+            min_log_prob = float("inf")
+            min_margin = float("inf")
+            count = 0
+            prev_token = -1
+
+            def flush() -> None:
+                nonlocal current_id, start_frame, log_prob_sum, margin_sum
+                nonlocal min_log_prob, min_margin, count
+                if current_id is None or count <= 0:
+                    return
+                batch_tokens.append(
+                    CTCAlignmentToken(
+                        token_id=current_id,
+                        start_frame=start_frame,
+                        end_frame=start_frame + count - 1,
+                        min_log_prob=min_log_prob,
+                        mean_log_prob=log_prob_sum / count,
+                        min_margin=min_margin,
+                        mean_margin=margin_sum / count,
+                    )
+                )
+                current_id = None
+                log_prob_sum = 0.0
+                margin_sum = 0.0
+                min_log_prob = float("inf")
+                min_margin = float("inf")
+                count = 0
+
+            for t in range(limit):
+                token = int(top2_ids_cpu[b, t, 0])
+                top1_lp = float(top2_log_probs_cpu[b, t, 0])
+                top2_lp = (
+                    float(top2_log_probs_cpu[b, t, 1])
+                    if top2_log_probs_cpu.shape[-1] > 1
+                    else top1_lp
+                )
+                margin = top1_lp - top2_lp
+
+                if token == blank_id:
+                    flush()
+                    prev_token = token
+                    continue
+
+                if token == prev_token:
+                    if current_id is None:
+                        current_id = token
+                        start_frame = t
+                    log_prob_sum += top1_lp
+                    margin_sum += margin
+                    min_log_prob = min(min_log_prob, top1_lp)
+                    min_margin = min(min_margin, margin)
+                    count += 1
+                else:
+                    flush()
+                    current_id = token
+                    start_frame = t
+                    log_prob_sum = top1_lp
+                    margin_sum = margin
+                    min_log_prob = top1_lp
+                    min_margin = margin
+                    count = 1
+                prev_token = token
+
+            flush()
+            collapsed.append(batch_tokens)
+        return collapsed
+
+    @staticmethod
+    def select_mask_spans(
+        aligned_tokens: list[CTCAlignmentToken],
+        confidence_threshold: float,
+        max_masks: int = 0,
+    ) -> list[int]:
+        """Return token indices to mask, ordered by lowest confidence first."""
+        ranked = [
+            (idx, tok.confidence, tok.min_margin)
+            for idx, tok in enumerate(aligned_tokens)
+            if tok.confidence < confidence_threshold
+        ]
+        ranked.sort(key=lambda item: (item[1], item[2], item[0]))
+        if max_masks > 0:
+            ranked = ranked[:max_masks]
+        return [idx for idx, _conf, _margin in ranked]
 
     @classmethod
     def from_preset(
@@ -180,7 +342,7 @@ class CTCNAT(nn.Module):
             sample_posterior=sample_posterior,
         )
 
-    def forward(
+    def proposal_logits(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -191,6 +353,7 @@ class CTCNAT(nn.Module):
         source_ids: torch.Tensor | None = None,
         sample_posterior: bool = True,
     ) -> dict[str, torch.Tensor]:
+        """Run the shared encoder/proposal decoder path and return raw logits."""
         encoder_out = self.encoder(input_ids, attention_mask)
         encoder_padding_mask = ~attention_mask.bool()
 
@@ -217,18 +380,208 @@ class CTCNAT(nn.Module):
             film_conditioning=cvae_output.film_conditioning if cvae_output else None,
         )
         logits = self.ctc_head(decoder_out)
-        log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
-
         result = {
+            "encoder_out": encoder_out,
+            "encoder_padding_mask": encoder_padding_mask,
+            "decoder_out": decoder_out,
             "logits": logits,
-            "log_probs": log_probs,
+            "film_conditioning": cvae_output.film_conditioning if cvae_output else None,
         }
-
         if cvae_output is not None:
             result["latent"] = cvae_output.latent
             result["kl"] = cvae_output.kl
             result["posterior_mean"] = cvae_output.mean
             result["posterior_logvar"] = cvae_output.logvar
+        return result
+
+    def refine_logits(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        hypothesis_ids: torch.Tensor,
+        hypothesis_attention_mask: torch.Tensor,
+        cvae_target_ids: torch.Tensor | None = None,
+        cvae_target_attention_mask: torch.Tensor | None = None,
+        writer_ids: torch.Tensor | None = None,
+        domain_ids: torch.Tensor | None = None,
+        source_ids: torch.Tensor | None = None,
+        sample_posterior: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        """Run the dedicated refinement branch on a masked hypothesis."""
+        cvae_target_lengths = None
+        if cvae_target_attention_mask is not None:
+            cvae_target_lengths = cvae_target_attention_mask.sum(dim=1).long()
+        proposal = self.proposal_logits(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            target_ids=cvae_target_ids,
+            target_lengths=cvae_target_lengths,
+            writer_ids=writer_ids,
+            domain_ids=domain_ids,
+            source_ids=source_ids,
+            sample_posterior=sample_posterior,
+        )
+        return self.refine_from_proposal(
+            proposal=proposal,
+            hypothesis_ids=hypothesis_ids,
+            hypothesis_attention_mask=hypothesis_attention_mask,
+        )
+
+    def refine_from_proposal(
+        self,
+        proposal: dict[str, torch.Tensor],
+        hypothesis_ids: torch.Tensor,
+        hypothesis_attention_mask: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Run refinement using a previously computed proposal result."""
+        decoder_out = self.refine_decoder(
+            hypothesis_ids=hypothesis_ids,
+            hypothesis_padding_mask=~hypothesis_attention_mask.bool(),
+            encoder_out=proposal["encoder_out"],
+            encoder_padding_mask=proposal["encoder_padding_mask"],
+            film_conditioning=proposal.get("film_conditioning"),
+        )
+        logits = self.refine_head(decoder_out)
+        remask_logits = self.remask_head(decoder_out).squeeze(-1)
+        valid = hypothesis_attention_mask.bool()
+        pooled = (decoder_out * valid.unsqueeze(-1)).sum(dim=1) / valid.sum(
+            dim=1
+        ).clamp(min=1).unsqueeze(-1)
+        stop_logit = self.stop_head(pooled).squeeze(-1)
+        result = {
+            "encoder_out": proposal["encoder_out"],
+            "encoder_padding_mask": proposal["encoder_padding_mask"],
+            "decoder_out": decoder_out,
+            "logits": logits,
+            "remask_logits": remask_logits,
+            "stop_logit": stop_logit,
+        }
+        if "latent" in proposal:
+            result["latent"] = proposal["latent"]
+            result["kl"] = proposal["kl"]
+            result["posterior_mean"] = proposal["posterior_mean"]
+            result["posterior_logvar"] = proposal["posterior_logvar"]
+        return result
+
+    @staticmethod
+    def apply_refinement_predictions(
+        hypothesis_ids: torch.Tensor,
+        hypothesis_attention_mask: torch.Tensor,
+        mask_positions: torch.Tensor,
+        refinement_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        """Replace masked positions with refinement argmax predictions."""
+        updated = hypothesis_ids.clone()
+        predicted = refinement_logits.argmax(dim=-1)
+        valid_mask = mask_positions.bool() & hypothesis_attention_mask.bool()
+        updated[valid_mask] = predicted[valid_mask]
+        return updated
+
+    @torch.no_grad()
+    def iterative_refine(
+        self,
+        proposal: dict[str, torch.Tensor],
+        hypothesis_ids: torch.Tensor,
+        hypothesis_attention_mask: torch.Tensor,
+        max_iterations: int = 2,
+        stop_threshold: float = 0.5,
+        remask_threshold: float = 0.5,
+        confidence_fallback: float = 0.5,
+        use_learned_remask: bool = True,
+        use_learned_stop: bool = True,
+        mask_token_id: int | None = None,
+    ) -> dict[str, torch.Tensor]:
+        """Run up to `max_iterations` refinement passes on a cached proposal.
+
+        At each iteration: run refine_from_proposal, argmax-fill the current
+        mask positions, then decide which tokens (if any) should be remasked
+        for the next round. Halts early when the stop head says "converged"
+        for every row, or when no position meets the remask criterion.
+        """
+        valid = hypothesis_attention_mask.bool()
+        current_ids = hypothesis_ids.clone()
+        if mask_token_id is None:
+            mask_token_id = getattr(self, "_mask_token_id", None)
+        last_result: dict[str, torch.Tensor] | None = None
+        done = torch.zeros(current_ids.shape[0], dtype=torch.bool, device=current_ids.device)
+        for it in range(max_iterations):
+            refine_result = self.refine_from_proposal(
+                proposal=proposal,
+                hypothesis_ids=current_ids,
+                hypothesis_attention_mask=hypothesis_attention_mask,
+            )
+            last_result = refine_result
+            logits = refine_result["logits"]
+            argmax = logits.argmax(dim=-1)
+            # Fill in mask-token positions with the argmax prediction; keep
+            # non-mask positions untouched.
+            if mask_token_id is not None:
+                mask_here = (current_ids == mask_token_id) & valid
+                current_ids = torch.where(mask_here, argmax, current_ids)
+            else:
+                current_ids = torch.where(valid, argmax, current_ids)
+
+            if use_learned_stop:
+                stop_prob = torch.sigmoid(refine_result["stop_logit"])
+                done = done | (stop_prob >= stop_threshold)
+                if bool(done.all().item()):
+                    break
+
+            if it == max_iterations - 1:
+                break
+
+            if use_learned_remask:
+                remask_prob = torch.sigmoid(refine_result["remask_logits"])
+                next_mask = (remask_prob >= remask_threshold) & valid & ~done.unsqueeze(1)
+            else:
+                probs = F.softmax(logits, dim=-1)
+                max_probs = probs.max(dim=-1).values
+                next_mask = (max_probs < confidence_fallback) & valid & ~done.unsqueeze(1)
+
+            if not bool(next_mask.any().item()):
+                break
+
+            if mask_token_id is not None:
+                current_ids = torch.where(
+                    next_mask,
+                    torch.full_like(current_ids, mask_token_id),
+                    current_ids,
+                )
+
+        assert last_result is not None
+        last_result["final_ids"] = current_ids
+        last_result["stopped_rows"] = done
+        return last_result
+
+    def set_mask_token(self, mask_token_id: int) -> None:
+        """Record the tokenizer-defined mask id so iterative_refine can
+        re-apply it when it decides to mask a position for the next pass."""
+        self._mask_token_id = int(mask_token_id)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        target_ids: torch.Tensor | None = None,
+        target_lengths: torch.Tensor | None = None,
+        writer_ids: torch.Tensor | None = None,
+        domain_ids: torch.Tensor | None = None,
+        source_ids: torch.Tensor | None = None,
+        sample_posterior: bool = True,
+    ) -> dict[str, torch.Tensor]:
+        result = self.proposal_logits(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            target_ids=target_ids,
+            target_lengths=target_lengths,
+            writer_ids=writer_ids,
+            domain_ids=domain_ids,
+            source_ids=source_ids,
+            sample_posterior=sample_posterior,
+        )
+        logits = result["logits"]
+        log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
+        result["log_probs"] = log_probs
 
         if target_ids is not None and target_lengths is not None:
             input_lengths = attention_mask.sum(dim=1).long()
@@ -264,18 +617,7 @@ class CTCNAT(nn.Module):
         )
         predictions = result["logits"].argmax(dim=-1)
         input_lengths = attention_mask.sum(dim=1).long()
-
-        decoded = []
-        for b in range(predictions.shape[0]):
-            tokens = []
-            prev_token = -1
-            for t in range(input_lengths[b]):
-                token = predictions[b, t].item()
-                if token != self.blank_id and token != prev_token:
-                    tokens.append(token)
-                prev_token = token
-            decoded.append(tokens)
-        return decoded
+        return self.collapse_predictions(predictions, input_lengths, self.blank_id)
 
 
 class GLATSampler:
@@ -321,7 +663,7 @@ class GLATSampler:
 
 
 class MaskCTCRefiner(nn.Module):
-    """Single-pass Mask-CTC refinement."""
+    """Legacy confidence heuristic retained for compatibility and ablations."""
 
     def __init__(self, mask_id: int = 5, confidence_threshold: float = 0.5):
         super().__init__()

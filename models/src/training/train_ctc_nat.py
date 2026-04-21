@@ -21,12 +21,13 @@ from dataclasses import dataclass
 import time
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from models.src.data.dataset import KanaKanjiDataset
-from models.src.data.tokenizer import BLANK_ID, PAD_ID, SharedCharTokenizer
+from models.src.data.tokenizer import BLANK_ID, MASK_ID, PAD_ID, SharedCharTokenizer
 from models.src.eval.metrics import EvalResult
-from models.src.model.ctc_nat import CTCNAT, PRESETS
+from models.src.model.ctc_nat import CTCAlignmentToken, CTCNAT, PRESETS
 from models.src.training.kd import (
     ARTeacher,
     CTCTeacher,
@@ -143,6 +144,110 @@ def move_batch_to_device(batch: dict, device: torch.device) -> dict:
         k: (v.to(device, non_blocking=True) if torch.is_tensor(v) else v)
         for k, v in batch.items()
     }
+
+
+def build_refinement_batch(
+    target_ids: torch.Tensor,
+    target_lengths: torch.Tensor,
+    mask_ratio: float,
+    mask_id: int = MASK_ID,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Mask a subset of valid target positions for the refinement objective."""
+    seq_len = target_ids.shape[1]
+    positions = torch.arange(seq_len, device=target_ids.device).unsqueeze(0)
+    hypothesis_attention_mask = positions < target_lengths.unsqueeze(1)
+    random_mask = torch.rand_like(target_ids.float()) < mask_ratio
+    mask_positions = random_mask & hypothesis_attention_mask
+
+    no_mask_rows = (mask_positions.sum(dim=1) == 0) & (target_lengths > 0)
+    if no_mask_rows.any():
+        row_ids = no_mask_rows.nonzero(as_tuple=False).squeeze(1)
+        forced_cols = []
+        for row_idx in row_ids.tolist():
+            forced_cols.append(int(torch.randint(0, int(target_lengths[row_idx].item()), (1,), device=target_ids.device).item()))
+        mask_positions[row_ids, forced_cols] = True
+
+    hypothesis_ids = target_ids.clone()
+    hypothesis_ids[mask_positions] = mask_id
+    return hypothesis_ids, hypothesis_attention_mask.long(), mask_positions
+
+
+def resolve_refine_mask_ratio(args: argparse.Namespace) -> float:
+    if args.refine_mask_ratio_min is not None and args.refine_mask_ratio_max is not None:
+        lo = float(min(args.refine_mask_ratio_min, args.refine_mask_ratio_max))
+        hi = float(max(args.refine_mask_ratio_min, args.refine_mask_ratio_max))
+        if hi <= lo:
+            return lo
+        return float(torch.empty((), device="cpu").uniform_(lo, hi).item())
+    return float(args.refine_mask_ratio)
+
+
+def resolve_refine_loss_weight(args: argparse.Namespace, step: int) -> float:
+    base = float(args.refine_loss_weight)
+    warmup_steps = int(getattr(args, "refine_warmup_steps", 0))
+    if base <= 0.0 or warmup_steps <= 0:
+        return base
+    scale = min(max(step, 0) / warmup_steps, 1.0)
+    return base * scale
+
+
+def build_refinement_batch_from_proposal(
+    target_ids: torch.Tensor,
+    target_lengths: torch.Tensor,
+    proposal_alignments: list[list[CTCAlignmentToken]],
+    mask_ratio: float,
+    mask_id: int = MASK_ID,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build refinement hypotheses from the model proposal when lengths match.
+
+    Rows whose collapsed proposal length does not match the target length fall
+    back to the plain target-masked path to keep the objective well-defined.
+    Returns `(hypothesis_ids, hypothesis_attention_mask, mask_positions,
+    used_proposal_rows)`.
+    """
+    hypothesis_ids, hypothesis_attention_mask, mask_positions = build_refinement_batch(
+        target_ids,
+        target_lengths,
+        mask_ratio=mask_ratio,
+        mask_id=mask_id,
+    )
+    used_proposal_rows = torch.zeros(target_ids.shape[0], dtype=torch.bool, device=target_ids.device)
+
+    for row_idx, aligned_tokens in enumerate(proposal_alignments):
+        tgt_len = int(target_lengths[row_idx].item())
+        if tgt_len <= 0 or len(aligned_tokens) != tgt_len:
+            continue
+
+        proposal_ids = torch.tensor(
+            [tok.token_id for tok in aligned_tokens],
+            dtype=target_ids.dtype,
+            device=target_ids.device,
+        )
+        hypothesis_ids[row_idx, :tgt_len] = proposal_ids
+        hypothesis_ids[row_idx, tgt_len:] = PAD_ID
+        hypothesis_attention_mask[row_idx, :tgt_len] = 1
+        hypothesis_attention_mask[row_idx, tgt_len:] = 0
+        mask_positions[row_idx] = False
+
+        num_masks = max(1, int(round(tgt_len * mask_ratio)))
+        ranked_positions = sorted(
+            range(tgt_len),
+            key=lambda idx: (
+                aligned_tokens[idx].confidence,
+                aligned_tokens[idx].min_margin,
+                idx,
+            ),
+        )[:num_masks]
+        mask_positions[row_idx, ranked_positions] = True
+        hypothesis_ids[row_idx, ranked_positions] = mask_id
+        used_proposal_rows[row_idx] = True
+
+    return (
+        hypothesis_ids,
+        hypothesis_attention_mask.long(),
+        mask_positions,
+        used_proposal_rows,
+    )
 
 
 def resolve_num_workers(requested: int, device: torch.device) -> int:
@@ -895,6 +1000,26 @@ def train_local(args: argparse.Namespace) -> None:
     last_log = time.perf_counter()
     running_losses: deque[float] = deque(maxlen=args.loss_window)
     kd_stats = {"loss_sum": 0.0, "hard_sum": 0, "total_sum": 0, "conf_sum": 0.0, "batches": 0}
+    refine_stats = {
+        "loss_sum": 0.0,
+        "tokens_sum": 0,
+        "batches": 0,
+        "proposal_rows": 0,
+        "rows": 0,
+        "weight_sum": 0.0,
+        "iter_loss_sum": [0.0] * max(int(getattr(args, "refine_iterations", 1)), 1),
+        "iter_batches": [0] * max(int(getattr(args, "refine_iterations", 1)), 1),
+        "masked_acc_sum": 0.0,
+        "em_before_sum": 0.0,
+        "em_after_sum": 0.0,
+        "top1_improved_sum": 0.0,
+        "top1_degraded_sum": 0.0,
+        "metric_batches": 0,
+        "remask_loss_sum": 0.0,
+        "remask_batches": 0,
+        "stop_loss_sum": 0.0,
+        "stop_batches": 0,
+    }
 
     def fetch_next_batch(loader_iter, loader):
         try:
@@ -905,7 +1030,7 @@ def train_local(args: argparse.Namespace) -> None:
         return batch, loader_iter
 
     def run_microbatch(batch, batch_idx: int, epoch_idx: int) -> None:
-        nonlocal step, last_log, kd_stats, best_metric
+        nonlocal step, last_log, kd_stats, refine_stats, best_metric
 
         contexts = batch.get("_contexts", [])
         readings = batch.get("_readings", [])
@@ -930,6 +1055,183 @@ def train_local(args: argparse.Namespace) -> None:
             loss = result["loss"]
             if args.use_cvae and "kl" in result:
                 loss = loss + args.kl_weight * result["kl"]
+
+            refine_weight_now = resolve_refine_loss_weight(args, step)
+            if refine_weight_now > 0.0:
+                refine_mask_ratio = resolve_refine_mask_ratio(args)
+                used_proposal_rows = torch.zeros(
+                    batch["target_ids"].shape[0],
+                    dtype=torch.bool,
+                    device=batch["target_ids"].device,
+                )
+                if args.refine_source == "target":
+                    hyp_ids, hyp_attn, mask_positions = build_refinement_batch(
+                        batch["target_ids"],
+                        batch["target_lengths"],
+                        mask_ratio=refine_mask_ratio,
+                    )
+                else:
+                    proposal_alignments = model.collapse_with_alignment(
+                        result["logits"].detach(),
+                        batch["attention_mask"].sum(dim=1).long(),
+                        BLANK_ID,
+                    )
+                    hyp_ids, hyp_attn, mask_positions, used_proposal_rows = (
+                        build_refinement_batch_from_proposal(
+                            batch["target_ids"],
+                            batch["target_lengths"],
+                            proposal_alignments,
+                            mask_ratio=refine_mask_ratio,
+                        )
+                    )
+                    if args.refine_source == "proposal" and not bool(used_proposal_rows.any().item()):
+                        hyp_ids, hyp_attn, mask_positions = build_refinement_batch(
+                            batch["target_ids"],
+                            batch["target_lengths"],
+                            mask_ratio=refine_mask_ratio,
+                        )
+
+                num_iterations = max(int(getattr(args, "refine_iterations", 1)), 1)
+                target_ids_t = batch["target_ids"]
+                valid_positions = hyp_attn.bool()
+                current_ids = hyp_ids
+                current_mask = mask_positions
+                initial_hyp_ids = hyp_ids.clone()
+                batch_total_refine_loss = 0.0
+                first_refine_logits: torch.Tensor | None = None
+                first_refine_decoder_out: torch.Tensor | None = None
+                last_refine_result: dict | None = None
+                for it in range(num_iterations):
+                    refine_result = model.refine_from_proposal(
+                        proposal=result,
+                        hypothesis_ids=current_ids,
+                        hypothesis_attention_mask=hyp_attn,
+                    )
+                    last_refine_result = refine_result
+                    if it == 0:
+                        first_refine_logits = refine_result["logits"]
+                        first_refine_decoder_out = refine_result["decoder_out"]
+                    ce = F.cross_entropy(
+                        refine_result["logits"].reshape(-1, refine_result["logits"].shape[-1]),
+                        target_ids_t.reshape(-1),
+                        reduction="none",
+                    ).reshape_as(target_ids_t)
+                    iter_masked = int(current_mask.sum().item())
+                    if iter_masked > 0:
+                        iter_loss = ce[current_mask].mean()
+                        batch_total_refine_loss = batch_total_refine_loss + iter_loss
+                        refine_stats["iter_loss_sum"][it] += float(iter_loss.detach().item())
+                        refine_stats["iter_batches"][it] += 1
+                        if it == 0:
+                            refine_stats["loss_sum"] += float(iter_loss.detach().item())
+                            refine_stats["tokens_sum"] += iter_masked
+                            refine_stats["batches"] += 1
+                            refine_stats["proposal_rows"] += int(used_proposal_rows.sum().item())
+                            refine_stats["rows"] += int(target_ids_t.shape[0])
+                            refine_stats["weight_sum"] += refine_weight_now
+                    if it == num_iterations - 1:
+                        break
+                    # Decide next-iteration masks: fill argmax into current
+                    # masked positions, then re-mask the positions that are
+                    # still likely to be wrong. Use the learned remask head
+                    # when available (falls back to a confidence threshold).
+                    with torch.no_grad():
+                        argmax = refine_result["logits"].argmax(dim=-1)
+                        filled = torch.where(current_mask, argmax, current_ids)
+                        wrong = (filled != target_ids_t) & valid_positions
+                        remask_prob = torch.sigmoid(refine_result["remask_logits"])
+                        next_mask = (remask_prob >= float(args.remask_threshold)) & valid_positions
+                        # Guarantee at least one mask if the sequence is still
+                        # wrong anywhere — otherwise the next iteration sees
+                        # no signal.
+                        still_wrong_rows = wrong.any(dim=1)
+                        for b_idx in still_wrong_rows.nonzero(as_tuple=False).squeeze(1).tolist():
+                            if not bool(next_mask[b_idx].any().item()):
+                                wrong_pos = wrong[b_idx].nonzero(as_tuple=False).squeeze(1)
+                                if wrong_pos.numel() > 0:
+                                    pick = int(wrong_pos[0].item())
+                                    next_mask[b_idx, pick] = True
+                        # If no wrong positions remain, stop iterating early.
+                        if not bool(still_wrong_rows.any().item()):
+                            break
+                    current_ids = torch.where(
+                        next_mask,
+                        torch.full_like(current_ids, MASK_ID),
+                        filled,
+                    )
+                    current_mask = next_mask
+                if isinstance(batch_total_refine_loss, torch.Tensor):
+                    loss = loss + refine_weight_now * batch_total_refine_loss
+
+                # Remask head: BCE on "is this position wrong after this
+                # iteration's argmax fill". Use the first iteration's
+                # decoder output (most signal early in training).
+                remask_weight_now = float(getattr(args, "remask_loss_weight", 0.0))
+                if (
+                    remask_weight_now > 0.0
+                    and first_refine_logits is not None
+                    and first_refine_decoder_out is not None
+                ):
+                    with torch.no_grad():
+                        first_argmax = first_refine_logits.argmax(dim=-1)
+                        first_filled = torch.where(mask_positions, first_argmax, initial_hyp_ids)
+                        remask_target = ((first_filled != target_ids_t) & valid_positions).float()
+                    remask_bce = F.binary_cross_entropy_with_logits(
+                        last_refine_result["remask_logits"],
+                        remask_target,
+                        reduction="none",
+                    )
+                    remask_bce = (remask_bce * valid_positions.float()).sum() / valid_positions.float().sum().clamp(min=1)
+                    loss = loss + remask_weight_now * remask_bce
+                    refine_stats["remask_loss_sum"] += float(remask_bce.detach().item())
+                    refine_stats["remask_batches"] += 1
+
+                # Stop head: BCE on "refined sequence equals target in full".
+                stop_weight_now = float(getattr(args, "stop_loss_weight", 0.0))
+                if (
+                    stop_weight_now > 0.0
+                    and last_refine_result is not None
+                ):
+                    with torch.no_grad():
+                        last_argmax = last_refine_result["logits"].argmax(dim=-1)
+                        last_filled = torch.where(current_mask, last_argmax, current_ids)
+                        row_correct = ((last_filled == target_ids_t) | ~valid_positions).all(dim=1).float()
+                    stop_bce = F.binary_cross_entropy_with_logits(
+                        last_refine_result["stop_logit"],
+                        row_correct,
+                        reduction="mean",
+                    )
+                    loss = loss + stop_weight_now * stop_bce
+                    refine_stats["stop_loss_sum"] += float(stop_bce.detach().item())
+                    refine_stats["stop_batches"] += 1
+
+                # Refiner metrics (B): masked accuracy + EM before/after +
+                # top1 improve/degrade. Cheap — computed on the final
+                # iteration's output against targets.
+                if last_refine_result is not None and first_refine_logits is not None:
+                    with torch.no_grad():
+                        first_argmax = first_refine_logits.argmax(dim=-1)
+                        first_filled = torch.where(mask_positions, first_argmax, initial_hyp_ids)
+                        last_argmax = last_refine_result["logits"].argmax(dim=-1)
+                        last_filled = torch.where(current_mask, last_argmax, current_ids)
+                        masked_acc = (
+                            (last_argmax == target_ids_t)[mask_positions].float().mean()
+                            if bool(mask_positions.any().item())
+                            else torch.zeros((), device=target_ids_t.device)
+                        )
+                        valid_and_target = valid_positions
+                        em_before = ((initial_hyp_ids == target_ids_t) | ~valid_and_target).all(dim=1).float().mean()
+                        em_after = ((last_filled == target_ids_t) | ~valid_and_target).all(dim=1).float().mean()
+                        was_wrong = (initial_hyp_ids != target_ids_t) & valid_and_target
+                        was_right = (initial_hyp_ids == target_ids_t) & valid_and_target
+                        improved = (was_wrong & (last_filled == target_ids_t)).float().sum() / was_wrong.float().sum().clamp(min=1)
+                        degraded = (was_right & (last_filled != target_ids_t)).float().sum() / was_right.float().sum().clamp(min=1)
+                    refine_stats["masked_acc_sum"] += float(masked_acc.item())
+                    refine_stats["em_before_sum"] += float(em_before.item())
+                    refine_stats["em_after_sum"] += float(em_after.item())
+                    refine_stats["top1_improved_sum"] += float(improved.item())
+                    refine_stats["top1_degraded_sum"] += float(degraded.item())
+                    refine_stats["metric_batches"] += 1
 
             if run_kd:
                 alpha_now = kd_config.alpha_at(step)
@@ -1060,6 +1362,44 @@ def train_local(args: argparse.Namespace) -> None:
                         f"kd_conf={conf_avg:.2f} "
                         f"kd_alpha={alpha_now:.3f}"
                     )
+                if refine_stats["batches"] > 0:
+                    refine_avg = refine_stats["loss_sum"] / refine_stats["batches"]
+                    masked_avg = refine_stats["tokens_sum"] / refine_stats["batches"]
+                    proposal_ratio = refine_stats["proposal_rows"] / max(refine_stats["rows"], 1)
+                    refine_weight_avg = refine_stats["weight_sum"] / refine_stats["batches"]
+                    line += (
+                        f" refine_loss={refine_avg:.4f}n/tok "
+                        f"refine_masked={masked_avg:.1f} "
+                        f"refine_prop={proposal_ratio:.2f} "
+                        f"refine_w={refine_weight_avg:.3f}"
+                    )
+                    per_iter = []
+                    for i, (s, b) in enumerate(zip(
+                        refine_stats["iter_loss_sum"], refine_stats["iter_batches"]
+                    )):
+                        if b > 0:
+                            per_iter.append(f"it{i}={s / b:.3f}")
+                    if per_iter:
+                        line += " refine_iter_loss=" + ",".join(per_iter)
+                    if refine_stats["metric_batches"] > 0:
+                        mb = refine_stats["metric_batches"]
+                        line += (
+                            f" masked_acc={refine_stats['masked_acc_sum'] / mb:.3f}"
+                            f" em_before={refine_stats['em_before_sum'] / mb:.3f}"
+                            f" em_after={refine_stats['em_after_sum'] / mb:.3f}"
+                            f" top1_imp={refine_stats['top1_improved_sum'] / mb:.3f}"
+                            f" top1_deg={refine_stats['top1_degraded_sum'] / mb:.3f}"
+                        )
+                    if refine_stats["remask_batches"] > 0:
+                        line += (
+                            f" remask_loss="
+                            f"{refine_stats['remask_loss_sum'] / refine_stats['remask_batches']:.4f}"
+                        )
+                    if refine_stats["stop_batches"] > 0:
+                        line += (
+                            f" stop_loss="
+                            f"{refine_stats['stop_loss_sum'] / refine_stats['stop_batches']:.4f}"
+                        )
                 print(line)
                 kd_stats = {
                     "loss_sum": 0.0,
@@ -1067,6 +1407,26 @@ def train_local(args: argparse.Namespace) -> None:
                     "total_sum": 0,
                     "conf_sum": 0.0,
                     "batches": 0,
+                }
+                refine_stats = {
+                    "loss_sum": 0.0,
+                    "tokens_sum": 0,
+                    "batches": 0,
+                    "proposal_rows": 0,
+                    "rows": 0,
+                    "weight_sum": 0.0,
+                    "iter_loss_sum": [0.0] * max(int(getattr(args, "refine_iterations", 1)), 1),
+                    "iter_batches": [0] * max(int(getattr(args, "refine_iterations", 1)), 1),
+                    "masked_acc_sum": 0.0,
+                    "em_before_sum": 0.0,
+                    "em_after_sum": 0.0,
+                    "top1_improved_sum": 0.0,
+                    "top1_degraded_sum": 0.0,
+                    "metric_batches": 0,
+                    "remask_loss_sum": 0.0,
+                    "remask_batches": 0,
+                    "stop_loss_sum": 0.0,
+                    "stop_batches": 0,
                 }
 
             if step % args.eval_every == 0:
@@ -1236,6 +1596,83 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--kl-weight", type=float, default=0.05)
+    parser.add_argument(
+        "--refine-loss-weight",
+        type=float,
+        default=0.0,
+        help="Weight for the dedicated Mask-CTC refinement CE loss. 0 disables it.",
+    )
+    parser.add_argument(
+        "--refine-warmup-steps",
+        type=int,
+        default=0,
+        help="Linearly ramp refinement loss weight from 0 to --refine-loss-weight over this many optimizer steps.",
+    )
+    parser.add_argument(
+        "--refine-mask-ratio",
+        type=float,
+        default=0.3,
+        help="Fraction of valid target tokens masked when training the refinement branch.",
+    )
+    parser.add_argument(
+        "--refine-mask-ratio-min",
+        type=float,
+        default=None,
+        help="If set with --refine-mask-ratio-max, sample the refine mask ratio uniformly per batch.",
+    )
+    parser.add_argument(
+        "--refine-mask-ratio-max",
+        type=float,
+        default=None,
+        help="If set with --refine-mask-ratio-min, sample the refine mask ratio uniformly per batch.",
+    )
+    parser.add_argument(
+        "--refine-source",
+        choices=["target", "proposal", "mixed"],
+        default="target",
+        help=(
+            "Source of refinement hypotheses: target=mask the gold target only; "
+            "proposal=use current proposal when collapsed length matches, else fallback; "
+            "mixed=same as proposal but report mixed usage explicitly."
+        ),
+    )
+    parser.add_argument(
+        "--refine-iterations",
+        type=int,
+        default=1,
+        help="Number of refinement iterations to supervise. Iter 2+ re-masks "
+             "positions still predicted incorrectly after iter 1 (using the "
+             "learned remask head when enabled, confidence fallback otherwise).",
+    )
+    parser.add_argument(
+        "--remask-loss-weight",
+        type=float,
+        default=0.0,
+        help="Weight for the learned re-mask head BCE loss (target = refined "
+             "argmax mismatches gold target). 0 disables, inference falls back "
+             "to confidence-based remasking.",
+    )
+    parser.add_argument(
+        "--remask-threshold",
+        type=float,
+        default=0.5,
+        help="Sigmoid threshold on the remask head used to pick next-iteration "
+             "mask positions during training and inference.",
+    )
+    parser.add_argument(
+        "--stop-loss-weight",
+        type=float,
+        default=0.0,
+        help="Weight for the learned stop-head BCE loss (target = refined "
+             "sequence equals gold target in full). 0 disables.",
+    )
+    parser.add_argument(
+        "--stop-threshold",
+        type=float,
+        default=0.5,
+        help="Sigmoid threshold on the stop head used to halt iteration early "
+             "at inference time.",
+    )
     parser.add_argument("--warmup-steps", type=int, default=1000)
     parser.add_argument(
         "--lr-schedule",

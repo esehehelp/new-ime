@@ -1,5 +1,5 @@
 param(
-    [string]$DllPath = "$PSScriptRoot\..\..\target\release\new_ime_tsf.dll"
+    [string]$DllPath = "$PSScriptRoot\..\..\build\release\new_ime_tsf.dll"
 )
 
 $resolved = (Resolve-Path $DllPath).Path

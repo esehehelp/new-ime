@@ -18,6 +18,7 @@ pub struct SharedCharTokenizer {
     pub cls_id: u32,
     pub sep_id: u32,
     pub blank_id: u32,
+    pub mask_id: u32,
 }
 
 impl SharedCharTokenizer {
@@ -59,6 +60,7 @@ impl SharedCharTokenizer {
             cls_id: lookup("[CLS]", 2),
             sep_id: lookup("[SEP]", 3),
             blank_id: lookup("[BLANK]", 4),
+            mask_id: lookup("[MASK]", 5),
             id_to_token,
             token_to_id,
         })
@@ -71,6 +73,16 @@ impl SharedCharTokenizer {
     pub fn decode(&self, ids: &[u32]) -> String {
         let mut out = String::new();
         for &id in ids {
+            if matches!(
+                id,
+                x if x == self.pad_id
+                    || x == self.cls_id
+                    || x == self.sep_id
+                    || x == self.blank_id
+                    || x == self.mask_id
+            ) {
+                continue;
+            }
             if let Some(tok) = self.id_to_token.get(id as usize) {
                 out.push_str(tok);
             }

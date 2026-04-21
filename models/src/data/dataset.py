@@ -29,13 +29,13 @@ _OFFSETS_SUFFIX = ".offsets.npy"
 def _find_rust_indexer() -> Path | None:
     """Locate the Rust `offset-index` binary if built via `cargo build -p offset-index`.
 
-    Checks the cargo default target dir relative to the repo root, then $PATH.
+    Checks the repo-local cargo output dir under `build/`, then $PATH.
     Returns None if neither is available (caller falls back to the Python
     scanner — correct but 5-10× slower on 40+ GiB jsonl).
     """
     # repo root = 3 parents up from this file (models/src/data/dataset.py)
     repo_root = Path(__file__).resolve().parents[3]
-    for rel in ("target/release/offset-index", "target/release/offset-index.exe"):
+    for rel in ("build/release/offset-index", "build/release/offset-index.exe"):
         cand = repo_root / rel
         if cand.exists():
             return cand

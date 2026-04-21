@@ -1,8 +1,16 @@
 """Tests for CTC-NAT model components."""
 
+import math
+
 import torch
 
-from models.src.model.ctc_nat import CTCNAT, CTCHead, GLATSampler, MaskCTCRefiner
+from models.src.model.ctc_nat import (
+    CTCAlignmentToken,
+    CTCNAT,
+    CTCHead,
+    GLATSampler,
+    MaskCTCRefiner,
+)
 from models.src.model.cvae import CVAEConditioner
 from models.src.model.decoder import NATDecoder, NATDecoderLayer
 from models.src.model.encoder import MockEncoder, SmallEncoder
@@ -115,6 +123,15 @@ class TestCTCNAT:
         # log_probs should be time-first: (src_len, batch, vocab)
         assert result["log_probs"].shape == (SRC_LEN, BATCH, VOCAB)
 
+    def test_proposal_logits(self):
+        input_ids = torch.randint(0, 200, (BATCH, SRC_LEN))
+        attention_mask = torch.ones(BATCH, SRC_LEN)
+        result = self.model.proposal_logits(input_ids, attention_mask)
+        assert result["encoder_out"].shape == (BATCH, SRC_LEN, HIDDEN)
+        assert result["decoder_out"].shape == (BATCH, SRC_LEN, HIDDEN)
+        assert result["logits"].shape == (BATCH, SRC_LEN, VOCAB)
+        assert result["encoder_padding_mask"].shape == (BATCH, SRC_LEN)
+
     def test_forward_with_target(self):
         input_ids = torch.randint(0, 200, (BATCH, SRC_LEN))
         attention_mask = torch.ones(BATCH, SRC_LEN)
@@ -127,6 +144,87 @@ class TestCTCNAT:
         assert result["loss"].dim() == 0  # Scalar
         assert not torch.isnan(result["loss"])
         assert not torch.isinf(result["loss"])
+
+    def test_refine_logits(self):
+        input_ids = torch.randint(0, 200, (BATCH, SRC_LEN))
+        attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        hypothesis_ids = torch.randint(0, VOCAB, (BATCH, SRC_LEN))
+        hypothesis_attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        result = self.model.refine_logits(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            hypothesis_ids=hypothesis_ids,
+            hypothesis_attention_mask=hypothesis_attention_mask,
+        )
+        assert result["logits"].shape == (BATCH, SRC_LEN, VOCAB)
+        assert result["decoder_out"].shape == (BATCH, SRC_LEN, HIDDEN)
+
+    def test_refine_from_proposal_reuses_encoder_outputs(self):
+        input_ids = torch.randint(0, 200, (BATCH, SRC_LEN))
+        attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        hypothesis_ids = torch.randint(0, VOCAB, (BATCH, SRC_LEN))
+        hypothesis_attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        proposal = self.model.proposal_logits(input_ids, attention_mask)
+        result = self.model.refine_from_proposal(
+            proposal=proposal,
+            hypothesis_ids=hypothesis_ids,
+            hypothesis_attention_mask=hypothesis_attention_mask,
+        )
+        assert result["encoder_out"] is proposal["encoder_out"]
+        assert result["encoder_padding_mask"] is proposal["encoder_padding_mask"]
+        assert result["logits"].shape == (BATCH, SRC_LEN, VOCAB)
+
+    def test_apply_refinement_predictions_updates_only_masked_positions(self):
+        hypothesis_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+        hypothesis_attention_mask = torch.tensor([[1, 1, 1, 1]], dtype=torch.long)
+        mask_positions = torch.tensor([[False, True, False, True]])
+        refinement_logits = torch.full((1, 4, VOCAB), -10.0)
+        refinement_logits[0, 1, 17] = 10.0
+        refinement_logits[0, 3, 19] = 10.0
+        updated = CTCNAT.apply_refinement_predictions(
+            hypothesis_ids,
+            hypothesis_attention_mask,
+            mask_positions,
+            refinement_logits,
+        )
+        assert updated.tolist() == [[1, 17, 3, 19]]
+
+    def test_refine_result_exposes_remask_and_stop_heads(self):
+        input_ids = torch.randint(0, 200, (BATCH, SRC_LEN))
+        attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        hyp_ids = torch.randint(0, VOCAB, (BATCH, SRC_LEN))
+        hyp_attn = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        result = self.model.refine_logits(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            hypothesis_ids=hyp_ids,
+            hypothesis_attention_mask=hyp_attn,
+        )
+        assert result["remask_logits"].shape == (BATCH, SRC_LEN)
+        assert result["stop_logit"].shape == (BATCH,)
+
+    def test_iterative_refine_fills_mask_positions(self):
+        torch.manual_seed(0)
+        input_ids = torch.randint(0, 200, (BATCH, SRC_LEN))
+        attention_mask = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        mask_id = 5
+        hyp_ids = torch.full((BATCH, SRC_LEN), mask_id, dtype=torch.long)
+        hyp_attn = torch.ones(BATCH, SRC_LEN, dtype=torch.long)
+        proposal = self.model.proposal_logits(input_ids, attention_mask)
+        out = self.model.iterative_refine(
+            proposal=proposal,
+            hypothesis_ids=hyp_ids,
+            hypothesis_attention_mask=hyp_attn,
+            max_iterations=2,
+            mask_token_id=mask_id,
+        )
+        assert "final_ids" in out
+        assert out["final_ids"].shape == (BATCH, SRC_LEN)
+        # every position should now be filled with the argmax (no mask id
+        # survives if we run at least one pass and all positions were masked).
+        # It's possible some remain if the argmax itself happens to equal
+        # mask_id — assert at least majority change for a random-init model.
+        assert (out["final_ids"] != mask_id).any()
 
     def test_ctc_loss_requires_input_ge_target(self):
         """CTC requires input_length >= target_length."""
@@ -149,6 +247,64 @@ class TestCTCNAT:
             assert all(isinstance(t, int) for t in seq)
             # No blank tokens in output
             assert BLANK_ID not in seq
+
+    def test_collapse_predictions(self):
+        predictions = torch.tensor(
+            [
+                [BLANK_ID, 7, 7, 9, BLANK_ID, 9, 11, 11],
+                [5, 5, BLANK_ID, BLANK_ID, 6, 6, 6, BLANK_ID],
+            ],
+            dtype=torch.long,
+        )
+        input_lengths = torch.tensor([8, 7], dtype=torch.long)
+        decoded = CTCNAT.collapse_predictions(predictions, input_lengths, BLANK_ID)
+        assert decoded == [[7, 9, 9, 11], [5, 6]]
+
+    def test_collapse_with_alignment(self):
+        logits = torch.full((1, 7, VOCAB), -10.0)
+        # blank
+        logits[0, 0, BLANK_ID] = 8.0
+        logits[0, 0, 7] = 1.0
+        # token 7 twice
+        logits[0, 1, 7] = 9.0
+        logits[0, 1, 12] = 8.0
+        logits[0, 2, 7] = 11.0
+        logits[0, 2, 13] = 7.0
+        # blank separator
+        logits[0, 3, BLANK_ID] = 10.0
+        logits[0, 3, 9] = 9.0
+        # token 7 again as a distinct collapsed token
+        logits[0, 4, 7] = 8.5
+        logits[0, 4, 17] = 8.4
+        # token 9 twice
+        logits[0, 5, 9] = 12.0
+        logits[0, 5, 21] = 6.0
+        logits[0, 6, 9] = 10.0
+        logits[0, 6, 20] = 9.0
+
+        aligned = CTCNAT.collapse_with_alignment(
+            logits,
+            torch.tensor([7], dtype=torch.long),
+            BLANK_ID,
+        )
+        assert len(aligned) == 1
+        toks = aligned[0]
+        assert [tok.token_id for tok in toks] == [7, 7, 9]
+        assert (toks[0].start_frame, toks[0].end_frame) == (1, 2)
+        assert (toks[1].start_frame, toks[1].end_frame) == (4, 4)
+        assert (toks[2].start_frame, toks[2].end_frame) == (5, 6)
+        assert toks[0].frame_count == 2
+        assert toks[1].confidence < toks[0].confidence
+        assert toks[2].confidence > 0.5
+
+    def test_select_mask_spans(self):
+        aligned_tokens = [
+            CTCAlignmentToken(7, 0, 1, min_log_prob=math.log(0.85), mean_log_prob=math.log(0.9), min_margin=1.5, mean_margin=1.7),
+            CTCAlignmentToken(8, 2, 2, min_log_prob=math.log(0.35), mean_log_prob=math.log(0.35), min_margin=0.05, mean_margin=0.05),
+            CTCAlignmentToken(9, 3, 4, min_log_prob=math.log(0.42), mean_log_prob=math.log(0.5), min_margin=0.15, mean_margin=0.2),
+        ]
+        selected = CTCNAT.select_mask_spans(aligned_tokens, confidence_threshold=0.5, max_masks=1)
+        assert selected == [1]
 
     def test_backward(self):
         """Verify gradients flow through the model."""

@@ -152,6 +152,12 @@ class SharedCharTokenizer:
         max_kanji: int = 6000,
     ) -> None:
         self.max_kanji = max_kanji
+        self.pad_id = PAD_ID
+        self.unk_id = UNK_ID
+        self.sep_id = SEP_ID
+        self.cls_id = CLS_ID
+        self.blank_id = BLANK_ID
+        self.mask_id = MASK_ID
         if vocab is not None:
             self.token_to_id = vocab
             self.id_to_token = {v: k for k, v in vocab.items()}
@@ -311,6 +317,12 @@ class SharedCharTokenizer:
     ) -> SharedCharTokenizer:
         tokenizer = cls.__new__(cls)
         tokenizer.max_kanji = max_kanji
+        tokenizer.pad_id = PAD_ID
+        tokenizer.unk_id = UNK_ID
+        tokenizer.sep_id = SEP_ID
+        tokenizer.cls_id = CLS_ID
+        tokenizer.blank_id = BLANK_ID
+        tokenizer.mask_id = MASK_ID
         tokenizer.token_to_id, tokenizer.id_to_token, idx = _init_vocab()
 
         idx = _append_chars(

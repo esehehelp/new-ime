@@ -124,6 +124,12 @@ struct Args {
     /// 0 disables dedup for synth entirely.
     #[arg(long, default_value_t = 0u32)]
     dedup_cap_synth: u32,
+    /// Override dedup cap for the bunsetsu pool. The bunsetsu sources
+    /// (wikibooks/wiktionary/wikinews/aozora_dialogue/tatoeba) share heavy
+    /// phrase repetition, so the global cap=3 exhausts the pool early. When
+    /// unset, falls back to `--dedup-cap`. 0 disables dedup for bunsetsu.
+    #[arg(long)]
+    dedup_cap_bunsetsu: Option<u32>,
 
     /// 6-gram contamination JSONL refs (rows with a `surface` field).
     #[arg(long, num_args = 0.., default_values_t = [
@@ -264,6 +270,13 @@ impl FilePool {
 
     fn with_dedup_override(mut self, cap: u32) -> Self {
         self.dedup_cap_override = Some(cap);
+        self
+    }
+
+    fn with_optional_dedup_override(mut self, cap: Option<u32>) -> Self {
+        if cap.is_some() {
+            self.dedup_cap_override = cap;
+        }
         self
     }
 
@@ -474,7 +487,8 @@ fn main() -> Result<()> {
                 "bunsetsu",
                 args.filter_bunsetsu,
                 args.seed ^ 0x4444,
-            ),
+            )
+            .with_optional_dedup_override(args.dedup_cap_bunsetsu),
             args.ratio_bunsetsu,
         ),
         (

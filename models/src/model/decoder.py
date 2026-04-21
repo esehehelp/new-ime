@@ -90,6 +90,10 @@ class NATDecoder(nn.Module):
         film_conditioning: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
         batch_size, seq_len, _ = encoder_out.shape
+        if seq_len > self.pos_embed.num_embeddings:
+            raise ValueError(
+                f"sequence length {seq_len} exceeds max_positions {self.pos_embed.num_embeddings}"
+            )
         x = self.input_projection(encoder_out)
         positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, -1)
         x = x + self.pos_embed(positions)
@@ -107,4 +111,60 @@ class NATDecoder(nn.Module):
                 film_condition=film_condition,
             )
 
+        return self.final_norm(x)
+
+
+class MaskCTCRefinementDecoder(nn.Module):
+    """Masked-token decoder used by the dedicated Mask-CTC refinement branch."""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int = 768,
+        num_layers: int = 6,
+        num_heads: int = 8,
+        ffn_size: int = 3072,
+        dropout: float = 0.1,
+        max_positions: int = 512,
+        embedding: nn.Embedding | None = None,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.token_embed = embedding or nn.Embedding(vocab_size, hidden_size)
+        self.pos_embed = nn.Embedding(max_positions, hidden_size)
+        self.dropout = nn.Dropout(dropout)
+        self.layers = nn.ModuleList(
+            [NATDecoderLayer(hidden_size, num_heads, ffn_size, dropout) for _ in range(num_layers)]
+        )
+        self.final_norm = nn.LayerNorm(hidden_size)
+
+    def forward(
+        self,
+        hypothesis_ids: torch.Tensor,
+        hypothesis_padding_mask: torch.Tensor | None,
+        encoder_out: torch.Tensor,
+        encoder_padding_mask: torch.Tensor | None = None,
+        film_conditioning: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
+    ) -> torch.Tensor:
+        batch_size, seq_len = hypothesis_ids.shape
+        if seq_len > self.pos_embed.num_embeddings:
+            raise ValueError(
+                f"sequence length {seq_len} exceeds max_positions {self.pos_embed.num_embeddings}"
+            )
+        positions = torch.arange(seq_len, device=hypothesis_ids.device).unsqueeze(0).expand(batch_size, -1)
+        x = self.token_embed(hypothesis_ids) + self.pos_embed(positions)
+        x = self.dropout(x)
+
+        for layer_idx, layer in enumerate(self.layers):
+            film_condition = None
+            if film_conditioning is not None:
+                film_condition = film_conditioning[layer_idx]
+            x = layer(
+                x,
+                encoder_out,
+                self_attn_padding_mask=hypothesis_padding_mask,
+                cross_attn_padding_mask=encoder_padding_mask,
+                film_condition=film_condition,
+            )
         return self.final_norm(x)
