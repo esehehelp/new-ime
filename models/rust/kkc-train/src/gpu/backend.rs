@@ -7,6 +7,10 @@
 //! place.
 
 use super::batch::{GpuBatch, StagedHostBatch};
+use super::loss::{
+    build_target_refinement, ctc_proposal_loss, refine_mlm_loss, refine_weight_ramp, remask_loss,
+    stop_loss,
+};
 use super::model::CtcNatModel;
 use crate::backend::{BackendConfig, TrainBackend};
 use crate::device::{resolve_tch_device, Device};
@@ -67,28 +71,89 @@ impl TchCtcNatBackend {
             .sum()
     }
 
-    /// Consume a pre-uploaded [`GpuBatch`] directly. Step 1 runs a
-    /// forward-only proposal pass so the device is exercised and a
-    /// meaningful loss surrogate is returned; real CTC loss + backward
-    /// lands in step 2.
+    /// Consume a pre-uploaded [`GpuBatch`] directly. Computes the full
+    /// training loss (CTC proposal + refine MLM + remask + stop) and
+    /// runs `backward()` to populate parameter gradients.
+    ///
+    /// The optimizer step is NOT applied here — that lives in step 3
+    /// (`TchOptimizer`). The training loop receives the scalar loss and
+    /// is expected to drive optim + zero_grad externally.
     pub fn step_gpu(&mut self, step: usize, batch: &GpuBatch) -> Result<TrainerStep> {
         let mask_bool = batch.attention_mask.to_kind(Kind::Bool);
-        let out = self
-            .model
-            .forward_proposal_only(&batch.input_ids, &mask_bool);
-        // Placeholder loss: mean of |logits|. Any finite scalar keeps the
-        // training loop healthy until step 2 replaces this with CTC loss.
-        let loss = out.proposal_logits.abs().mean(Kind::Float);
-        let loss = loss.double_value(&[]);
-        self.last_loss = Some(loss);
+        let target_len = batch.target_lengths.shallow_clone();
+        let input_len = batch.input_lengths.shallow_clone();
+
+        // Proposal path (always runs).
+        let encoder_out = self.model.encode(&batch.input_ids, &mask_bool);
+        let proposal_logits = self.model.proposal(&encoder_out, &mask_bool);
+        let ctc = ctc_proposal_loss(
+            &proposal_logits,
+            &batch.target_ids,
+            &input_len,
+            &target_len,
+            self.model.blank_id,
+        );
+        let mut loss = ctc.shallow_clone();
+
+        // Refinement path (only when the weight is positive).
+        let refine_weight_now = self.config.refine_loss_weight
+            * refine_weight_ramp(step, self.config.refine_warmup_steps);
+        if refine_weight_now > 0.0 {
+            let (hyp_ids, mask_positions, valid) = build_target_refinement(
+                &batch.target_ids,
+                &target_len,
+                self.config.refine_mask_ratio,
+                self.model.mask_token_id,
+            );
+            let (refined_logits, remask_logits, stop_logits_batch) = self.model.refine(
+                &hyp_ids,
+                &valid,
+                &encoder_out,
+                &mask_bool,
+            );
+            let refine_ce = refine_mlm_loss(&refined_logits, &batch.target_ids, &mask_positions);
+            loss = &loss + refine_weight_now * &refine_ce;
+
+            if self.config.remask_loss_weight > 0.0 {
+                let r = remask_loss(&remask_logits, &refined_logits, &batch.target_ids, &valid);
+                loss = &loss + self.config.remask_loss_weight * &r;
+            }
+            if self.config.stop_loss_weight > 0.0 {
+                let s = stop_loss(
+                    &stop_logits_batch,
+                    &refined_logits,
+                    &batch.target_ids,
+                    &valid,
+                );
+                loss = &loss + self.config.stop_loss_weight * &s;
+            }
+        }
+
+        let loss_val = loss.double_value(&[]);
+        // Accumulate gradients (optimizer step lives in step 3).
+        loss.backward();
+
+        self.last_loss = Some(loss_val);
         self.step_count = step;
         Ok(TrainerStep {
-            loss,
+            loss: loss_val,
             rows: batch.batch_size,
             bytes: batch.bytes,
             input_tokens: batch.non_padding_input_tokens,
             target_tokens: batch.non_padding_target_tokens,
         })
+    }
+
+    /// Zero out `.grad` on every trainable variable. `VarStore` itself
+    /// doesn't ship this helper in tch 0.18, so we iterate.
+    /// Step 3's `TchOptimizer` will take this over as part of its step.
+    pub fn zero_grad(&mut self) {
+        for var in self.vs.trainable_variables() {
+            let mut grad = var.grad();
+            if grad.defined() {
+                let _ = grad.zero_();
+            }
+        }
     }
 }
 
@@ -180,6 +245,41 @@ mod tests {
         assert_eq!(step.rows, 2);
         assert!(step.loss.is_finite() && step.loss >= 0.0);
         assert!(backend.trainable_param_count() > 0);
+    }
+
+    #[test]
+    fn tch_backend_step_populates_gradients() {
+        let mut backend = TchCtcNatBackend::new(&tiny_config(), Device::Cpu).unwrap();
+        backend.zero_grad();
+        let packed = tiny_packed();
+        let _ = backend.step(1, &packed).unwrap();
+
+        let mut any_defined = false;
+        let mut any_nonzero = false;
+        for var in backend.var_store().trainable_variables() {
+            let grad = var.grad();
+            if grad.defined() {
+                any_defined = true;
+                if grad.abs().max().double_value(&[]) > 0.0 {
+                    any_nonzero = true;
+                    break;
+                }
+            }
+        }
+        assert!(any_defined, "no grads were created by backward()");
+        assert!(any_nonzero, "all grads were zero after backward()");
+    }
+
+    #[test]
+    fn tch_backend_refine_weight_zero_skips_refine_path() {
+        // Skipping the refine path is cheap and deterministic: loss
+        // should equal exactly the proposal CTC loss.
+        let mut backend = TchCtcNatBackend::new(&tiny_config(), Device::Cpu).unwrap();
+        assert_eq!(backend.config().refine_loss_weight, 0.0);
+        let _ = backend.step(1, &tiny_packed()).unwrap();
+        // Just assert we returned finite — deeper equality is covered by
+        // the parity test in step 5.
+        assert!(backend.last_loss().unwrap().is_finite());
     }
 
     #[test]

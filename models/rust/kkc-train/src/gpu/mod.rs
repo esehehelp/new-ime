@@ -15,6 +15,7 @@
 pub mod backend;
 pub mod batch;
 pub mod layers;
+pub mod loss;
 pub mod model;
 
 pub use backend::TchCtcNatBackend;
