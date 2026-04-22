@@ -295,6 +295,19 @@ pub fn load_backend(backend: &mut TchCtcNatBackend, anchor: &Path) -> Result<()>
     load_var_store(backend.var_store_mut(), &weights_path)?;
     backend.set_step_count(meta.step);
     backend.set_last_loss(meta.last_loss);
+    // Loud warning: optimizer m/v are NOT persisted in this format, so
+    // AdamW restarts from zero state. Short resumes recover in a few
+    // hundred steps, long resumes effectively lose their momentum
+    // history. Tracked in docs/rust_training_stack.md → "残タスク" as
+    // a follow-up; logging here keeps the behavior from being silent.
+    if backend.has_optimizer() {
+        eprintln!(
+            "[kkc-train] warning: resumed from {} but AdamW optimizer state \
+             (m/v) was NOT restored — AdamW restarts from zero state. \
+             Expect a brief loss bump while momentum rebuilds.",
+            anchor.display()
+        );
+    }
     Ok(())
 }
 

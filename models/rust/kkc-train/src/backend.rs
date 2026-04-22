@@ -164,6 +164,16 @@ pub trait TrainBackend {
     fn step(&mut self, step: usize, batch: &PackedBatch) -> Result<TrainerStep>;
     fn save_checkpoint(&self, path: &Path) -> Result<()>;
     fn load_checkpoint(&mut self, path: &Path) -> Result<()>;
+
+    /// Forward-only evaluation. Must NOT update weights.
+    ///
+    /// CPU backends default to calling `step` — their `step` doesn't
+    /// auto-apply an optimizer so this is safe. GPU-side backends
+    /// (`tch-ctc-nat`) override to run inside `no_grad` and skip the
+    /// optimizer, since their `step` is a full training iteration.
+    fn eval_step(&mut self, step: usize, batch: &PackedBatch) -> Result<TrainerStep> {
+        self.step(step, batch)
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -332,6 +342,15 @@ impl TrainBackend for BackendKind {
             BackendKind::Toy(inner) => inner.step(step, batch),
             BackendKind::Surrogate(inner) => inner.step(step, batch),
             BackendKind::Ctc(inner) => inner.step(step, batch),
+        }
+    }
+
+    fn eval_step(&mut self, step: usize, batch: &PackedBatch) -> Result<TrainerStep> {
+        match self {
+            BackendKind::Mock(inner) => inner.eval_step(step, batch),
+            BackendKind::Toy(inner) => inner.eval_step(step, batch),
+            BackendKind::Surrogate(inner) => inner.eval_step(step, batch),
+            BackendKind::Ctc(inner) => inner.eval_step(step, batch),
         }
     }
 

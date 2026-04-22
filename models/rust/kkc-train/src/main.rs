@@ -887,12 +887,11 @@ fn eval_backend(
     Ok(total_loss / seen as f64)
 }
 
-/// Eval path that operates on a trait object so the tch backend (which is
-/// not part of the `BackendKind` enum) can share the same driver. Unlike
-/// [`eval_backend`] this does not clone, so it temporarily mutates backend
-/// state; acceptable for the skeleton where the tch step is a no-op
-/// placeholder. When the real forward lands we will add a proper eval mode
-/// that disables grad updates.
+/// Eval path that operates on a trait object so the tch backend (which
+/// is not part of the `BackendKind` enum) can share the same driver.
+/// Calls `eval_step` so the tch backend's `no_grad` forward is honored
+/// and the optimizer stays idle — critical for `best_checkpoint`
+/// correctness (the post-fit eval must not continue training).
 fn eval_backend_dyn(
     config: &TrainConfig,
     backend: &mut dyn backend::TrainBackend,
@@ -911,7 +910,7 @@ fn eval_backend_dyn(
         let Some(batch) = source.next_batch()? else {
             break;
         };
-        let step = backend.step(1, &batch)?;
+        let step = backend.eval_step(1, &batch)?;
         total_loss += step.loss;
         seen += 1;
     }

@@ -76,11 +76,16 @@ impl FromStr for Device {
     }
 }
 
-/// Backend kinds that make sense with each device. Used by the CLI to reject
-/// obvious mistakes (e.g. asking for `cuda` with the `mock` backend, which
-/// cannot exercise the GPU path).
+/// Backend kinds that make sense on a CUDA device. Used by the CLI to
+/// reject obvious mistakes (e.g. asking for `cuda` with the `mock`
+/// backend, which cannot exercise the GPU path).
+///
+/// Only `tch-ctc-nat` qualifies: the CPU `ctc` / `surrogate` / `toy` /
+/// `mock` backends are all f64 Rust implementations with no GPU path.
+/// Listing them here would be a lie — `new_backend` in `main.rs` rejects
+/// them outright on `--device cuda`.
 pub fn backend_supports_cuda(kind: &str) -> bool {
-    matches!(kind, "tch-ctc-nat" | "ctc")
+    matches!(kind, "tch-ctc-nat")
 }
 
 #[cfg(feature = "cuda")]

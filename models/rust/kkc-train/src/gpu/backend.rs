@@ -15,11 +15,54 @@ use super::model::CtcNatModel;
 use crate::backend::{BackendConfig, TrainBackend};
 use crate::device::{resolve_tch_device, Device};
 use crate::trainer::TrainerStep;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use kkc_data::PackedBatch;
 use std::path::Path;
 use tch::nn::VarStore;
-use tch::{Device as TchDevice, Kind};
+use tch::{Device as TchDevice, Kind, Tensor};
+
+/// What the tch training path currently implements. Documented here so
+/// the check that rejects unsupported configs (see `validate_tch_config`
+/// below) stays truthful when someone extends the GPU kernels.
+///
+/// Supported:
+/// - CTC proposal loss (always on).
+/// - Mask-CTC refinement with `refine_source = "target"` and a single
+///   iteration (`refine_iterations == 1`), gated by `refine_loss_weight`.
+/// - Learned remask head (BCE on `refined_argmax != target` over valid
+///   positions), gated by `remask_loss_weight`.
+/// - Learned stop head (BCE on full-row correctness), gated by
+///   `stop_loss_weight`.
+///
+/// Not yet implemented — any config that asks for these is rejected
+/// rather than silently ignored:
+/// - `refine_source = "proposal"` / `"mixed"`
+/// - `refine_iterations > 1`
+/// - `refine_mask_ratio_min` / `refine_mask_ratio_max` per-batch sampling
+/// - `remask_threshold` / `stop_threshold` at inference (training is OK
+///   because the losses don't consult the thresholds).
+/// - `confidence_fallback` (only affects proposal-source builder).
+fn validate_tch_config(config: &BackendConfig) -> Result<()> {
+    if !matches!(config.refine_source.as_str(), "target") {
+        bail!(
+            "tch backend: refine_source=`{}` is not supported yet; use \"target\"",
+            config.refine_source
+        );
+    }
+    if config.refine_iterations > 1 {
+        bail!(
+            "tch backend: refine_iterations={} not supported yet; use 1",
+            config.refine_iterations
+        );
+    }
+    if config.refine_mask_ratio_min.is_some() || config.refine_mask_ratio_max.is_some() {
+        bail!(
+            "tch backend: refine_mask_ratio_min/max not supported yet; use a fixed \
+             refine_mask_ratio"
+        );
+    }
+    Ok(())
+}
 
 pub struct TchCtcNatBackend {
     vs: VarStore,
@@ -33,6 +76,7 @@ pub struct TchCtcNatBackend {
 
 impl TchCtcNatBackend {
     pub fn new(config: &BackendConfig, device: Device) -> Result<Self> {
+        validate_tch_config(config)?;
         let tch_device = resolve_tch_device(device)?;
         let vs = VarStore::new(tch_device);
         let model = CtcNatModel::new(&vs.root(), config)?;
@@ -181,6 +225,33 @@ impl TchCtcNatBackend {
             }
         }
     }
+
+    /// Forward-only evaluation on a pre-uploaded [`GpuBatch`]. Guarded by
+    /// `no_grad`, never touches the optimizer, and does NOT mutate any
+    /// cached training bookkeeping (step counter, last loss) — eval is
+    /// supposed to leave no trace on the training run.
+    pub fn eval_gpu(&self, batch: &GpuBatch) -> Result<TrainerStep> {
+        let mask_bool = batch.attention_mask.to_kind(Kind::Bool);
+        let loss_val: f64 = tch::no_grad(|| {
+            let encoder_out = self.model.encode(&batch.input_ids, &mask_bool);
+            let proposal_logits = self.model.proposal(&encoder_out, &mask_bool);
+            let loss = ctc_proposal_loss(
+                &proposal_logits,
+                &batch.target_ids,
+                &batch.input_lengths,
+                &batch.target_lengths,
+                self.model.blank_id,
+            );
+            loss.double_value(&[])
+        });
+        Ok(TrainerStep {
+            loss: loss_val,
+            rows: batch.batch_size,
+            bytes: batch.bytes,
+            input_tokens: batch.non_padding_input_tokens,
+            target_tokens: batch.non_padding_target_tokens,
+        })
+    }
 }
 
 impl TrainBackend for TchCtcNatBackend {
@@ -200,6 +271,12 @@ impl TrainBackend for TchCtcNatBackend {
 
     fn load_checkpoint(&mut self, path: &Path) -> Result<()> {
         super::ckpt::load_backend(self, path)
+    }
+
+    fn eval_step(&mut self, _step: usize, batch: &PackedBatch) -> Result<TrainerStep> {
+        let staged = StagedHostBatch::from_packed(batch);
+        let gpu = GpuBatch::upload(staged, self.device);
+        self.eval_gpu(&gpu)
     }
 }
 
@@ -283,6 +360,65 @@ mod tests {
         // Just assert we returned finite — deeper equality is covered by
         // the parity test in step 5.
         assert!(backend.last_loss().unwrap().is_finite());
+    }
+
+    #[test]
+    fn tch_backend_rejects_unsupported_refine_source() {
+        let mut cfg = tiny_config();
+        cfg.refine_source = "proposal".to_string();
+        let err = TchCtcNatBackend::new(&cfg, Device::Cpu)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("refine_source"), "err={err}");
+    }
+
+    #[test]
+    fn tch_backend_rejects_multi_iteration_refine() {
+        let mut cfg = tiny_config();
+        cfg.refine_iterations = 3;
+        assert!(TchCtcNatBackend::new(&cfg, Device::Cpu).is_err());
+    }
+
+    #[test]
+    fn tch_backend_rejects_mask_ratio_range_sampling() {
+        let mut cfg = tiny_config();
+        cfg.refine_mask_ratio_min = Some(0.1);
+        cfg.refine_mask_ratio_max = Some(0.4);
+        assert!(TchCtcNatBackend::new(&cfg, Device::Cpu).is_err());
+    }
+
+    /// Guard against the "eval actually trains" regression Codex caught.
+    /// When `eval_step` is called, weights must be bitwise identical
+    /// before and after, even with an attached optimizer.
+    #[test]
+    fn tch_backend_eval_step_does_not_mutate_weights() {
+        let mut backend = TchCtcNatBackend::new(&tiny_config(), Device::Cpu).unwrap();
+        // Randomize so "unchanged" means something.
+        for var in backend.var_store().trainable_variables() {
+            tch::no_grad(|| {
+                let mut v = var;
+                let _ = v.uniform_(-0.1, 0.1);
+            });
+        }
+        backend.attach_optimizer(1.0).unwrap();
+        let snapshot: Vec<(String, Tensor)> = backend
+            .var_store()
+            .variables()
+            .into_iter()
+            .map(|(n, t)| (n, t.to_device(TchDevice::Cpu).copy()))
+            .collect();
+        let packed = tiny_packed();
+        let _ = backend.eval_step(0, &packed).unwrap();
+        let after = backend.var_store().variables();
+        for (name, before) in snapshot.iter() {
+            let a = &after[name];
+            let diff = (a - before).abs().max().double_value(&[]);
+            assert!(
+                diff == 0.0,
+                "eval_step mutated weight `{name}`: max_abs_diff={diff}"
+            );
+        }
     }
 
     /// End-to-end convergence smoke: repeatedly training on a single
