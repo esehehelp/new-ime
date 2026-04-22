@@ -789,9 +789,9 @@ impl CtcBackend {
     }
 
     fn collapse_proposal(&self, probs: &[f64], input_len: usize) -> CollapsedProposal {
-        let mut token_ids = Vec::new();
-        let mut min_log_prob = Vec::new();
-        let mut min_margin = Vec::new();
+        let mut token_ids: Vec<usize> = Vec::new();
+        let mut min_log_prob: Vec<f64> = Vec::new();
+        let mut min_margin: Vec<f64> = Vec::new();
         let mut prev = self.blank_id;
         for t in 0..input_len {
             let row = &probs[t * self.output_size..(t + 1) * self.output_size];
@@ -1966,6 +1966,15 @@ impl TrainBackend for CtcBackend {
         }
         Ok(())
     }
+}
+
+/// splitmix64 hash. Deterministic per-seed scalar used for refine mask
+/// sampling so the same (step, row, position) triple always produces the
+/// same mask decision — important for resume + Python parity.
+fn mix64(mut x: u64) -> u64 {
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
 }
 
 fn init_table(len: usize, scale: f64) -> Vec<f64> {
