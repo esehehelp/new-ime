@@ -856,6 +856,7 @@ fn fit(
         }
     }
     let target_step = state.step.saturating_add(steps);
+    let prune_sender = ckpt_writer.as_ref().and_then(|w| w.sender());
     let summary = trainer::run_training_loop(
         &mut source,
         backend.as_mut(),
@@ -867,6 +868,7 @@ fn fit(
             epoch_steps: estimate_epoch_steps(&config)?,
             grad_accum: config.train.grad_accum,
             checkpoint_keep_last: config.train.checkpoint_keep_last,
+            ckpt_sender: prune_sender,
         },
     )?;
     let eval_loss = if config.eval.batches > 0 {

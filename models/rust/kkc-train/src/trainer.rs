@@ -1,17 +1,24 @@
+use crate::pipeline::CheckpointWrite;
 use crate::{CheckpointEntry, TrainerState};
 use anyhow::{Context, Result};
 use kkc_data::PackedBatch;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::SyncSender;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TrainerLoopConfig {
     pub target_step: usize,
     pub checkpoint_every: usize,
     pub epoch_steps: usize,
     pub grad_accum: usize,
     pub checkpoint_keep_last: usize,
+    /// If present, prune routes its deletes through this sender instead
+    /// of running `std::fs::remove_file` inline. FIFO ordering with
+    /// prior async saves is what prevents the "prune a file not yet
+    /// flushed" race for the tch backend.
+    pub ckpt_sender: Option<SyncSender<CheckpointWrite>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -61,7 +68,12 @@ where
         last_loss = Some(step_out.loss);
         if config.checkpoint_every > 0 && state.step % config.checkpoint_every == 0 {
             write_backend_checkpoint(run_dir, state, step_out, backend)?;
-            prune_checkpoints(run_dir, state, config.checkpoint_keep_last)?;
+            prune_checkpoints(
+                run_dir,
+                state,
+                config.checkpoint_keep_last,
+                config.ckpt_sender.as_ref(),
+            )?;
         }
     }
     let elapsed_sec = started.elapsed().as_secs_f64().max(1e-9);
@@ -215,7 +227,12 @@ fn write_backend_checkpoint<B: crate::backend::TrainBackend + ?Sized>(
     Ok(())
 }
 
-fn prune_checkpoints(_run_dir: &Path, state: &mut TrainerState, keep_last: usize) -> Result<()> {
+fn prune_checkpoints(
+    _run_dir: &Path,
+    state: &mut TrainerState,
+    keep_last: usize,
+    ckpt_sender: Option<&SyncSender<CheckpointWrite>>,
+) -> Result<()> {
     let keep_last = keep_last.max(1);
     if state.checkpoints.len() <= keep_last {
         return Ok(());
@@ -238,12 +255,37 @@ fn prune_checkpoints(_run_dir: &Path, state: &mut TrainerState, keep_last: usize
     }
     state.checkpoints = retained;
     for entry in pruned {
-        remove_if_exists(Path::new(&entry.checkpoint))?;
-        remove_if_exists(&checkpoint_sidecar_path(
-            &entry.checkpoint,
-            ".ckpt.json",
-            ".backend.json",
-        ))?;
+        // Collect every file produced for this checkpoint step. The
+        // GPU path emits `.weights.safetensors` alongside
+        // `.backend.json`; retaining it would leak orphan weights
+        // files across retention cycles.
+        let mut paths: Vec<PathBuf> = vec![
+            PathBuf::from(&entry.checkpoint),
+            checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".backend.json"),
+            checkpoint_sidecar_path(
+                &entry.checkpoint,
+                ".ckpt.json",
+                ".weights.safetensors",
+            ),
+            checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".optim.safetensors"),
+        ];
+        // Drop duplicates if the above happens to collide on identical
+        // paths (shouldn't today but defensive).
+        paths.sort();
+        paths.dedup();
+
+        if let Some(sender) = ckpt_sender {
+            // Enqueue as a Delete op so FIFO ordering with the async
+            // save from the same step is preserved — otherwise prune
+            // would race a still-queued safetensors write.
+            sender
+                .send(CheckpointWrite::Delete { paths })
+                .map_err(|_| anyhow::anyhow!("checkpoint writer thread is gone"))?;
+        } else {
+            for p in paths {
+                remove_if_exists(&p)?;
+            }
+        }
     }
     Ok(())
 }
@@ -351,10 +393,13 @@ mod tests {
         for name in [
             "step_00000001.ckpt.json",
             "step_00000001.backend.json",
+            "step_00000001.weights.safetensors",
             "step_00000002.ckpt.json",
             "step_00000002.backend.json",
+            "step_00000002.weights.safetensors",
             "step_00000003.ckpt.json",
             "step_00000003.backend.json",
+            "step_00000003.weights.safetensors",
         ] {
             std::fs::write(keep(name), b"x").unwrap();
         }
@@ -392,10 +437,17 @@ mod tests {
                 },
             ],
         };
-        prune_checkpoints(dir.path(), &mut state, 1).unwrap();
+        prune_checkpoints(dir.path(), &mut state, 1, None).unwrap();
         assert_eq!(state.checkpoints.len(), 2);
         assert!(keep("step_00000001.ckpt.json").exists());
         assert!(keep("step_00000003.ckpt.json").exists());
         assert!(!keep("step_00000002.ckpt.json").exists());
+        assert!(!keep("step_00000002.backend.json").exists());
+        // And the weights safetensors sidecar is cleaned up too — the
+        // tch backend would otherwise leave orphans.
+        assert!(
+            !keep("step_00000002.weights.safetensors").exists(),
+            "weights sidecar was not pruned"
+        );
     }
 }

@@ -23,7 +23,13 @@ use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
 
 pub const WEIGHTS_SUFFIX: &str = ".weights.safetensors";
-pub const META_SUFFIX: &str = ".meta.json";
+pub const OPTIM_SUFFIX: &str = ".optim.safetensors";
+/// The trainer ledger + resume check both require `<step>.backend.json`
+/// to exist next to `<step>.ckpt.json`. The tch backend treats this
+/// anchor file AS the metadata payload (step, loss, weight file name,
+/// format version) so there is no second `.meta.json` sidecar to keep
+/// in sync with the anchor.
+pub const BACKEND_SUFFIX: &str = ".backend.json";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CheckpointMeta {
@@ -137,14 +143,30 @@ fn tensor_to_bytes(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, Dtype)> {
 
 /// Serialize every variable of `vs` into a safetensors byte vector.
 fn var_store_bytes(vs: &VarStore) -> Result<Vec<u8>> {
-    // Materialize each tensor's bytes first, then hand views to
-    // safetensors. safetensors::serialize borrows the buffers, so they
-    // must outlive the call.
     let vars = vs.variables();
     let mut buffers: BTreeMap<String, (Vec<u8>, Vec<usize>, Dtype)> = BTreeMap::new();
     for (name, tensor) in vars.into_iter() {
         buffers.insert(name, tensor_to_bytes(&tensor)?);
     }
+    serialize_buffers(&buffers)
+}
+
+/// Serialize a `(name, tensor)` map (e.g. optimizer state) into
+/// safetensors bytes. Same encoding as `var_store_bytes` but pulls
+/// from an arbitrary map instead of a VarStore.
+pub(super) fn tensors_to_bytes(
+    tensors: &BTreeMap<String, Tensor>,
+) -> Result<Vec<u8>> {
+    let mut buffers: BTreeMap<String, (Vec<u8>, Vec<usize>, Dtype)> = BTreeMap::new();
+    for (name, tensor) in tensors.iter() {
+        buffers.insert(name.clone(), tensor_to_bytes(tensor)?);
+    }
+    serialize_buffers(&buffers)
+}
+
+fn serialize_buffers(
+    buffers: &BTreeMap<String, (Vec<u8>, Vec<usize>, Dtype)>,
+) -> Result<Vec<u8>> {
     let views: Vec<(String, TensorView)> = buffers
         .iter()
         .map(|(name, (bytes, shape, dtype))| {
@@ -154,6 +176,21 @@ fn var_store_bytes(vs: &VarStore) -> Result<Vec<u8>> {
         })
         .collect::<Result<Vec<_>>>()?;
     safetensors::serialize(views, &None).context("safetensors serialize")
+}
+
+/// Deserialize a safetensors blob into a BTreeMap of materialized
+/// tensors on CPU. Complements `tensors_to_bytes`.
+pub(super) fn tensors_from_bytes(bytes: &[u8]) -> Result<BTreeMap<String, Tensor>> {
+    let st = SafeTensors::deserialize(bytes).context("parse safetensors")?;
+    let mut out = BTreeMap::new();
+    for name in st.names() {
+        let view = st.tensor(name)?;
+        let kind = dtype_to_kind(view.dtype())?;
+        let shape: Vec<i64> = view.shape().iter().map(|v| *v as i64).collect();
+        let t = tensor_from_view_typed(view.data(), &shape, kind)?;
+        out.insert(name.clone(), t);
+    }
+    Ok(out)
 }
 
 /// Serialize every variable (trainable and non-trainable) of `vs` into
@@ -220,17 +257,18 @@ pub fn load_var_store(vs: &mut VarStore, path: &Path) -> Result<()> {
 }
 
 pub fn weights_path_for(anchor: &Path) -> std::path::PathBuf {
-    anchor.with_extension(trimmed_extension(anchor, "weights.safetensors"))
+    anchor.with_file_name(sibling_name_for(anchor, "weights.safetensors"))
 }
-pub fn meta_path_for(anchor: &Path) -> std::path::PathBuf {
-    anchor.with_extension(trimmed_extension(anchor, "meta.json"))
+pub fn optim_path_for(anchor: &Path) -> std::path::PathBuf {
+    anchor.with_file_name(sibling_name_for(anchor, "optim.safetensors"))
 }
 
-/// Replace a trailing `.json` / `.backend.json` on `anchor` with
-/// `suffix`, falling back to appending if there's no recognized
-/// extension. Keeps the sibling file naming consistent with the
-/// trainer's existing `.ckpt.json` / `.backend.json` convention.
-fn trimmed_extension(anchor: &Path, suffix: &str) -> String {
+/// Build a sibling filename by trimming `.backend.json` (or `.json`)
+/// off `anchor` and appending `suffix`. Callers use
+/// `anchor.with_file_name(...)` so the directory stays intact. The
+/// prune path in the trainer uses the same convention via
+/// `checkpoint_sidecar_path`.
+fn sibling_name_for(anchor: &Path, suffix: &str) -> String {
     let name = anchor.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let stem = name
         .strip_suffix(".backend.json")
@@ -243,15 +281,32 @@ fn trimmed_extension(anchor: &Path, suffix: &str) -> String {
 
 /// Wire `TchCtcNatBackend` to the safetensors format.
 ///
-/// If the backend has an async checkpoint sender attached, the
-/// safetensors + meta bytes are produced in memory and submitted to
-/// the writer thread — the calling training step returns immediately
-/// while the bytes land on disk in the background. Otherwise we fall
-/// back to atomic synchronous writes.
+/// On-disk layout per checkpoint step is:
+/// - `<step>.backend.json`          — the metadata anchor the trainer
+///   ledger keys on (step, loss, vocab, weights filename, format version)
+/// - `<step>.weights.safetensors`   — model weights
+///
+/// The trainer's `<step>.ckpt.json` sidecar (trainer step summary) is
+/// written by the caller, not here.
+///
+/// If the backend has an async checkpoint sender attached, both files
+/// are submitted to the writer thread — the calling training step
+/// returns immediately while the bytes land on disk in the background.
+/// Without a sender we fall back to atomic synchronous writes.
 pub fn save_backend(backend: &TchCtcNatBackend, anchor: &Path) -> Result<()> {
     let weights_path: PathBuf = weights_path_for(anchor);
-    let meta_path: PathBuf = meta_path_for(anchor);
     let weights_bytes = var_store_bytes(backend.var_store())?;
+    // Optimizer moments ride next to the weights. Without this the
+    // AdamW m/v reset on every resume, which silently alters the loss
+    // curve. Only present when the backend actually has an optim
+    // attached (eval runs pass a backend with no optim).
+    let optim_payload: Option<(PathBuf, Vec<u8>)> = if let Some(state) =
+        backend.optim_state_dict()
+    {
+        Some((optim_path_for(anchor), tensors_to_bytes(&state)?))
+    } else {
+        None
+    };
     let meta_blob = CheckpointMeta {
         kind: "tch-ctc-nat".to_string(),
         step: backend.step_count(),
@@ -267,43 +322,56 @@ pub fn save_backend(backend: &TchCtcNatBackend, anchor: &Path) -> Result<()> {
             .to_string(),
         format_version: CHECKPOINT_FORMAT_VERSION,
     };
-    let meta_bytes =
+    let anchor_bytes =
         serde_json::to_vec_pretty(&meta_blob).context("serialize checkpoint meta")?;
+    let anchor_path: PathBuf = anchor.to_path_buf();
 
     if let Some(sender) = backend.ckpt_sender() {
         sender
-            .send(CheckpointWrite {
-                path: weights_path.clone(),
-                bytes: weights_bytes,
-                sidecar: Some((meta_path.clone(), meta_bytes)),
+            .send(CheckpointWrite::File {
+                path: anchor_path.clone(),
+                bytes: anchor_bytes,
+                sidecar: Some((weights_path.clone(), weights_bytes)),
             })
             .map_err(|_| anyhow::anyhow!("checkpoint writer thread is gone"))?;
+        if let Some((optim_path, optim_bytes)) = optim_payload {
+            sender
+                .send(CheckpointWrite::File {
+                    path: optim_path,
+                    bytes: optim_bytes,
+                    sidecar: None,
+                })
+                .map_err(|_| anyhow::anyhow!("checkpoint writer thread is gone"))?;
+        }
         return Ok(());
     }
 
-    if let Some(parent) = weights_path.parent() {
+    if let Some(parent) = anchor_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
     }
+    std::fs::write(&anchor_path, anchor_bytes)
+        .with_context(|| format!("write {}", anchor_path.display()))?;
     std::fs::write(&weights_path, weights_bytes)
         .with_context(|| format!("write {}", weights_path.display()))?;
-    std::fs::write(&meta_path, meta_bytes)
-        .with_context(|| format!("write {}", meta_path.display()))?;
+    if let Some((optim_path, optim_bytes)) = optim_payload {
+        std::fs::write(&optim_path, optim_bytes)
+            .with_context(|| format!("write {}", optim_path.display()))?;
+    }
     Ok(())
 }
 
 pub fn load_backend(backend: &mut TchCtcNatBackend, anchor: &Path) -> Result<()> {
-    let meta_path = meta_path_for(anchor);
-    let bytes = std::fs::read(&meta_path)
-        .with_context(|| format!("read {}", meta_path.display()))?;
+    let bytes =
+        std::fs::read(anchor).with_context(|| format!("read {}", anchor.display()))?;
     let meta: CheckpointMeta = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse {}", meta_path.display()))?;
+        .with_context(|| format!("parse {}", anchor.display()))?;
     if meta.format_version != CHECKPOINT_FORMAT_VERSION {
         bail!(
             "checkpoint {} has format version {}, expected {}",
-            meta_path.display(),
+            anchor.display(),
             meta.format_version,
             CHECKPOINT_FORMAT_VERSION
         );
@@ -326,17 +394,23 @@ pub fn load_backend(backend: &mut TchCtcNatBackend, anchor: &Path) -> Result<()>
     load_var_store(backend.var_store_mut(), &weights_path)?;
     backend.set_step_count(meta.step);
     backend.set_last_loss(meta.last_loss);
-    // Loud warning: optimizer m/v are NOT persisted in this format, so
-    // AdamW restarts from zero state. Short resumes recover in a few
-    // hundred steps, long resumes effectively lose their momentum
-    // history. Tracked in docs/rust_training_stack.md → "残タスク" as
-    // a follow-up; logging here keeps the behavior from being silent.
-    if backend.has_optimizer() {
+    // Restore AdamW m/v from the optim sidecar if present. Pre-fix
+    // checkpoints have no `.optim.safetensors` — those still resume,
+    // but AdamW starts from zero state and the trainer logs a warning
+    // so the behavior isn't silent.
+    let optim_path = optim_path_for(anchor);
+    if optim_path.exists() {
+        let optim_bytes = std::fs::read(&optim_path)
+            .with_context(|| format!("read {}", optim_path.display()))?;
+        let state = tensors_from_bytes(&optim_bytes)?;
+        backend.load_optim_state_dict(&state)?;
+    } else if backend.has_optimizer() {
         eprintln!(
-            "[kkc-train] warning: resumed from {} but AdamW optimizer state \
-             (m/v) was NOT restored — AdamW restarts from zero state. \
-             Expect a brief loss bump while momentum rebuilds.",
-            anchor.display()
+            "[kkc-train] warning: resumed from {} but no optim sidecar \
+             ({}) — AdamW restarts from zero state. Expect a brief \
+             loss bump while momentum rebuilds.",
+            anchor.display(),
+            optim_path.display()
         );
     }
     Ok(())
@@ -399,6 +473,28 @@ mod tests {
                 "var {name} not bitwise equal: max_abs_diff={diff}"
             );
         }
+    }
+
+    /// Guard the resume contract: trainer + eval + check_resume assume
+    /// that `<step>.backend.json` exists next to `<step>.ckpt.json`. If
+    /// the GPU save stops producing it, resume breaks silently.
+    #[test]
+    fn save_backend_writes_anchor_and_weights_sync_path() {
+        let dir = tempdir().unwrap();
+        let anchor = dir.path().join("step_00000010.backend.json");
+        let backend = TchCtcNatBackend::new(&tiny_config(), KkcDevice::Cpu).unwrap();
+        save_backend(&backend, &anchor).unwrap();
+        assert!(anchor.exists(), "anchor {} not written", anchor.display());
+        let weights = weights_path_for(&anchor);
+        assert!(
+            weights.exists(),
+            "weights sidecar {} not written",
+            weights.display()
+        );
+        // Anchor payload must be parseable as CheckpointMeta.
+        let meta: CheckpointMeta =
+            serde_json::from_slice(&std::fs::read(&anchor).unwrap()).unwrap();
+        assert_eq!(meta.format_version, CHECKPOINT_FORMAT_VERSION);
     }
 
     #[test]

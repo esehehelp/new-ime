@@ -21,17 +21,32 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 
-/// Work unit sent to [`AsyncCheckpointWriter`]. `bytes` is whatever the caller
-/// wants persisted — typically a JSON blob for trainer state or a safetensors
-/// payload for weights. The writer is agnostic; it just writes.
+/// Work unit sent to [`AsyncCheckpointWriter`]. The writer thread
+/// drains these in FIFO order so a `Delete` submitted after a `File`
+/// for the same path is guaranteed to run AFTER the file lands on
+/// disk — which matters for retention pruning, since the trainer
+/// ledger advances faster than the I/O thread flushes.
+///
+/// In the default (no-cuda) build the `File` variant is only
+/// constructed in tests; the production writer path there is the
+/// synchronous `backend.save_checkpoint` call. The enum still needs to
+/// carry the variant because the cuda build and the pruning path both
+/// route through it, hence the `allow(dead_code)` on the variant.
 #[derive(Debug)]
-pub struct CheckpointWrite {
-    pub path: PathBuf,
-    pub bytes: Vec<u8>,
-    /// Optional sidecar file written alongside `path`. The training loop uses
-    /// this for the per-step `*.ckpt.json` companion next to
-    /// `*.backend.json` / `*.safetensors`.
-    pub sidecar: Option<(PathBuf, Vec<u8>)>,
+pub enum CheckpointWrite {
+    /// Write `bytes` to `path` (and `sidecar` bytes to its path) via
+    /// tmp-rename. The primary use case is "checkpoint anchor +
+    /// weights safetensors" pairs.
+    #[allow(dead_code)]
+    File {
+        path: PathBuf,
+        bytes: Vec<u8>,
+        sidecar: Option<(PathBuf, Vec<u8>)>,
+    },
+    /// Remove the named files (missing files are no-ops). Used by
+    /// retention pruning so deletes sequence behind any pending writes
+    /// for the same step.
+    Delete { paths: Vec<PathBuf> },
 }
 
 pub struct AsyncCheckpointWriter {
@@ -105,22 +120,39 @@ impl Drop for AsyncCheckpointWriter {
 fn writer_loop(rx: Receiver<CheckpointWrite>) -> Result<usize> {
     let mut written = 0usize;
     while let Ok(work) = rx.recv() {
-        persist_one(&work)
-            .with_context(|| format!("checkpoint writer failed on {}", work.path.display()))?;
+        match &work {
+            CheckpointWrite::File { path, .. } => persist_one(&work)
+                .with_context(|| format!("checkpoint writer failed on {}", path.display()))?,
+            CheckpointWrite::Delete { paths } => {
+                for p in paths {
+                    match std::fs::remove_file(p) {
+                        Ok(()) => {}
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(err) => {
+                            return Err(err)
+                                .with_context(|| format!("remove {}", p.display()))
+                        }
+                    }
+                }
+            }
+        }
         written += 1;
     }
     Ok(written)
 }
 
 fn persist_one(work: &CheckpointWrite) -> Result<()> {
-    if let Some(parent) = work.path.parent() {
+    let CheckpointWrite::File { path, bytes, sidecar } = work else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
     }
-    atomic_write(&work.path, &work.bytes)?;
-    if let Some((sidecar_path, sidecar_bytes)) = &work.sidecar {
+    atomic_write(path, bytes)?;
+    if let Some((sidecar_path, sidecar_bytes)) = sidecar {
         atomic_write(sidecar_path, sidecar_bytes)?;
     }
     Ok(())
@@ -193,7 +225,7 @@ mod tests {
         let writer = AsyncCheckpointWriter::spawn(2);
         for step in 0..4usize {
             writer
-                .submit(CheckpointWrite {
+                .submit(CheckpointWrite::File {
                     path: dir.path().join(format!("step_{step}.bin")),
                     bytes: vec![step as u8; 8],
                     sidecar: None,
@@ -217,7 +249,7 @@ mod tests {
         let target = dir.path().join("latest.bin");
         for step in 0u8..16 {
             writer
-                .submit(CheckpointWrite {
+                .submit(CheckpointWrite::File {
                     path: target.clone(),
                     bytes: vec![step; 4],
                     sidecar: None,
@@ -234,7 +266,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let writer = AsyncCheckpointWriter::spawn(1);
         writer
-            .submit(CheckpointWrite {
+            .submit(CheckpointWrite::File {
                 path: dir.path().join("state.backend.json"),
                 bytes: b"backend".to_vec(),
                 sidecar: Some((dir.path().join("state.ckpt.json"), b"trainer".to_vec())),
@@ -258,7 +290,7 @@ mod tests {
         {
             let writer = AsyncCheckpointWriter::spawn(1);
             writer
-                .submit(CheckpointWrite {
+                .submit(CheckpointWrite::File {
                     path: target.clone(),
                     bytes: b"flushed-on-drop".to_vec(),
                     sidecar: None,
@@ -315,6 +347,45 @@ mod tests {
         assert_eq!(writer.finish().unwrap(), 0);
     }
 
+    /// Guards the prune-vs-async-save race: a Delete submitted after
+    /// a File for the same path MUST observe the file on disk (because
+    /// the writer processes FIFO), so the delete wins and we don't
+    /// leave orphans.
+    #[test]
+    fn delete_after_write_observes_file_on_disk() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("race.bin");
+        let writer = AsyncCheckpointWriter::spawn(4);
+        writer
+            .submit(CheckpointWrite::File {
+                path: target.clone(),
+                bytes: b"hello".to_vec(),
+                sidecar: None,
+            })
+            .unwrap();
+        writer
+            .submit(CheckpointWrite::Delete {
+                paths: vec![target.clone()],
+            })
+            .unwrap();
+        writer.finish().unwrap();
+        assert!(!target.exists(), "delete did not run after write");
+    }
+
+    #[test]
+    fn delete_missing_file_is_no_op() {
+        let dir = tempdir().unwrap();
+        let writer = AsyncCheckpointWriter::spawn(1);
+        writer
+            .submit(CheckpointWrite::Delete {
+                paths: vec![dir.path().join("ghost.bin")],
+            })
+            .unwrap();
+        // finish() propagates any writer error; a no-op delete must
+        // not be one.
+        assert_eq!(writer.finish().unwrap(), 1);
+    }
+
     #[test]
     fn many_rapid_submits_do_not_lose_writes() {
         let dir = tempdir().unwrap();
@@ -323,7 +394,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         for step in 0..total {
             writer
-                .submit(CheckpointWrite {
+                .submit(CheckpointWrite::File {
                     path: dir.path().join(format!("rapid_{step}.bin")),
                     bytes: (step as u64).to_le_bytes().to_vec(),
                     sidecar: None,

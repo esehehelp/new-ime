@@ -124,6 +124,28 @@ impl TchCtcNatBackend {
         self.optim.is_some()
     }
 
+    /// Snapshot the attached optimizer's state (m/v buffers + adam step)
+    /// so it can ride along in the checkpoint sidecar. Returns `None`
+    /// when no optimizer is attached — eval-only backends produce no
+    /// optim artifact.
+    pub fn optim_state_dict(
+        &self,
+    ) -> Option<std::collections::BTreeMap<String, tch::Tensor>> {
+        self.optim.as_ref().map(|o| o.state_dict())
+    }
+
+    /// Restore the optimizer from a previously saved state. Errors if
+    /// the attached optimizer doesn't share the same variable set.
+    pub fn load_optim_state_dict(
+        &mut self,
+        dict: &std::collections::BTreeMap<String, tch::Tensor>,
+    ) -> Result<()> {
+        match self.optim.as_mut() {
+            Some(opt) => opt.load_state_dict(dict),
+            None => Ok(()),
+        }
+    }
+
     pub fn device(&self) -> TchDevice {
         self.device
     }
@@ -225,7 +247,7 @@ impl TchCtcNatBackend {
         let loss_val = loss.double_value(&[]);
         loss.backward();
         if let Some(opt) = self.optim.as_mut() {
-            opt.optimize(step);
+            opt.optimize(&self.vs, step);
         }
 
         self.last_loss = Some(loss_val);
@@ -251,22 +273,78 @@ impl TchCtcNatBackend {
         }
     }
 
-    /// Forward-only evaluation on a pre-uploaded [`GpuBatch`]. Guarded by
-    /// `no_grad`, never touches the optimizer, and does NOT mutate any
-    /// cached training bookkeeping (step counter, last loss) — eval is
-    /// supposed to leave no trace on the training run.
+    /// Forward-only evaluation on a pre-uploaded [`GpuBatch`]. Guarded
+    /// by `no_grad`, never touches the optimizer, and does NOT mutate
+    /// any cached training bookkeeping (step counter, last loss).
+    ///
+    /// Returns the SAME weighted sum the training step computes —
+    /// proposal CTC + refine MLM + remask + stop — so that
+    /// `fit_eval_loss` and `best_checkpoint` score against the same
+    /// objective the optimizer is minimizing. Earlier versions returned
+    /// only the proposal CTC, which made `best_checkpoint` diverge from
+    /// the training target once refine weights were turned on.
     pub fn eval_gpu(&self, batch: &GpuBatch) -> Result<TrainerStep> {
         let mask_bool = batch.attention_mask.to_kind(Kind::Bool);
+        let target_len = batch.target_lengths.shallow_clone();
+        let input_len = batch.input_lengths.shallow_clone();
+        // Match `step_gpu`'s schedule: use the current `step_count` as
+        // the ramp index, so a mid-training eval sees the exact
+        // refine_loss_weight the next training step would.
+        let step_idx = self.step_count;
         let loss_val: f64 = tch::no_grad(|| {
             let encoder_out = self.model.encode(&batch.input_ids, &mask_bool);
             let proposal_logits = self.model.proposal(&encoder_out, &mask_bool);
-            let loss = ctc_proposal_loss(
+            let ctc = ctc_proposal_loss(
                 &proposal_logits,
                 &batch.target_ids,
-                &batch.input_lengths,
-                &batch.target_lengths,
+                &input_len,
+                &target_len,
                 self.model.blank_id,
             );
+            let mut loss = ctc.shallow_clone();
+
+            let refine_weight_now = self.config.refine_loss_weight
+                * super::loss::refine_weight_ramp(step_idx, self.config.refine_warmup_steps);
+            if refine_weight_now > 0.0 {
+                let (hyp_ids, mask_positions, valid) = super::loss::build_target_refinement(
+                    &batch.target_ids,
+                    &target_len,
+                    self.config.refine_mask_ratio,
+                    self.model.mask_token_id,
+                    step_idx as u64,
+                );
+                let (refined_logits, remask_logits, stop_logits_batch) = self.model.refine(
+                    &hyp_ids,
+                    &valid,
+                    &encoder_out,
+                    &mask_bool,
+                );
+                let refine_ce = super::loss::refine_mlm_loss(
+                    &refined_logits,
+                    &batch.target_ids,
+                    &mask_positions,
+                );
+                loss = &loss + refine_weight_now * &refine_ce;
+
+                if self.config.remask_loss_weight > 0.0 {
+                    let r = super::loss::remask_loss(
+                        &remask_logits,
+                        &refined_logits,
+                        &batch.target_ids,
+                        &valid,
+                    );
+                    loss = &loss + self.config.remask_loss_weight * &r;
+                }
+                if self.config.stop_loss_weight > 0.0 {
+                    let s = super::loss::stop_loss(
+                        &stop_logits_batch,
+                        &refined_logits,
+                        &batch.target_ids,
+                        &valid,
+                    );
+                    loss = &loss + self.config.stop_loss_weight * &s;
+                }
+            }
             loss.double_value(&[])
         });
         Ok(TrainerStep {
