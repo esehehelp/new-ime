@@ -2,7 +2,7 @@
 train_shard = "datasets/mixes/student-20m.kkc"
 
 [tokenizer]
-path = "datasets/tokenizers/shared_char.json"
+path = "datasets/tokenizers/char-5k.json"
 max_kanji = 6000
 vocab_size = 4801
 
@@ -16,6 +16,35 @@ adam_state_bytes = 8
 activation_dtype_bytes = 2
 prefetch_queue = 4
 
+[eval]
+batches = 2
+
+[backend]
+kind = "ctc"
+optimizer = "adamw"
+scheduler = "warmup_cosine"
+learning_rate = 0.001
+init_scale = 0.01
+weight_decay = 0.01
+momentum = 0.9
+beta1 = 0.9
+beta2 = 0.999
+epsilon = 1e-8
+warmup_steps = 100
+scheduler_total_steps = 10000
+min_lr_scale = 0.1
+parameter_count = 16
+hidden_size = 32
+encoder_layers = 2
+num_heads = 4
+ffn_size = 128
+decoder_layers = 2
+decoder_heads = 4
+decoder_ffn_size = 128
+output_size = 4801
+blank_id = 4
+max_positions = 128
+
 [train]
 batch_size = 32
 max_input_len = 128
@@ -23,3 +52,4 @@ max_target_len = 128
 grad_accum = 4
 block_rows = 4096
 seed = 42
+checkpoint_keep_last = 2

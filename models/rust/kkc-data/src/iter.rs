@@ -39,6 +39,7 @@ pub struct PackedBatch {
     pub batch_size: usize,
     pub max_input_len: usize,
     pub max_target_len: usize,
+    pub order_cursor: usize,
 }
 
 impl PackedBatch {
@@ -69,6 +70,14 @@ pub struct BatchIter {
 
 impl BatchIter {
     pub fn open(path: impl AsRef<Path>, config: BatchIterConfig) -> Result<Self> {
+        Self::open_at_cursor(path, config, 0)
+    }
+
+    pub fn open_at_cursor(
+        path: impl AsRef<Path>,
+        config: BatchIterConfig,
+        cursor: usize,
+    ) -> Result<Self> {
         let reader = ShardReader::open(path).context("open shard reader")?;
         let rows = reader.header().row_count as usize;
         let block = config.block_rows.max(config.batch_size).max(1);
@@ -90,8 +99,12 @@ impl BatchIter {
             reader,
             config,
             order,
-            cursor: 0,
+            cursor: cursor.min(rows),
         })
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
     }
 
     pub fn next_batch(&mut self) -> Result<Option<PackedBatch>> {
@@ -169,6 +182,7 @@ impl BatchIter {
             batch_size: take,
             max_input_len: max_input,
             max_target_len: max_target,
+            order_cursor: self.cursor,
         }))
     }
 }
@@ -206,5 +220,37 @@ mod tests {
         assert_eq!(batch.input_lengths.len(), 2);
         assert_eq!(batch.target_lengths.len(), 2);
         assert!(batch.bytes() > 0);
+        assert_eq!(batch.order_cursor, 2);
+    }
+
+    #[test]
+    fn can_resume_from_saved_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("train.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"reading\": \"かな\", \"surface\": \"仮名\", \"context\": \"前\", \"source\": \"a\"}\n\
+             {\"reading\": \"きょう\", \"surface\": \"今日\", \"context\": \"\", \"source\": \"b\"}\n\
+             {\"reading\": \"あした\", \"surface\": \"明日\", \"context\": \"\", \"source\": \"c\"}\n",
+        )
+        .unwrap();
+        let shard = dir.path().join("train.kkc");
+        let tok = SharedCharTokenizer::new_default(128);
+        compile_jsonl_to_shard(&jsonl, &shard, &tok, &CompileOptions::default()).unwrap();
+        let cfg = BatchIterConfig {
+            batch_size: 1,
+            block_rows: 1,
+            seed: 7,
+            ..BatchIterConfig::default()
+        };
+        let mut iter = BatchIter::open(&shard, cfg.clone()).unwrap();
+        let first = iter.next_batch().unwrap().unwrap();
+        let saved_cursor = first.order_cursor;
+        let second = iter.next_batch().unwrap().unwrap();
+
+        let mut resumed = BatchIter::open_at_cursor(&shard, cfg, saved_cursor).unwrap();
+        let resumed_second = resumed.next_batch().unwrap().unwrap();
+        assert_eq!(second.input_ids, resumed_second.input_ids);
+        assert_eq!(second.target_ids, resumed_second.target_ids);
     }
 }
