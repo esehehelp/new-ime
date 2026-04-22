@@ -19,6 +19,7 @@ pub mod layers;
 pub mod loss;
 pub mod model;
 pub mod optim;
+mod parity;
 
 pub use backend::TchCtcNatBackend;
 pub use batch::{GpuBatch, StagedBatchPipeline, StagedHostBatch};

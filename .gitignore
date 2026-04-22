@@ -86,3 +86,6 @@ tools/mozc_ut_import/
 # Sweep per-config artifacts (regenerable via scripts/sweep_interactive_ctc.py)
 results/sweep_*/alpha*.json
 results/sweep_*/report.md
+
+# Rust-side parity fixtures (regenerable via tools/rust/emit_parity_fixture.py)
+parity-fixtures/
