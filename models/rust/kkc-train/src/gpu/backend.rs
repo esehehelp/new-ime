@@ -72,6 +72,7 @@ pub struct TchCtcNatBackend {
     last_loss: Option<f64>,
     step_count: usize,
     optim: Option<super::optim::TchOptimizer>,
+    ckpt_sender: Option<std::sync::mpsc::SyncSender<crate::pipeline::CheckpointWrite>>,
 }
 
 impl TchCtcNatBackend {
@@ -88,7 +89,26 @@ impl TchCtcNatBackend {
             last_loss: None,
             step_count: 0,
             optim: None,
+            ckpt_sender: None,
         })
+    }
+
+    /// Attach an async checkpoint sink. When set, `save_checkpoint`
+    /// produces the safetensors + meta bytes in memory and submits
+    /// them to the writer thread instead of writing synchronously.
+    /// Drop the sink (let the `AsyncCheckpointWriter` go out of scope
+    /// or call `finish`) to flush.
+    pub fn attach_ckpt_sender(
+        &mut self,
+        sender: std::sync::mpsc::SyncSender<crate::pipeline::CheckpointWrite>,
+    ) {
+        self.ckpt_sender = Some(sender);
+    }
+
+    pub(super) fn ckpt_sender(
+        &self,
+    ) -> Option<&std::sync::mpsc::SyncSender<crate::pipeline::CheckpointWrite>> {
+        self.ckpt_sender.as_ref()
     }
 
     /// Attach an AdamW optimizer so `step_gpu` can take a full train
@@ -139,13 +159,17 @@ impl TchCtcNatBackend {
             .sum()
     }
 
-    /// Consume a pre-uploaded [`GpuBatch`] directly. Computes the full
-    /// training loss (CTC proposal + refine MLM + remask + stop) and
-    /// runs `backward()` to populate parameter gradients.
+    /// Full training step on a pre-uploaded [`GpuBatch`]:
+    ///   encode → proposal → (optional) refine → sum losses
+    ///   → `backward()` → (if an optimizer is attached) `optim.optimize(step)`
     ///
-    /// The optimizer step is NOT applied here — that lives in step 3
-    /// (`TchOptimizer`). The training loop receives the scalar loss and
-    /// is expected to drive optim + zero_grad externally.
+    /// Attaching an optimizer is the norm via `attach_optimizer`; tests
+    /// that only need forward/backward can skip it and the optim step
+    /// is silently elided.
+    ///
+    /// Eval callers must use [`Self::eval_gpu`] or `TrainBackend::eval_step`,
+    /// both of which run `no_grad` and never mutate weights — this method
+    /// is NOT safe for evaluation.
     pub fn step_gpu(&mut self, step: usize, batch: &GpuBatch) -> Result<TrainerStep> {
         let mask_bool = batch.attention_mask.to_kind(Kind::Bool);
         let target_len = batch.target_lengths.shallow_clone();
@@ -172,6 +196,7 @@ impl TchCtcNatBackend {
                 &target_len,
                 self.config.refine_mask_ratio,
                 self.model.mask_token_id,
+                step as u64,
             );
             let (refined_logits, remask_logits, stop_logits_batch) = self.model.refine(
                 &hyp_ids,
@@ -277,6 +302,13 @@ impl TrainBackend for TchCtcNatBackend {
         let staged = StagedHostBatch::from_packed(batch);
         let gpu = GpuBatch::upload(staged, self.device);
         self.eval_gpu(&gpu)
+    }
+
+    fn attach_ckpt_sender(
+        &mut self,
+        sender: std::sync::mpsc::SyncSender<crate::pipeline::CheckpointWrite>,
+    ) {
+        self.ckpt_sender = Some(sender);
     }
 }
 

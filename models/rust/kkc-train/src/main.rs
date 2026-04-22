@@ -10,7 +10,6 @@ mod trainer;
 #[cfg(feature = "cuda")]
 mod gpu;
 
-use crate::backend::TrainBackend;
 use crate::device::Device;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -108,6 +107,10 @@ enum Command {
         run_dir: Option<PathBuf>,
         #[arg(long)]
         batches: Option<usize>,
+        /// Compute device: `cpu`, `cuda`, or `cuda:N`. `cuda*` requires
+        /// the binary to have been built with `--features cuda`.
+        #[arg(long, default_value = "cpu")]
+        device: String,
     },
     Fit {
         #[arg(long)]
@@ -239,6 +242,44 @@ struct RunManifest {
     logits_bytes: usize,
     total_step_bytes: usize,
     estimated_step_upper_bound: usize,
+    // Optim + schedule knobs. Persisted so a resume that silently
+    // changes LR / decay / AdamW betas / weight decay / grad clip
+    // trips `collect_resume_mismatches` instead of quietly altering
+    // the training dynamics.
+    #[serde(default)]
+    optimizer: String,
+    #[serde(default)]
+    scheduler: String,
+    #[serde(default)]
+    learning_rate: f64,
+    #[serde(default)]
+    weight_decay: f64,
+    #[serde(default)]
+    beta1: f64,
+    #[serde(default)]
+    beta2: f64,
+    #[serde(default)]
+    epsilon: f64,
+    #[serde(default)]
+    warmup_steps: usize,
+    #[serde(default)]
+    scheduler_total_steps: usize,
+    #[serde(default)]
+    min_lr_scale: f64,
+    #[serde(default)]
+    refine_loss_weight: f64,
+    #[serde(default)]
+    refine_warmup_steps: usize,
+    #[serde(default)]
+    refine_mask_ratio: f64,
+    #[serde(default)]
+    refine_source: String,
+    #[serde(default)]
+    remask_loss_weight: f64,
+    #[serde(default)]
+    stop_loss_weight: f64,
+    #[serde(default)]
+    grad_clip: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,7 +381,12 @@ fn main() -> Result<()> {
             config,
             run_dir,
             batches,
-        } => eval_command(&config, run_dir.as_deref(), batches),
+            device,
+        } => {
+            let device = Device::from_str(&device)?;
+            device::require_cuda_built(device)?;
+            eval_command(&config, run_dir.as_deref(), batches, device)
+        }
         Command::Fit {
             config,
             run_dir,
@@ -604,6 +650,23 @@ fn init_run(config_path: &Path, output: &Path) -> Result<()> {
         total_step_bytes: estimate.total_step_bytes,
         estimated_step_upper_bound: plan.per_batch_bytes * config.train.grad_accum
             + estimate.total_step_bytes,
+        optimizer: config.backend.optimizer.clone(),
+        scheduler: config.backend.scheduler.clone(),
+        learning_rate: config.backend.learning_rate,
+        weight_decay: config.backend.weight_decay,
+        beta1: config.backend.beta1,
+        beta2: config.backend.beta2,
+        epsilon: config.backend.epsilon,
+        warmup_steps: config.backend.warmup_steps,
+        scheduler_total_steps: config.backend.scheduler_total_steps,
+        min_lr_scale: config.backend.min_lr_scale,
+        refine_loss_weight: config.backend.refine_loss_weight,
+        refine_warmup_steps: config.backend.refine_warmup_steps,
+        refine_mask_ratio: config.backend.refine_mask_ratio,
+        refine_source: config.backend.refine_source.clone(),
+        remask_loss_weight: config.backend.remask_loss_weight,
+        stop_loss_weight: config.backend.stop_loss_weight,
+        grad_clip: config.backend.grad_clip,
     };
     let manifest_path = output.join("run_manifest.json");
     std::fs::write(
@@ -754,8 +817,35 @@ fn fit(
         );
     }
     let mut source = open_batch_source_at_cursor(&config, state.data_cursor)?;
+    // CLI --grad-clip overrides the config-resident value when set to a
+    // nonzero number. Log the override so resume drift is visible in
+    // the training log, not just the manifest.
+    let effective_grad_clip = if grad_clip > 0.0 {
+        if grad_clip != config.backend.grad_clip {
+            eprintln!(
+                "[kkc-train] grad_clip override: config={} cli={} (using cli)",
+                config.backend.grad_clip, grad_clip
+            );
+        }
+        grad_clip
+    } else {
+        config.backend.grad_clip
+    };
     let mut backend: Box<dyn backend::TrainBackend> =
-        new_backend(&config.backend, device, grad_clip)?;
+        new_backend(&config.backend, device, effective_grad_clip)?;
+    let ckpt_writer = if async_ckpt_queue > 0 {
+        Some(pipeline::AsyncCheckpointWriter::spawn(async_ckpt_queue))
+    } else {
+        None
+    };
+    // Wire the async writer's sender into the backend. CPU backends
+    // ignore it (their saves are tiny), the tch backend drains its
+    // safetensors dump through the writer thread.
+    if let Some(writer) = ckpt_writer.as_ref() {
+        if let Some(sender) = writer.sender() {
+            backend.attach_ckpt_sender(sender);
+        }
+    }
     if let Some(entry) = last_checkpoint_entry(&state) {
         if entry.kind == backend.kind() {
             let backend_checkpoint =
@@ -766,11 +856,6 @@ fn fit(
         }
     }
     let target_step = state.step.saturating_add(steps);
-    let ckpt_writer = if async_ckpt_queue > 0 {
-        Some(pipeline::AsyncCheckpointWriter::spawn(async_ckpt_queue))
-    } else {
-        None
-    };
     let summary = trainer::run_training_loop(
         &mut source,
         backend.as_mut(),
@@ -784,11 +869,6 @@ fn fit(
             checkpoint_keep_last: config.train.checkpoint_keep_last,
         },
     )?;
-    // Surface any deferred writer I/O errors before we claim success.
-    if let Some(writer) = ckpt_writer {
-        let flushed = writer.finish()?;
-        println!("fit_async_ckpt_flushed: {flushed}");
-    }
     let eval_loss = if config.eval.batches > 0 {
         Some(eval_backend_dyn(
             &config,
@@ -801,7 +881,17 @@ fn fit(
     if let Some(eval_loss) = eval_loss {
         update_last_checkpoint_metric(&mut state, eval_loss, "minimize");
     }
+    // Drop the backend BEFORE finishing the writer. The backend holds a
+    // `SyncSender` clone for its async checkpoint path; leaving it alive
+    // would keep the writer's channel open and block `writer.finish()`'s
+    // thread join indefinitely.
+    drop(backend);
+    let mut flushed = 0usize;
+    if let Some(writer) = ckpt_writer {
+        flushed = writer.finish()?;
+    }
     write_state(&state_path, &state)?;
+    println!("fit_async_ckpt_flushed: {flushed}");
     println!("fit_backend: {}", config.backend.kind);
     println!("fit_steps: {}", summary.final_step);
     println!("fit_epoch: {}", summary.final_epoch);
@@ -827,13 +917,26 @@ fn fit(
     Ok(())
 }
 
-fn eval_command(config_path: &Path, run_dir: Option<&Path>, batches: Option<usize>) -> Result<()> {
+fn eval_command(
+    config_path: &Path,
+    run_dir: Option<&Path>,
+    batches: Option<usize>,
+    device: Device,
+) -> Result<()> {
     let config = load_config(config_path)?;
-    let mut backend = backend::BackendKind::new(&config.backend)?;
+    if device.is_cuda() && !device::backend_supports_cuda(&config.backend.kind) {
+        anyhow::bail!(
+            "backend kind `{}` cannot run on {device}; use `tch-ctc-nat` or pick a CPU device",
+            config.backend.kind,
+        );
+    }
+    // Route through new_backend so the tch backend is reachable.
+    // grad_clip=0.0 is safe here: eval_step never calls the optimizer.
+    let mut backend: Box<dyn backend::TrainBackend> = new_backend(&config.backend, device, 0.0)?;
     if let Some(run_dir) = run_dir {
         let state = read_state(&run_dir.join("trainer_state.json"))?;
         if let Some(entry) = last_checkpoint_entry(&state) {
-            if entry.kind == config.backend.kind {
+            if entry.kind == backend.kind() {
                 let backend_checkpoint =
                     checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".backend.json");
                 if backend_checkpoint.exists() {
@@ -843,7 +946,7 @@ fn eval_command(config_path: &Path, run_dir: Option<&Path>, batches: Option<usiz
         }
     }
     let batches = batches.unwrap_or(config.eval.batches.max(1));
-    let loss = eval_backend(&config, &backend, batches)?;
+    let loss = eval_backend_dyn(&config, backend.as_mut(), batches)?;
     println!("eval_backend: {}", config.backend.kind);
     println!("eval_batches: {}", batches);
     println!("eval_loss: {:.6}", loss);
@@ -856,35 +959,6 @@ fn load_config(config_path: &Path) -> Result<TrainConfig> {
     let config: TrainConfig = toml::from_str(&config_text).context("parse train config")?;
     validate_config(&config)?;
     Ok(config)
-}
-
-fn eval_backend(
-    config: &TrainConfig,
-    backend: &backend::BackendKind,
-    batches: usize,
-) -> Result<f64> {
-    let eval_path = config
-        .eval
-        .shard
-        .as_ref()
-        .or(config.dataset.eval_shard.as_ref())
-        .unwrap_or(&config.dataset.train_shard);
-    let mut source = open_eval_batch_source(config, eval_path)?;
-    let mut eval_backend = backend.clone();
-    let mut total_loss = 0.0;
-    let mut seen = 0usize;
-    for _ in 0..batches.max(1) {
-        let Some(batch) = source.next_batch()? else {
-            break;
-        };
-        let step = eval_backend.step(1, &batch)?;
-        total_loss += step.loss;
-        seen += 1;
-    }
-    if seen == 0 {
-        return Ok(0.0);
-    }
-    Ok(total_loss / seen as f64)
 }
 
 /// Eval path that operates on a trait object so the tch backend (which
@@ -1210,6 +1284,23 @@ mod tests {
             logits_bytes: 8,
             total_step_bytes: 30,
             estimated_step_upper_bound: 64,
+            optimizer: "adamw".to_string(),
+            scheduler: "warmup_cosine".to_string(),
+            learning_rate: 1e-3,
+            weight_decay: 0.01,
+            beta1: 0.9,
+            beta2: 0.999,
+            epsilon: 1e-8,
+            warmup_steps: 0,
+            scheduler_total_steps: 0,
+            min_lr_scale: 0.1,
+            refine_loss_weight: 0.0,
+            refine_warmup_steps: 0,
+            refine_mask_ratio: 0.3,
+            refine_source: "target".to_string(),
+            remask_loss_weight: 0.0,
+            stop_loss_weight: 0.0,
+            grad_clip: 0.0,
         }
     }
 
@@ -1408,6 +1499,41 @@ mod tests {
         let mismatches = collect_resume_mismatches(&config, &manifest, &state);
         assert!(mismatches.iter().any(|m| m.contains("backend_hidden_size")));
     }
+
+    #[test]
+    fn resume_mismatch_detects_optim_and_grad_clip_change() {
+        let dir = tempdir().unwrap();
+        let mut config = sample_config(dir.path());
+        let manifest = sample_manifest(dir.path());
+        let mut state = sample_state();
+        let checkpoint = dir.path().join("step_00000001.ckpt.json");
+        std::fs::write(&checkpoint, b"{}").unwrap();
+        state.last_checkpoint = Some(checkpoint.display().to_string());
+        state.checkpoints.push(CheckpointEntry {
+            step: 1,
+            epoch: 0,
+            checkpoint: checkpoint.display().to_string(),
+            metric: Some(1.0),
+            kind: "mock".to_string(),
+            metric_mode: "minimize".to_string(),
+        });
+        config.backend.learning_rate = 3e-3;
+        config.backend.grad_clip = 0.5;
+        config.backend.warmup_steps = 500;
+        let mismatches = collect_resume_mismatches(&config, &manifest, &state);
+        assert!(
+            mismatches.iter().any(|m| m.contains("learning_rate")),
+            "missing learning_rate in {mismatches:?}"
+        );
+        assert!(
+            mismatches.iter().any(|m| m.contains("grad_clip")),
+            "missing grad_clip in {mismatches:?}"
+        );
+        assert!(
+            mismatches.iter().any(|m| m.contains("warmup_steps")),
+            "missing warmup_steps in {mismatches:?}"
+        );
+    }
 }
 
 fn iter_config(config: &TrainConfig) -> BatchIterConfig {
@@ -1558,6 +1684,72 @@ fn collect_resume_mismatches(
         mismatches.push(format!(
             "prefetch_queue: run={} current={}",
             manifest.prefetch_queue, config.runtime.prefetch_queue
+        ));
+    }
+    // Optim + schedule + refine weights. Float comparisons use exact
+    // equality because these are configured knobs, not computed values
+    // — a silent 1e-12 drift shouldn't happen and, if it does, we want
+    // to surface it rather than hide it behind a tolerance.
+    if !manifest.optimizer.is_empty() && manifest.optimizer != config.backend.optimizer {
+        mismatches.push(format!(
+            "optimizer: run={} current={}",
+            manifest.optimizer, config.backend.optimizer
+        ));
+    }
+    if !manifest.scheduler.is_empty() && manifest.scheduler != config.backend.scheduler {
+        mismatches.push(format!(
+            "scheduler: run={} current={}",
+            manifest.scheduler, config.backend.scheduler
+        ));
+    }
+    for (label, run, cur) in [
+        ("learning_rate", manifest.learning_rate, config.backend.learning_rate),
+        ("weight_decay", manifest.weight_decay, config.backend.weight_decay),
+        ("beta1", manifest.beta1, config.backend.beta1),
+        ("beta2", manifest.beta2, config.backend.beta2),
+        ("epsilon", manifest.epsilon, config.backend.epsilon),
+        ("min_lr_scale", manifest.min_lr_scale, config.backend.min_lr_scale),
+        ("refine_loss_weight", manifest.refine_loss_weight, config.backend.refine_loss_weight),
+        ("refine_mask_ratio", manifest.refine_mask_ratio, config.backend.refine_mask_ratio),
+        ("remask_loss_weight", manifest.remask_loss_weight, config.backend.remask_loss_weight),
+        ("stop_loss_weight", manifest.stop_loss_weight, config.backend.stop_loss_weight),
+        ("grad_clip", manifest.grad_clip, config.backend.grad_clip),
+    ] {
+        // Ignore the "manifest was created before this field existed"
+        // case (run==0.0) for keys with a natural default of 0.0. The
+        // optimizer / scheduler string checks above carry the real
+        // signal for pre-existing runs; this keeps us from spamming
+        // mismatches on a fresh upgrade.
+        if run != cur && !(run == 0.0 && manifest.optimizer.is_empty()) {
+            mismatches.push(format!("{label}: run={run} current={cur}"));
+        }
+    }
+    for (label, run, cur) in [
+        (
+            "warmup_steps",
+            manifest.warmup_steps,
+            config.backend.warmup_steps,
+        ),
+        (
+            "scheduler_total_steps",
+            manifest.scheduler_total_steps,
+            config.backend.scheduler_total_steps,
+        ),
+        (
+            "refine_warmup_steps",
+            manifest.refine_warmup_steps,
+            config.backend.refine_warmup_steps,
+        ),
+    ] {
+        if run != cur && !(run == 0 && manifest.optimizer.is_empty()) {
+            mismatches.push(format!("{label}: run={run} current={cur}"));
+        }
+    }
+    if !manifest.refine_source.is_empty() && manifest.refine_source != config.backend.refine_source
+    {
+        mismatches.push(format!(
+            "refine_source: run={} current={}",
+            manifest.refine_source, config.backend.refine_source
         ));
     }
     match state.last_checkpoint.as_deref() {

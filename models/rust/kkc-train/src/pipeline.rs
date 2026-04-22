@@ -59,6 +59,7 @@ impl AsyncCheckpointWriter {
     /// Submit a write. Blocks only if the queue is full. If the writer thread
     /// has already exited (poisoned), the send fails and the caller gets an
     /// error so the failure is not silently dropped.
+    #[allow(dead_code)]
     pub fn submit(&self, work: CheckpointWrite) -> Result<()> {
         let tx = self
             .tx
@@ -67,6 +68,13 @@ impl AsyncCheckpointWriter {
         tx.send(work)
             .map_err(|_| anyhow::anyhow!("checkpoint writer thread is gone"))?;
         Ok(())
+    }
+
+    /// Borrow a clone-able sender so owners (e.g. `TchCtcNatBackend`)
+    /// can drain bytes directly into the writer thread without having
+    /// to hold a reference to the full `AsyncCheckpointWriter`.
+    pub fn sender(&self) -> Option<SyncSender<CheckpointWrite>> {
+        self.tx.as_ref().cloned()
     }
 
     /// Close the channel and join the writer thread. Returns the number of
@@ -137,20 +145,27 @@ fn temp_suffix(path: &Path) -> String {
     }
 }
 
-/// Trait for anything that can hand the trainer its next batch. The GPU path
-/// will specialize this to a batch type that already lives on-device.
+/// Trait for anything that can hand the trainer its next batch. The GPU
+/// path (`gpu::batch::StagedBatchPipeline`) implements this so the tch
+/// backend can share the generic prefetch plumbing. In the default
+/// (no-cuda) build the trait is unused but kept in the public API so
+/// `gpu` module internals don't need to re-declare it behind a cfg.
+#[allow(dead_code)]
 pub trait BatchProducer {
     type Item;
     fn next_item(&mut self) -> Result<Option<Self::Item>>;
 }
 
 /// Thin wrapper so the existing `PrefetchedBatchIter` (which yields
-/// `PackedBatch` on CPU) plugs into the staged pipeline on builds without
-/// `cuda`.
+/// `PackedBatch` on CPU) plugs into the staged pipeline on builds
+/// without `cuda`. Used by integration tests; production build routes
+/// through the cuda-gated pipeline.
+#[allow(dead_code)]
 pub struct CpuStagedPipeline {
     inner: PrefetchedBatchIter,
 }
 
+#[allow(dead_code)]
 impl CpuStagedPipeline {
     pub fn new(inner: PrefetchedBatchIter) -> Self {
         Self { inner }

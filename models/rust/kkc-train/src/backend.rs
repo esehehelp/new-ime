@@ -67,6 +67,11 @@ pub struct BackendConfig {
     pub use_learned_stop: bool,
     #[serde(default = "default_mask_token_id")]
     pub mask_token_id: usize,
+    /// Global grad-norm clip. `0.0` disables clipping. Carried on the
+    /// config (instead of only the CLI flag) so the resume manifest can
+    /// detect silent changes between a run and its restart.
+    #[serde(default)]
+    pub grad_clip: f64,
 }
 
 impl Default for BackendConfig {
@@ -111,6 +116,7 @@ impl Default for BackendConfig {
             use_learned_remask: true,
             use_learned_stop: true,
             mask_token_id: MASK_ID as usize,
+            grad_clip: 0.0,
         }
     }
 }
@@ -173,6 +179,17 @@ pub trait TrainBackend {
     /// optimizer, since their `step` is a full training iteration.
     fn eval_step(&mut self, step: usize, batch: &PackedBatch) -> Result<TrainerStep> {
         self.step(step, batch)
+    }
+
+    /// Hook: wire an async checkpoint writer's sender into the backend
+    /// so its `save_checkpoint` bytes can be drained off-thread. CPU
+    /// backends ignore this (their save output is tiny and the sync
+    /// path already dominates nothing); the tch backend overrides to
+    /// store the sender and submit safetensors blobs through it.
+    fn attach_ckpt_sender(
+        &mut self,
+        _sender: std::sync::mpsc::SyncSender<crate::pipeline::CheckpointWrite>,
+    ) {
     }
 }
 
@@ -352,6 +369,13 @@ impl TrainBackend for BackendKind {
             BackendKind::Surrogate(inner) => inner.eval_step(step, batch),
             BackendKind::Ctc(inner) => inner.eval_step(step, batch),
         }
+    }
+
+    fn attach_ckpt_sender(
+        &mut self,
+        _sender: std::sync::mpsc::SyncSender<crate::pipeline::CheckpointWrite>,
+    ) {
+        // CPU backends don't benefit from async — their saves are small.
     }
 
     fn save_checkpoint(&self, path: &Path) -> Result<()> {
@@ -599,6 +623,7 @@ struct CollapsedProposal {
     min_margin: Vec<f64>,
 }
 
+#[allow(dead_code)] // fields read by CPU refine helpers not yet wired into `step`
 #[derive(Debug, Clone)]
 struct RefineForward {
     input_ids: Vec<usize>,
@@ -611,6 +636,7 @@ struct RefineForward {
     caches: Vec<nn::DecoderBlockCache>,
 }
 
+#[allow(dead_code)] // returned by `iterative_refine`, currently helper-only
 #[derive(Debug, Clone)]
 pub struct IterativeRefineResult {
     pub final_ids: Vec<usize>,
@@ -618,6 +644,12 @@ pub struct IterativeRefineResult {
     pub iterations: usize,
 }
 
+// The refine/iterative helpers below are future integration surface for
+// the CPU `ctc` backend — they mirror the Python reference and exist so
+// the `tch-ctc-nat` GPU port has a CPU parity oracle when we need one.
+// The current `step` method uses only a subset; warning suppression keeps
+// that state explicit instead of tripping unused-code lints.
+#[allow(dead_code)]
 impl CtcBackend {
     pub fn new(config: &BackendConfig) -> Self {
         let hidden = config.hidden_size.max(1);
@@ -1990,6 +2022,11 @@ impl TrainBackend for CtcBackend {
 /// splitmix64 hash. Deterministic per-seed scalar used for refine mask
 /// sampling so the same (step, row, position) triple always produces the
 /// same mask decision — important for resume + Python parity.
+///
+/// Currently referenced only by CPU refine helpers that are queued for
+/// wiring into `CtcBackend::step`. Warning suppression documents that
+/// this is intentional future integration surface, not stale code.
+#[allow(dead_code)]
 fn mix64(mut x: u64) -> u64 {
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);

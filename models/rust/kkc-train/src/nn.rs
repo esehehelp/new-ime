@@ -1,3 +1,10 @@
+// CPU transformer primitives. The CPU `ctc` backend only wires a
+// subset of these into `step()`; the rest are there as a parity oracle
+// for the tch port and for a fully-wired CPU training path we haven't
+// needed yet. Module-level allow keeps the integration surface visible
+// without lint noise.
+#![allow(dead_code)]
+
 use crate::backend::{DecoderBlock, EncoderBlock};
 
 #[derive(Debug, Clone)]

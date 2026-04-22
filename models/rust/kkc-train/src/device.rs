@@ -30,7 +30,9 @@ impl Device {
 
     /// Hint for the prefetch queue size. GPU training benefits from a bit more
     /// look-ahead because H2D copy can overlap with compute; CPU stays
-    /// conservative to keep RAM bounded.
+    /// conservative to keep RAM bounded. Exposed for config-less callers;
+    /// the TOML path overrides this directly.
+    #[allow(dead_code)]
     pub fn default_prefetch_queue(&self) -> usize {
         match self {
             Device::Cpu => 2,

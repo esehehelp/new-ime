@@ -12,12 +12,13 @@
 //! training — and tracked as a follow-up for full bit-for-bit resume.
 
 use super::backend::TchCtcNatBackend;
+use crate::pipeline::CheckpointWrite;
 use anyhow::{bail, Context, Result};
 use safetensors::tensor::{Dtype, TensorView};
 use safetensors::SafeTensors;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
 
@@ -134,12 +135,11 @@ fn tensor_to_bytes(tensor: &Tensor) -> Result<(Vec<u8>, Vec<usize>, Dtype)> {
     Ok((bytes, shape, dtype))
 }
 
-/// Serialize every variable (trainable and non-trainable) of `vs` into
-/// a safetensors file at `path`.
-pub fn save_var_store(vs: &VarStore, path: &Path) -> Result<()> {
-    // Materialize each tensor's bytes first, then hand views to safetensors.
-    // safetensors::serialize borrows the buffers, so they must out-live the
-    // call.
+/// Serialize every variable of `vs` into a safetensors byte vector.
+fn var_store_bytes(vs: &VarStore) -> Result<Vec<u8>> {
+    // Materialize each tensor's bytes first, then hand views to
+    // safetensors. safetensors::serialize borrows the buffers, so they
+    // must outlive the call.
     let vars = vs.variables();
     let mut buffers: BTreeMap<String, (Vec<u8>, Vec<usize>, Dtype)> = BTreeMap::new();
     for (name, tensor) in vars.into_iter() {
@@ -153,7 +153,13 @@ pub fn save_var_store(vs: &VarStore, path: &Path) -> Result<()> {
             Ok((name.clone(), view))
         })
         .collect::<Result<Vec<_>>>()?;
-    let bytes = safetensors::serialize(views, &None).context("safetensors serialize")?;
+    safetensors::serialize(views, &None).context("safetensors serialize")
+}
+
+/// Serialize every variable (trainable and non-trainable) of `vs` into
+/// a safetensors file at `path`.
+pub fn save_var_store(vs: &VarStore, path: &Path) -> Result<()> {
+    let bytes = var_store_bytes(vs)?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
@@ -236,10 +242,16 @@ fn trimmed_extension(anchor: &Path, suffix: &str) -> String {
 }
 
 /// Wire `TchCtcNatBackend` to the safetensors format.
+///
+/// If the backend has an async checkpoint sender attached, the
+/// safetensors + meta bytes are produced in memory and submitted to
+/// the writer thread — the calling training step returns immediately
+/// while the bytes land on disk in the background. Otherwise we fall
+/// back to atomic synchronous writes.
 pub fn save_backend(backend: &TchCtcNatBackend, anchor: &Path) -> Result<()> {
-    let weights = weights_path_for(anchor);
-    let meta = meta_path_for(anchor);
-    save_var_store(backend.var_store(), &weights)?;
+    let weights_path: PathBuf = weights_path_for(anchor);
+    let meta_path: PathBuf = meta_path_for(anchor);
+    let weights_bytes = var_store_bytes(backend.var_store())?;
     let meta_blob = CheckpointMeta {
         kind: "tch-ctc-nat".to_string(),
         step: backend.step_count(),
@@ -248,18 +260,37 @@ pub fn save_backend(backend: &TchCtcNatBackend, anchor: &Path) -> Result<()> {
         preset_hint: String::new(),
         vocab_size: backend.config().output_size as i64,
         hidden_size: backend.config().hidden_size as i64,
-        weights_file: weights
+        weights_file: weights_path
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string(),
         format_version: CHECKPOINT_FORMAT_VERSION,
     };
-    std::fs::write(
-        &meta,
-        serde_json::to_vec_pretty(&meta_blob).context("serialize checkpoint meta")?,
-    )
-    .with_context(|| format!("write {}", meta.display()))?;
+    let meta_bytes =
+        serde_json::to_vec_pretty(&meta_blob).context("serialize checkpoint meta")?;
+
+    if let Some(sender) = backend.ckpt_sender() {
+        sender
+            .send(CheckpointWrite {
+                path: weights_path.clone(),
+                bytes: weights_bytes,
+                sidecar: Some((meta_path.clone(), meta_bytes)),
+            })
+            .map_err(|_| anyhow::anyhow!("checkpoint writer thread is gone"))?;
+        return Ok(());
+    }
+
+    if let Some(parent) = weights_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
+    }
+    std::fs::write(&weights_path, weights_bytes)
+        .with_context(|| format!("write {}", weights_path.display()))?;
+    std::fs::write(&meta_path, meta_bytes)
+        .with_context(|| format!("write {}", meta_path.display()))?;
     Ok(())
 }
 
