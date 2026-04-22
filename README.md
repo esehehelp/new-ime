@@ -15,9 +15,8 @@
 既存の自己回帰モデル (zenz-v3.1 等) に対し、**並列生成アーキテクチャ** でレイテンシ削減と
 **1.58-bit 量子化** で極小サイズを狙う。
 
-- **モデル名**: `new-ime-model`
-  - `new-ime-model-90M`: 本命 (scratch h=640, L_enc=8, L_dec=8, CTC-NAT base ~97M + CVAE ~7M = ~104M、config: `configs/phase3_90m.yaml`)
-  - `new-ime-model-20M`: テスト/速度検証用 (h=384, L=6+6, CVAE 無効、config: `configs/phase3_20m.yaml`)
+- **モデル名**: `Suiko-v1-small`
+  - `Suiko-v1-small`: CTC-NATで高速推論，小型モデル
 - **Encoder**: scratch Transformer (事前学習は Step B 任意オプションで cl-tohoku/bert-base-japanese-char-v3 を MLM warm-up)
 - **Decoder**: Non-autoregressive Transformer (双方向 self-attention + cross-attention + FiLM 条件付け)
 - **出力**: CTC loss による並列デコード + Mask-CTC refinement
