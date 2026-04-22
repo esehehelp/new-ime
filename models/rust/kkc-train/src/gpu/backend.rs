@@ -282,6 +282,39 @@ mod tests {
         assert!(backend.last_loss().unwrap().is_finite());
     }
 
+    /// End-to-end convergence smoke: repeatedly training on a single
+    /// fixed batch with a working optimizer must drive the loss down.
+    /// This is the only sanity check we can get for the joint forward +
+    /// backward + optim loop without a fully wired training harness.
+    #[test]
+    fn tch_backend_with_optimizer_reduces_loss_on_fixed_batch() {
+        use crate::gpu::optim::TchOptimizer;
+        let cfg = BackendConfig {
+            kind: "tch-ctc-nat".to_string(),
+            learning_rate: 5e-2,
+            warmup_steps: 0,
+            scheduler_total_steps: 50,
+            min_lr_scale: 1.0, // disable decay; just train
+            weight_decay: 0.0,
+            ..tiny_config()
+        };
+        let mut backend = TchCtcNatBackend::new(&cfg, Device::Cpu).unwrap();
+        let mut opt = TchOptimizer::from_config(backend.var_store(), &cfg, 1.0).unwrap();
+        let packed = tiny_packed();
+
+        let first = backend.step(1, &packed).unwrap().loss;
+        opt.optimize(1);
+        for step in 2..=20 {
+            let _ = backend.step(step, &packed).unwrap();
+            opt.optimize(step);
+        }
+        let last = backend.last_loss().unwrap();
+        assert!(
+            last < first,
+            "loss did not decrease: first={first} last={last}"
+        );
+    }
+
     #[test]
     fn tch_backend_checkpoint_marker_round_trips() {
         let mut backend = TchCtcNatBackend::new(&tiny_config(), Device::Cpu).unwrap();
