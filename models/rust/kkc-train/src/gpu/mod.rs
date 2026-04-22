@@ -15,6 +15,7 @@
 pub mod backend;
 pub mod batch;
 pub mod ckpt;
+pub mod kd;
 pub mod layers;
 pub mod loss;
 pub mod model;
