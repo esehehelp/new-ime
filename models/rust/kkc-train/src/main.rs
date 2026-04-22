@@ -275,9 +275,21 @@ struct RunManifest {
     #[serde(default)]
     refine_source: String,
     #[serde(default)]
+    refine_iterations: usize,
+    #[serde(default)]
     remask_loss_weight: f64,
     #[serde(default)]
+    remask_threshold: f64,
+    #[serde(default)]
     stop_loss_weight: f64,
+    #[serde(default)]
+    stop_threshold: f64,
+    #[serde(default)]
+    confidence_fallback: f64,
+    #[serde(default)]
+    use_learned_remask: bool,
+    #[serde(default)]
+    use_learned_stop: bool,
     #[serde(default)]
     grad_clip: f64,
 }
@@ -664,8 +676,14 @@ fn init_run(config_path: &Path, output: &Path) -> Result<()> {
         refine_warmup_steps: config.backend.refine_warmup_steps,
         refine_mask_ratio: config.backend.refine_mask_ratio,
         refine_source: config.backend.refine_source.clone(),
+        refine_iterations: config.backend.refine_iterations,
         remask_loss_weight: config.backend.remask_loss_weight,
+        remask_threshold: config.backend.remask_threshold,
         stop_loss_weight: config.backend.stop_loss_weight,
+        stop_threshold: config.backend.stop_threshold,
+        confidence_fallback: config.backend.confidence_fallback,
+        use_learned_remask: config.backend.use_learned_remask,
+        use_learned_stop: config.backend.use_learned_stop,
         grad_clip: config.backend.grad_clip,
     };
     let manifest_path = output.join("run_manifest.json");
@@ -832,7 +850,7 @@ fn fit(
         config.backend.grad_clip
     };
     let mut backend: Box<dyn backend::TrainBackend> =
-        new_backend(&config.backend, device, effective_grad_clip)?;
+        new_backend(&config.backend, device, effective_grad_clip, /*with_optimizer=*/ true)?;
     let ckpt_writer = if async_ckpt_queue > 0 {
         Some(pipeline::AsyncCheckpointWriter::spawn(async_ckpt_queue))
     } else {
@@ -934,7 +952,10 @@ fn eval_command(
     }
     // Route through new_backend so the tch backend is reachable.
     // grad_clip=0.0 is safe here: eval_step never calls the optimizer.
-    let mut backend: Box<dyn backend::TrainBackend> = new_backend(&config.backend, device, 0.0)?;
+    // Eval path: no optimizer — `eval_step` is forward-only so the
+    // AdamW m/v buffers would just be wasted memory.
+    let mut backend: Box<dyn backend::TrainBackend> =
+        new_backend(&config.backend, device, 0.0, /*with_optimizer=*/ false)?;
     if let Some(run_dir) = run_dir {
         let state = read_state(&run_dir.join("trainer_state.json"))?;
         if let Some(entry) = last_checkpoint_entry(&state) {
@@ -1000,16 +1021,26 @@ fn eval_backend_dyn(
 /// stay within [`backend::BackendKind`]; `tch-ctc-nat` routes to the feature-
 /// gated tch backend. Other kinds with `device.is_cuda()` are rejected
 /// upfront so silent CPU execution on a GPU run never happens.
+/// Build the training backend for the configured kind and device.
+///
+/// `with_optimizer = true` is the training path — the tch backend
+/// allocates AdamW `(m, v)` buffers and returns a backend that will
+/// update weights inside `step`. `with_optimizer = false` is the eval
+/// path — no optim is attached, skipping the wasted allocation for
+/// read-only workloads like `eval_command`.
 fn new_backend(
     config: &backend::BackendConfig,
     device: Device,
     grad_clip: f64,
+    with_optimizer: bool,
 ) -> Result<Box<dyn backend::TrainBackend>> {
     #[cfg(feature = "cuda")]
     {
         if config.kind == "tch-ctc-nat" {
             let mut backend = gpu::TchCtcNatBackend::new(config, device)?;
-            backend.attach_optimizer(grad_clip)?;
+            if with_optimizer {
+                backend.attach_optimizer(grad_clip)?;
+            }
             return Ok(Box::new(backend));
         }
     }
@@ -1022,6 +1053,7 @@ fn new_backend(
         }
     }
     let _ = grad_clip; // honored only by tch-ctc-nat for now
+    let _ = with_optimizer; // CPU backends don't own an optimizer object
     if device.is_cuda() {
         anyhow::bail!(
             "backend `{}` has no CUDA path; choose `tch-ctc-nat` or run with --device cpu",
@@ -1300,8 +1332,14 @@ mod tests {
             refine_warmup_steps: 0,
             refine_mask_ratio: 0.3,
             refine_source: "target".to_string(),
+            refine_iterations: 1,
             remask_loss_weight: 0.0,
+            remask_threshold: 0.5,
             stop_loss_weight: 0.0,
+            stop_threshold: 0.5,
+            confidence_fallback: 0.5,
+            use_learned_remask: true,
+            use_learned_stop: true,
             grad_clip: 0.0,
         }
     }
@@ -1416,6 +1454,7 @@ mod tests {
     #[test]
     fn backend_sidecar_requirement_includes_ctc() {
         assert!(backend_kind_requires_sidecar("ctc"));
+        assert!(backend_kind_requires_sidecar("tch-ctc-nat"));
         assert!(!backend_kind_requires_sidecar("regular"));
     }
 
@@ -1500,6 +1539,41 @@ mod tests {
         config.backend.hidden_size += 1;
         let mismatches = collect_resume_mismatches(&config, &manifest, &state);
         assert!(mismatches.iter().any(|m| m.contains("backend_hidden_size")));
+    }
+
+    #[test]
+    fn resume_mismatch_detects_refine_iterations_and_thresholds() {
+        let dir = tempdir().unwrap();
+        let mut config = sample_config(dir.path());
+        let manifest = sample_manifest(dir.path());
+        let mut state = sample_state();
+        let checkpoint = dir.path().join("step_00000001.ckpt.json");
+        std::fs::write(&checkpoint, b"{}").unwrap();
+        state.last_checkpoint = Some(checkpoint.display().to_string());
+        state.checkpoints.push(CheckpointEntry {
+            step: 1,
+            epoch: 0,
+            checkpoint: checkpoint.display().to_string(),
+            metric: Some(1.0),
+            kind: "mock".to_string(),
+            metric_mode: "minimize".to_string(),
+        });
+        config.backend.refine_iterations = 3;
+        config.backend.remask_threshold = 0.8;
+        config.backend.use_learned_stop = false;
+        config.backend.confidence_fallback = 0.9;
+        let mismatches = collect_resume_mismatches(&config, &manifest, &state);
+        for key in [
+            "refine_iterations",
+            "remask_threshold",
+            "use_learned_stop",
+            "confidence_fallback",
+        ] {
+            assert!(
+                mismatches.iter().any(|m| m.contains(key)),
+                "missing {key} in {mismatches:?}"
+            );
+        }
     }
 
     #[test]
@@ -1714,7 +1788,10 @@ fn collect_resume_mismatches(
         ("refine_loss_weight", manifest.refine_loss_weight, config.backend.refine_loss_weight),
         ("refine_mask_ratio", manifest.refine_mask_ratio, config.backend.refine_mask_ratio),
         ("remask_loss_weight", manifest.remask_loss_weight, config.backend.remask_loss_weight),
+        ("remask_threshold", manifest.remask_threshold, config.backend.remask_threshold),
         ("stop_loss_weight", manifest.stop_loss_weight, config.backend.stop_loss_weight),
+        ("stop_threshold", manifest.stop_threshold, config.backend.stop_threshold),
+        ("confidence_fallback", manifest.confidence_fallback, config.backend.confidence_fallback),
         ("grad_clip", manifest.grad_clip, config.backend.grad_clip),
     ] {
         // Ignore the "manifest was created before this field existed"
@@ -1742,9 +1819,28 @@ fn collect_resume_mismatches(
             manifest.refine_warmup_steps,
             config.backend.refine_warmup_steps,
         ),
+        (
+            "refine_iterations",
+            manifest.refine_iterations,
+            config.backend.refine_iterations,
+        ),
     ] {
         if run != cur && !(run == 0 && manifest.optimizer.is_empty()) {
             mismatches.push(format!("{label}: run={run} current={cur}"));
+        }
+    }
+    if !manifest.optimizer.is_empty() {
+        if manifest.use_learned_remask != config.backend.use_learned_remask {
+            mismatches.push(format!(
+                "use_learned_remask: run={} current={}",
+                manifest.use_learned_remask, config.backend.use_learned_remask
+            ));
+        }
+        if manifest.use_learned_stop != config.backend.use_learned_stop {
+            mismatches.push(format!(
+                "use_learned_stop: run={} current={}",
+                manifest.use_learned_stop, config.backend.use_learned_stop
+            ));
         }
     }
     if !manifest.refine_source.is_empty() && manifest.refine_source != config.backend.refine_source
@@ -1789,8 +1885,16 @@ fn collect_resume_mismatches(
     mismatches
 }
 
+/// Kinds whose `<step>.ckpt.json` has a mandatory `<step>.backend.json`
+/// sibling. `check-resume` verifies this sibling's existence; a missing
+/// anchor is treated as a broken resume.
+///
+/// The tch backend is included because its anchor file carries the
+/// `CheckpointMeta` payload (step, loss, weights filename, format
+/// version) — without it, `load_backend` can't route to the
+/// `.weights.safetensors` sidecar and resume silently reinitializes.
 fn backend_kind_requires_sidecar(kind: &str) -> bool {
-    matches!(kind, "mock" | "toy" | "surrogate" | "ctc")
+    matches!(kind, "mock" | "toy" | "surrogate" | "ctc" | "tch-ctc-nat")
 }
 
 fn checkpoint_sidecar_path(checkpoint: &str, from_suffix: &str, to_suffix: &str) -> PathBuf {
