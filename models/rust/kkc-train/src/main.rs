@@ -1,14 +1,31 @@
+mod backend;
+mod ctc;
+mod device;
+mod nn;
+mod optim;
+mod pipeline;
+mod tensor;
+mod trainer;
+
+#[cfg(feature = "cuda")]
+mod gpu;
+
+use crate::backend::TrainBackend;
+use crate::device::Device;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kkc_data::{
     compile_jsonl_to_shard, inspect_shard_batches, BatchIter, BatchIterConfig, CompileOptions,
-    PrefetchedBatchIter, SequenceBudget,
+    PrefetchedBatchIter, SequenceBudget, ShardMetadata,
 };
 use kkc_model::{ctc_nat_preset, estimate_ctc_nat_resources, BatchShape, RuntimeAssumptions};
 use kkc_tokenizer::SharedCharTokenizer;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Instant;
+
+const MAX_SEQUENCE_U16: usize = u16::MAX as usize;
 
 #[derive(Parser)]
 #[command(
@@ -58,6 +75,69 @@ enum Command {
         #[arg(long)]
         output: PathBuf,
     },
+    RecordCheckpoint {
+        #[arg(long)]
+        run_dir: PathBuf,
+        #[arg(long)]
+        step: usize,
+        #[arg(long)]
+        epoch: usize,
+        #[arg(long)]
+        checkpoint: PathBuf,
+        #[arg(long)]
+        metric: Option<f64>,
+        #[arg(long, default_value = "regular")]
+        kind: String,
+        #[arg(long, default_value = "maximize")]
+        metric_mode: String,
+    },
+    ShowRun {
+        #[arg(long)]
+        run_dir: PathBuf,
+    },
+    CheckResume {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        run_dir: PathBuf,
+    },
+    Eval {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        run_dir: Option<PathBuf>,
+        #[arg(long)]
+        batches: Option<usize>,
+    },
+    Fit {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        run_dir: PathBuf,
+        #[arg(long, default_value_t = 100)]
+        steps: usize,
+        #[arg(long, default_value_t = 50)]
+        checkpoint_every: usize,
+        /// Compute device: `cpu`, `cuda`, or `cuda:N`. `cuda*` requires the
+        /// binary to have been built with `--features cuda`.
+        #[arg(long, default_value = "cpu")]
+        device: String,
+        /// Bound on how many checkpoint writes can be in flight before the
+        /// training loop blocks. 0 disables the async writer and falls back
+        /// to the synchronous path.
+        #[arg(long, default_value_t = 2)]
+        async_ckpt_queue: usize,
+    },
+    MockFit {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        run_dir: PathBuf,
+        #[arg(long, default_value_t = 100)]
+        steps: usize,
+        #[arg(long, default_value_t = 50)]
+        checkpoint_every: usize,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,12 +146,18 @@ struct TrainConfig {
     tokenizer: TokenizerConfig,
     model: ModelConfig,
     runtime: RuntimeConfig,
+    #[serde(default)]
+    eval: EvalSection,
+    #[serde(default)]
+    backend: backend::BackendConfig,
     train: TrainSection,
 }
 
 #[derive(Debug, Deserialize)]
 struct DatasetConfig {
     train_shard: PathBuf,
+    #[serde(default)]
+    eval_shard: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,13 +199,27 @@ struct TrainSection {
     block_rows: usize,
     #[serde(default = "default_seed")]
     seed: u64,
+    #[serde(default = "default_checkpoint_keep_last")]
+    checkpoint_keep_last: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Default)]
+struct EvalSection {
+    shard: Option<PathBuf>,
+    #[serde(default)]
+    batches: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct RunManifest {
     train_shard: String,
     model_preset: String,
     vocab_size: usize,
+    backend_kind: String,
+    backend_hidden_size: usize,
+    backend_output_size: usize,
+    backend_blank_id: usize,
+    backend_max_positions: usize,
     batch_size: usize,
     max_input_len: usize,
     max_target_len: usize,
@@ -135,6 +235,28 @@ struct RunManifest {
     logits_bytes: usize,
     total_step_bytes: usize,
     estimated_step_upper_bound: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CheckpointEntry {
+    step: usize,
+    epoch: usize,
+    checkpoint: String,
+    metric: Option<f64>,
+    kind: String,
+    metric_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrainerState {
+    step: usize,
+    epoch: usize,
+    data_cursor: usize,
+    best_metric: Option<f64>,
+    #[serde(default)]
+    best_checkpoint: Option<String>,
+    last_checkpoint: Option<String>,
+    checkpoints: Vec<CheckpointEntry>,
 }
 
 fn default_max_kanji() -> u32 {
@@ -155,6 +277,10 @@ fn default_block_rows() -> usize {
 
 fn default_seed() -> u64 {
     42
+}
+
+fn default_checkpoint_keep_last() -> usize {
+    2
 }
 
 fn default_param_dtype_bytes() -> usize {
@@ -187,16 +313,61 @@ fn main() -> Result<()> {
         Command::ScanEpoch { config } => scan_epoch(&config),
         Command::DryTrain { config, steps } => dry_train(&config, steps),
         Command::InitRun { config, output } => init_run(&config, &output),
+        Command::RecordCheckpoint {
+            run_dir,
+            step,
+            epoch,
+            checkpoint,
+            metric,
+            kind,
+            metric_mode,
+        } => record_checkpoint(
+            &run_dir,
+            step,
+            epoch,
+            &checkpoint,
+            metric,
+            &kind,
+            &metric_mode,
+        ),
+        Command::ShowRun { run_dir } => show_run(&run_dir),
+        Command::CheckResume { config, run_dir } => check_resume(&config, &run_dir),
+        Command::Eval {
+            config,
+            run_dir,
+            batches,
+        } => eval_command(&config, run_dir.as_deref(), batches),
+        Command::Fit {
+            config,
+            run_dir,
+            steps,
+            checkpoint_every,
+            device,
+            async_ckpt_queue,
+        } => {
+            let device = Device::from_str(&device)?;
+            device::require_cuda_built(device)?;
+            fit(
+                &config,
+                &run_dir,
+                steps,
+                checkpoint_every,
+                device,
+                async_ckpt_queue,
+            )
+        }
+        Command::MockFit {
+            config,
+            run_dir,
+            steps,
+            checkpoint_every,
+        } => fit(&config, &run_dir, steps, checkpoint_every, Device::Cpu, 0),
     }
 }
 
 fn plan(config_path: &Path) -> Result<()> {
     let config = load_config(config_path)?;
-    let shard_stats = inspect_shard_batches(
-        &config.dataset.train_shard,
-        iter_config(&config),
-        8,
-    )?;
+    let shard_stats = inspect_shard_batches(&config.dataset.train_shard, iter_config(&config), 8)?;
     let plan = sequence_budget(&config).estimate();
     let estimate = model_estimate(&config)?;
     println!("train shard: {}", config.dataset.train_shard.display());
@@ -230,6 +401,16 @@ fn plan(config_path: &Path) -> Result<()> {
     println!("block_rows: {}", config.train.block_rows);
     println!("seed: {}", config.train.seed);
     println!("prefetch_queue: {}", config.runtime.prefetch_queue);
+    println!("backend_kind: {}", config.backend.kind);
+    println!(
+        "optimizer: kind={} scheduler={} lr={} weight_decay={} warmup_steps={} total_steps={}",
+        config.backend.optimizer,
+        config.backend.scheduler,
+        config.backend.learning_rate,
+        config.backend.weight_decay,
+        config.backend.warmup_steps,
+        config.backend.scheduler_total_steps
+    );
     println!(
         "model bytes: params={} grads={} optimizer={} activations={} logits={} total_step={}",
         estimate.parameter_bytes,
@@ -388,6 +569,11 @@ fn init_run(config_path: &Path, output: &Path) -> Result<()> {
         train_shard: config.dataset.train_shard.display().to_string(),
         model_preset: config.model.preset.clone(),
         vocab_size: config.tokenizer.vocab_size,
+        backend_kind: config.backend.kind.clone(),
+        backend_hidden_size: config.backend.hidden_size,
+        backend_output_size: config.backend.output_size,
+        backend_blank_id: config.backend.blank_id,
+        backend_max_positions: config.backend.max_positions,
         batch_size: config.train.batch_size,
         max_input_len: config.train.max_input_len,
         max_target_len: config.train.max_target_len,
@@ -412,21 +598,819 @@ fn init_run(config_path: &Path, output: &Path) -> Result<()> {
     )
     .with_context(|| format!("write {}", manifest_path.display()))?;
     let state_path = output.join("trainer_state.json");
-    std::fs::write(
+    write_state(
         &state_path,
-        br#"{"step":0,"epoch":0,"best_metric":null,"last_checkpoint":null}"#,
-    )
-    .with_context(|| format!("write {}", state_path.display()))?;
+        &TrainerState {
+            step: 0,
+            epoch: 0,
+            data_cursor: 0,
+            best_metric: None,
+            best_checkpoint: None,
+            last_checkpoint: None,
+            checkpoints: Vec::new(),
+        },
+    )?;
     println!("run dir: {}", output.display());
     println!("manifest: {}", manifest_path.display());
     println!("trainer_state: {}", state_path.display());
     Ok(())
 }
 
+fn record_checkpoint(
+    run_dir: &Path,
+    step: usize,
+    epoch: usize,
+    checkpoint: &Path,
+    metric: Option<f64>,
+    kind: &str,
+    metric_mode: &str,
+) -> Result<()> {
+    let state_path = run_dir.join("trainer_state.json");
+    let manifest = read_manifest(&run_dir.join("run_manifest.json"))?;
+    let mut state = read_state(&state_path)?;
+    if !checkpoint.exists() {
+        anyhow::bail!("checkpoint does not exist: {}", checkpoint.display());
+    }
+    let metric_mode = parse_metric_mode(metric_mode)?;
+    let checkpoint_str = checkpoint.display().to_string();
+    state.step = step;
+    state.epoch = epoch;
+    state.data_cursor = step.saturating_mul(manifest.batch_size);
+    state.last_checkpoint = Some(checkpoint_str.clone());
+    if let Some(metric_value) = metric {
+        state.best_metric = match state.best_metric {
+            Some(current) if !metric_mode.is_better(metric_value, current) => Some(current),
+            _ => Some(metric_value),
+        };
+    }
+    state.checkpoints.push(CheckpointEntry {
+        step,
+        epoch,
+        checkpoint: checkpoint_str,
+        metric,
+        kind: kind.to_string(),
+        metric_mode: metric_mode.as_str().to_string(),
+    });
+    write_state(&state_path, &state)?;
+    println!("updated trainer state: {}", state_path.display());
+    println!("step: {}", state.step);
+    println!("epoch: {}", state.epoch);
+    println!("data_cursor: {}", state.data_cursor);
+    println!("checkpoints: {}", state.checkpoints.len());
+    Ok(())
+}
+
+fn show_run(run_dir: &Path) -> Result<()> {
+    let manifest_path = run_dir.join("run_manifest.json");
+    let state_path = run_dir.join("trainer_state.json");
+    let manifest = read_manifest(&manifest_path)?;
+    let state = read_state(&state_path)?;
+    println!("run_dir: {}", run_dir.display());
+    println!("train_shard: {}", manifest.train_shard);
+    println!("model_preset: {}", manifest.model_preset);
+    println!("vocab_size: {}", manifest.vocab_size);
+    println!("batch_size: {}", manifest.batch_size);
+    println!("backend_kind: {}", manifest.backend_kind);
+    println!("step: {}", state.step);
+    println!("epoch: {}", state.epoch);
+    println!("data_cursor: {}", state.data_cursor);
+    println!(
+        "best_metric: {}",
+        state
+            .best_metric
+            .map(|v| format!("{v:.6}"))
+            .unwrap_or_else(|| "null".to_string())
+    );
+    println!(
+        "last_checkpoint: {}",
+        state.last_checkpoint.as_deref().unwrap_or("null")
+    );
+    println!(
+        "best_checkpoint: {}",
+        state.best_checkpoint.as_deref().unwrap_or("null")
+    );
+    println!("checkpoint_entries: {}", state.checkpoints.len());
+    Ok(())
+}
+
+fn check_resume(config_path: &Path, run_dir: &Path) -> Result<()> {
+    let config = load_config(config_path)?;
+    let manifest = read_manifest(&run_dir.join("run_manifest.json"))?;
+    let state = read_state(&run_dir.join("trainer_state.json"))?;
+    let mismatches = collect_resume_mismatches(&config, &manifest, &state);
+    if mismatches.is_empty() {
+        println!("resume_ok: true");
+        println!("step: {}", state.step);
+        println!("epoch: {}", state.epoch);
+        println!("data_cursor: {}", state.data_cursor);
+        println!(
+            "last_checkpoint: {}",
+            state.last_checkpoint.as_deref().unwrap_or("null")
+        );
+    } else {
+        println!("resume_ok: false");
+        for mismatch in mismatches {
+            println!("mismatch: {}", mismatch);
+        }
+    }
+    Ok(())
+}
+
+fn fit(
+    config_path: &Path,
+    run_dir: &Path,
+    steps: usize,
+    checkpoint_every: usize,
+    device: Device,
+    async_ckpt_queue: usize,
+) -> Result<()> {
+    let config = load_config(config_path)?;
+    let manifest = read_manifest(&run_dir.join("run_manifest.json"))?;
+    let state_path = run_dir.join("trainer_state.json");
+    let mut state = read_state(&state_path)?;
+    let mismatches = collect_resume_mismatches(&config, &manifest, &state);
+    if !mismatches.is_empty() && state.step > 0 {
+        anyhow::bail!("run is not resume-compatible; use check-resume first");
+    }
+    if device.is_cuda() && !device::backend_supports_cuda(&config.backend.kind) {
+        anyhow::bail!(
+            "backend kind `{}` cannot run on {device}; use `tch-ctc-nat` or pick a CPU backend",
+            config.backend.kind,
+        );
+    }
+    let mut source = open_batch_source_at_cursor(&config, state.data_cursor)?;
+    let mut backend: Box<dyn backend::TrainBackend> = new_backend(&config.backend, device)?;
+    if let Some(entry) = last_checkpoint_entry(&state) {
+        if entry.kind == backend.kind() {
+            let backend_checkpoint =
+                checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".backend.json");
+            if backend_checkpoint.exists() {
+                backend.load_checkpoint(&backend_checkpoint)?;
+            }
+        }
+    }
+    let target_step = state.step.saturating_add(steps);
+    let ckpt_writer = if async_ckpt_queue > 0 {
+        Some(pipeline::AsyncCheckpointWriter::spawn(async_ckpt_queue))
+    } else {
+        None
+    };
+    let summary = trainer::run_training_loop(
+        &mut source,
+        backend.as_mut(),
+        &mut state,
+        run_dir,
+        trainer::TrainerLoopConfig {
+            target_step,
+            checkpoint_every,
+            epoch_steps: estimate_epoch_steps(&config)?,
+            grad_accum: config.train.grad_accum,
+            checkpoint_keep_last: config.train.checkpoint_keep_last,
+        },
+    )?;
+    // Surface any deferred writer I/O errors before we claim success.
+    if let Some(writer) = ckpt_writer {
+        let flushed = writer.finish()?;
+        println!("fit_async_ckpt_flushed: {flushed}");
+    }
+    let eval_loss = if config.eval.batches > 0 {
+        Some(eval_backend_dyn(
+            &config,
+            backend.as_mut(),
+            config.eval.batches,
+        )?)
+    } else {
+        None
+    };
+    if let Some(eval_loss) = eval_loss {
+        update_last_checkpoint_metric(&mut state, eval_loss, "minimize");
+    }
+    write_state(&state_path, &state)?;
+    println!("fit_backend: {}", config.backend.kind);
+    println!("fit_steps: {}", summary.final_step);
+    println!("fit_epoch: {}", summary.final_epoch);
+    println!("fit_elapsed_sec: {:.6}", summary.elapsed_sec);
+    println!("fit_steps_per_sec: {:.2}", summary.steps_per_sec);
+    println!(
+        "fit_last_loss: {}",
+        summary
+            .last_loss
+            .map(|v| format!("{v:.6}"))
+            .unwrap_or_else(|| "null".to_string())
+    );
+    println!(
+        "fit_last_checkpoint: {}",
+        state.last_checkpoint.as_deref().unwrap_or("null")
+    );
+    println!(
+        "fit_eval_loss: {}",
+        eval_loss
+            .map(|v| format!("{v:.6}"))
+            .unwrap_or_else(|| "null".to_string())
+    );
+    Ok(())
+}
+
+fn eval_command(config_path: &Path, run_dir: Option<&Path>, batches: Option<usize>) -> Result<()> {
+    let config = load_config(config_path)?;
+    let mut backend = backend::BackendKind::new(&config.backend)?;
+    if let Some(run_dir) = run_dir {
+        let state = read_state(&run_dir.join("trainer_state.json"))?;
+        if let Some(entry) = last_checkpoint_entry(&state) {
+            if entry.kind == config.backend.kind {
+                let backend_checkpoint =
+                    checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".backend.json");
+                if backend_checkpoint.exists() {
+                    backend.load_checkpoint(&backend_checkpoint)?;
+                }
+            }
+        }
+    }
+    let batches = batches.unwrap_or(config.eval.batches.max(1));
+    let loss = eval_backend(&config, &backend, batches)?;
+    println!("eval_backend: {}", config.backend.kind);
+    println!("eval_batches: {}", batches);
+    println!("eval_loss: {:.6}", loss);
+    Ok(())
+}
+
 fn load_config(config_path: &Path) -> Result<TrainConfig> {
     let config_text = std::fs::read_to_string(config_path)
         .with_context(|| format!("read config {}", config_path.display()))?;
-    toml::from_str(&config_text).context("parse train config")
+    let config: TrainConfig = toml::from_str(&config_text).context("parse train config")?;
+    validate_config(&config)?;
+    Ok(config)
+}
+
+fn eval_backend(
+    config: &TrainConfig,
+    backend: &backend::BackendKind,
+    batches: usize,
+) -> Result<f64> {
+    let eval_path = config
+        .eval
+        .shard
+        .as_ref()
+        .or(config.dataset.eval_shard.as_ref())
+        .unwrap_or(&config.dataset.train_shard);
+    let mut source = open_eval_batch_source(config, eval_path)?;
+    let mut eval_backend = backend.clone();
+    let mut total_loss = 0.0;
+    let mut seen = 0usize;
+    for _ in 0..batches.max(1) {
+        let Some(batch) = source.next_batch()? else {
+            break;
+        };
+        let step = eval_backend.step(1, &batch)?;
+        total_loss += step.loss;
+        seen += 1;
+    }
+    if seen == 0 {
+        return Ok(0.0);
+    }
+    Ok(total_loss / seen as f64)
+}
+
+/// Eval path that operates on a trait object so the tch backend (which is
+/// not part of the `BackendKind` enum) can share the same driver. Unlike
+/// [`eval_backend`] this does not clone, so it temporarily mutates backend
+/// state; acceptable for the skeleton where the tch step is a no-op
+/// placeholder. When the real forward lands we will add a proper eval mode
+/// that disables grad updates.
+fn eval_backend_dyn(
+    config: &TrainConfig,
+    backend: &mut dyn backend::TrainBackend,
+    batches: usize,
+) -> Result<f64> {
+    let eval_path = config
+        .eval
+        .shard
+        .as_ref()
+        .or(config.dataset.eval_shard.as_ref())
+        .unwrap_or(&config.dataset.train_shard);
+    let mut source = open_eval_batch_source(config, eval_path)?;
+    let mut total_loss = 0.0;
+    let mut seen = 0usize;
+    for _ in 0..batches.max(1) {
+        let Some(batch) = source.next_batch()? else {
+            break;
+        };
+        let step = backend.step(1, &batch)?;
+        total_loss += step.loss;
+        seen += 1;
+    }
+    if seen == 0 {
+        return Ok(0.0);
+    }
+    Ok(total_loss / seen as f64)
+}
+
+/// Build the training backend for the configured kind and device. CPU kinds
+/// stay within [`backend::BackendKind`]; `tch-ctc-nat` routes to the feature-
+/// gated tch backend. Other kinds with `device.is_cuda()` are rejected
+/// upfront so silent CPU execution on a GPU run never happens.
+fn new_backend(
+    config: &backend::BackendConfig,
+    device: Device,
+) -> Result<Box<dyn backend::TrainBackend>> {
+    #[cfg(feature = "cuda")]
+    {
+        if config.kind == "tch-ctc-nat" {
+            return Ok(Box::new(gpu::TchCtcNatBackend::new(config, device)?));
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        if config.kind == "tch-ctc-nat" {
+            anyhow::bail!(
+                "backend `tch-ctc-nat` requires building kkc-train with `--features cuda`",
+            );
+        }
+    }
+    if device.is_cuda() {
+        anyhow::bail!(
+            "backend `{}` has no CUDA path; choose `tch-ctc-nat` or run with --device cpu",
+            config.kind,
+        );
+    }
+    Ok(Box::new(backend::BackendKind::new(config)?))
+}
+
+fn read_manifest(path: &Path) -> Result<RunManifest> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
+}
+
+fn update_last_checkpoint_metric(state: &mut TrainerState, metric: f64, metric_mode: &str) {
+    let Some(last_checkpoint) = state.last_checkpoint.clone() else {
+        return;
+    };
+    if let Some(entry) = state
+        .checkpoints
+        .iter_mut()
+        .rev()
+        .find(|entry| entry.checkpoint == last_checkpoint)
+    {
+        entry.metric = Some(metric);
+        entry.metric_mode = metric_mode.to_string();
+    }
+    let better = match state.best_metric {
+        Some(current) => metric < current,
+        None => true,
+    };
+    if better {
+        state.best_metric = Some(metric);
+        state.best_checkpoint = Some(last_checkpoint);
+    }
+}
+
+fn read_state(path: &Path) -> Result<TrainerState> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
+}
+
+fn write_state(path: &Path, state: &TrainerState) -> Result<()> {
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(state).context("serialize trainer state")?,
+    )
+    .with_context(|| format!("write {}", path.display()))
+}
+
+fn read_shard_metadata(path: &Path) -> Result<Option<ShardMetadata>> {
+    let sidecar = PathBuf::from(format!("{}.meta.json", path.display()));
+    if !sidecar.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&sidecar).with_context(|| format!("read {}", sidecar.display()))?;
+    let metadata =
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", sidecar.display()))?;
+    Ok(Some(metadata))
+}
+
+fn validate_config(config: &TrainConfig) -> Result<()> {
+    if config.train.max_input_len > MAX_SEQUENCE_U16 {
+        anyhow::bail!(
+            "max_input_len {} exceeds supported limit {}",
+            config.train.max_input_len,
+            MAX_SEQUENCE_U16
+        );
+    }
+    if config.train.max_target_len > MAX_SEQUENCE_U16 {
+        anyhow::bail!(
+            "max_target_len {} exceeds supported limit {}",
+            config.train.max_target_len,
+            MAX_SEQUENCE_U16
+        );
+    }
+    if config.backend.learning_rate <= 0.0 {
+        anyhow::bail!("backend.learning_rate must be > 0");
+    }
+    if config.backend.init_scale <= 0.0 {
+        anyhow::bail!("backend.init_scale must be > 0");
+    }
+    if config.backend.parameter_count == 0 {
+        anyhow::bail!("backend.parameter_count must be > 0");
+    }
+    if config.backend.hidden_size == 0 {
+        anyhow::bail!("backend.hidden_size must be > 0");
+    }
+    if config.backend.encoder_layers == 0 {
+        anyhow::bail!("backend.encoder_layers must be > 0");
+    }
+    if config.backend.num_heads == 0 {
+        anyhow::bail!("backend.num_heads must be > 0");
+    }
+    if config.backend.hidden_size % config.backend.num_heads != 0 {
+        anyhow::bail!("backend.hidden_size must be divisible by backend.num_heads");
+    }
+    if config.backend.ffn_size < config.backend.hidden_size {
+        anyhow::bail!("backend.ffn_size must be >= backend.hidden_size");
+    }
+    if config.backend.decoder_layers == 0 {
+        anyhow::bail!("backend.decoder_layers must be > 0");
+    }
+    if config.backend.decoder_heads == 0 {
+        anyhow::bail!("backend.decoder_heads must be > 0");
+    }
+    if config.backend.hidden_size % config.backend.decoder_heads != 0 {
+        anyhow::bail!("backend.hidden_size must be divisible by backend.decoder_heads");
+    }
+    if config.backend.decoder_ffn_size < config.backend.hidden_size {
+        anyhow::bail!("backend.decoder_ffn_size must be >= backend.hidden_size");
+    }
+    if config.backend.output_size < 2 {
+        anyhow::bail!("backend.output_size must be >= 2");
+    }
+    if config.backend.max_positions == 0 {
+        anyhow::bail!("backend.max_positions must be > 0");
+    }
+    if config.backend.blank_id >= config.backend.output_size {
+        anyhow::bail!("backend.blank_id must be < backend.output_size");
+    }
+    if config.backend.kind == "ctc" && config.backend.output_size != config.tokenizer.vocab_size {
+        anyhow::bail!(
+            "backend.output_size ({}) must match tokenizer.vocab_size ({}) for ctc backend",
+            config.backend.output_size,
+            config.tokenizer.vocab_size
+        );
+    }
+    if let Some(metadata) = read_shard_metadata(&config.dataset.train_shard)? {
+        if metadata.vocab_size != config.tokenizer.vocab_size {
+            anyhow::bail!(
+                "train shard metadata vocab_size ({}) does not match tokenizer.vocab_size ({}) for {}. Recompile the shard or point the config at the matching tokenizer.",
+                metadata.vocab_size,
+                config.tokenizer.vocab_size,
+                config.dataset.train_shard.display()
+            );
+        }
+        if config.backend.kind == "ctc" && metadata.vocab_size != config.backend.output_size {
+            anyhow::bail!(
+                "train shard metadata vocab_size ({}) does not match backend.output_size ({}) for {}. Recompile the shard or update the config.",
+                metadata.vocab_size,
+                config.backend.output_size,
+                config.dataset.train_shard.display()
+            );
+        }
+        if metadata.max_reading_tokens > config.train.max_input_len {
+            anyhow::bail!(
+                "train shard metadata max_reading_tokens ({}) exceeds train.max_input_len ({}) for {}",
+                metadata.max_reading_tokens,
+                config.train.max_input_len,
+                config.dataset.train_shard.display()
+            );
+        }
+        if metadata.max_surface_tokens > config.train.max_target_len {
+            anyhow::bail!(
+                "train shard metadata max_surface_tokens ({}) exceeds train.max_target_len ({}) for {}",
+                metadata.max_surface_tokens,
+                config.train.max_target_len,
+                config.dataset.train_shard.display()
+            );
+        }
+    }
+    let _ = crate::optim::OptimizerState::new(&config.backend)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum MetricMode {
+    Maximize,
+    Minimize,
+}
+
+impl MetricMode {
+    fn is_better(self, candidate: f64, current: f64) -> bool {
+        match self {
+            MetricMode::Maximize => candidate > current,
+            MetricMode::Minimize => candidate < current,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            MetricMode::Maximize => "maximize",
+            MetricMode::Minimize => "minimize",
+        }
+    }
+}
+
+fn parse_metric_mode(value: &str) -> Result<MetricMode> {
+    match value {
+        "maximize" => Ok(MetricMode::Maximize),
+        "minimize" => Ok(MetricMode::Minimize),
+        other => anyhow::bail!("unknown metric_mode: {}", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn sample_config(run_dir: &Path) -> TrainConfig {
+        TrainConfig {
+            dataset: DatasetConfig {
+                train_shard: run_dir.join("train.kkc"),
+                eval_shard: None,
+            },
+            tokenizer: TokenizerConfig {
+                path: None,
+                max_kanji: 6000,
+                vocab_size: 4801,
+            },
+            model: ModelConfig {
+                preset: "phase3_20m".to_string(),
+            },
+            runtime: RuntimeConfig {
+                param_dtype_bytes: 2,
+                grad_dtype_bytes: 4,
+                adam_state_bytes: 8,
+                activation_dtype_bytes: 2,
+                prefetch_queue: 0,
+            },
+            eval: EvalSection::default(),
+            backend: backend::BackendConfig {
+                kind: "mock".to_string(),
+                optimizer: "adamw".to_string(),
+                scheduler: "constant".to_string(),
+                learning_rate: 1e-3,
+                init_scale: 1e-2,
+                weight_decay: 0.0,
+                momentum: 0.9,
+                beta1: 0.9,
+                beta2: 0.999,
+                epsilon: 1e-8,
+                warmup_steps: 0,
+                scheduler_total_steps: 0,
+                min_lr_scale: 0.1,
+                parameter_count: 16,
+                hidden_size: 32,
+                encoder_layers: 2,
+                num_heads: 4,
+                ffn_size: 128,
+                decoder_layers: 2,
+                decoder_heads: 4,
+                decoder_ffn_size: 128,
+                output_size: 512,
+                blank_id: 4,
+                max_positions: 128,
+            },
+            train: TrainSection {
+                batch_size: 32,
+                max_input_len: 128,
+                max_target_len: 128,
+                grad_accum: 4,
+                block_rows: 4096,
+                seed: 42,
+                checkpoint_keep_last: 2,
+            },
+        }
+    }
+
+    fn sample_manifest(run_dir: &Path) -> RunManifest {
+        RunManifest {
+            train_shard: run_dir.join("train.kkc").display().to_string(),
+            model_preset: "phase3_20m".to_string(),
+            vocab_size: 4801,
+            backend_kind: "mock".to_string(),
+            backend_hidden_size: 32,
+            backend_output_size: 512,
+            backend_blank_id: 4,
+            backend_max_positions: 128,
+            batch_size: 32,
+            max_input_len: 128,
+            max_target_len: 128,
+            grad_accum: 4,
+            block_rows: 4096,
+            seed: 42,
+            prefetch_queue: 0,
+            parameter_count: 1,
+            parameter_bytes: 2,
+            gradient_bytes: 4,
+            optimizer_bytes: 8,
+            activation_bytes: 16,
+            logits_bytes: 8,
+            total_step_bytes: 30,
+            estimated_step_upper_bound: 64,
+        }
+    }
+
+    fn sample_state() -> TrainerState {
+        TrainerState {
+            step: 0,
+            epoch: 0,
+            data_cursor: 0,
+            best_metric: None,
+            best_checkpoint: None,
+            last_checkpoint: None,
+            checkpoints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn validate_config_rejects_lengths_over_u16() {
+        let dir = tempdir().unwrap();
+        let mut config = sample_config(dir.path());
+        config.train.max_input_len = MAX_SEQUENCE_U16 + 1;
+        assert!(validate_config(&config).is_err());
+
+        config.train.max_input_len = 128;
+        config.train.max_target_len = MAX_SEQUENCE_U16 + 1;
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn metric_mode_minimize_picks_lower_value() {
+        let mode = parse_metric_mode("minimize").unwrap();
+        assert!(mode.is_better(0.1, 0.2));
+        assert!(!mode.is_better(0.3, 0.2));
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_backend_settings() {
+        let dir = tempdir().unwrap();
+        let mut config = sample_config(dir.path());
+        config.backend.learning_rate = 0.0;
+        assert!(validate_config(&config).is_err());
+
+        config.backend.learning_rate = 1e-3;
+        config.backend.parameter_count = 0;
+        assert!(validate_config(&config).is_err());
+
+        config.backend.parameter_count = 16;
+        config.backend.hidden_size = 0;
+        assert!(validate_config(&config).is_err());
+
+        config.backend.hidden_size = 32;
+        config.backend.output_size = 1;
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn validate_config_rejects_shard_metadata_vocab_mismatch() {
+        let dir = tempdir().unwrap();
+        let config = sample_config(dir.path());
+        std::fs::write(&config.dataset.train_shard, []).unwrap();
+        std::fs::write(
+            format!("{}.meta.json", config.dataset.train_shard.display()),
+            r#"{
+  "shard_version": 1,
+  "row_count": 1,
+  "max_context_chars": 40,
+  "max_reading_tokens": 8,
+  "max_surface_tokens": 8,
+  "vocab_size": 6653,
+  "sources": { "test": 1 }
+}"#,
+        )
+        .unwrap();
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(err.contains("metadata vocab_size"));
+    }
+
+    #[test]
+    fn write_and_read_state_round_trip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("trainer_state.json");
+        let mut state = sample_state();
+        state.last_checkpoint = Some("foo.ckpt".to_string());
+        state.checkpoints.push(CheckpointEntry {
+            step: 10,
+            epoch: 1,
+            checkpoint: "foo.ckpt".to_string(),
+            metric: Some(0.5),
+            kind: "regular".to_string(),
+            metric_mode: "maximize".to_string(),
+        });
+        write_state(&path, &state).unwrap();
+        let loaded = read_state(&path).unwrap();
+        assert_eq!(loaded.step, state.step);
+        assert_eq!(loaded.last_checkpoint, state.last_checkpoint);
+        assert_eq!(loaded.checkpoints.len(), 1);
+    }
+
+    #[test]
+    fn checkpoint_sidecar_path_rewrites_mock_suffix() {
+        let path = checkpoint_sidecar_path(
+            "D:/tmp/mock_step_00000010.ckpt.json",
+            ".ckpt.json",
+            ".backend.json",
+        );
+        assert_eq!(
+            path.file_name().and_then(|s| s.to_str()),
+            Some("mock_step_00000010.backend.json")
+        );
+    }
+
+    #[test]
+    fn backend_sidecar_requirement_includes_ctc() {
+        assert!(backend_kind_requires_sidecar("ctc"));
+        assert!(!backend_kind_requires_sidecar("regular"));
+    }
+
+    #[test]
+    fn resume_requires_existing_checkpoint() {
+        let dir = tempdir().unwrap();
+        let run_dir = dir.path();
+        let manifest_path = run_dir.join("run_manifest.json");
+        let state_path = run_dir.join("trainer_state.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&sample_manifest(run_dir)).unwrap(),
+        )
+        .unwrap();
+        write_state(&state_path, &sample_state()).unwrap();
+
+        let state = read_state(&state_path).unwrap();
+        assert!(state.last_checkpoint.is_none());
+    }
+
+    #[test]
+    fn last_checkpoint_entry_finds_latest_matching_entry() {
+        let mut state = sample_state();
+        state.checkpoints.push(CheckpointEntry {
+            step: 10,
+            epoch: 0,
+            checkpoint: "a.ckpt".to_string(),
+            metric: Some(1.0),
+            kind: "mock".to_string(),
+            metric_mode: "minimize".to_string(),
+        });
+        state.checkpoints.push(CheckpointEntry {
+            step: 20,
+            epoch: 0,
+            checkpoint: "b.ckpt".to_string(),
+            metric: Some(0.5),
+            kind: "mock".to_string(),
+            metric_mode: "minimize".to_string(),
+        });
+        state.last_checkpoint = Some("b.ckpt".to_string());
+        let entry = last_checkpoint_entry(&state).unwrap();
+        assert_eq!(entry.step, 20);
+    }
+
+    #[test]
+    fn resume_mismatch_detects_untracked_checkpoint() {
+        let dir = tempdir().unwrap();
+        let config = sample_config(dir.path());
+        let manifest = sample_manifest(dir.path());
+        let checkpoint = dir.path().join("step_00000001.ckpt.json");
+        std::fs::write(&checkpoint, b"{}").unwrap();
+
+        let mut state = sample_state();
+        state.last_checkpoint = Some(checkpoint.display().to_string());
+        let mismatches = collect_resume_mismatches(&config, &manifest, &state);
+        assert!(mismatches
+            .iter()
+            .any(|m| m.contains("last_checkpoint_untracked")));
+    }
+
+    #[test]
+    fn resume_mismatch_detects_backend_shape_change() {
+        let dir = tempdir().unwrap();
+        let mut config = sample_config(dir.path());
+        let manifest = sample_manifest(dir.path());
+        let checkpoint = dir.path().join("step_00000001.ckpt.json");
+        let backend = dir.path().join("step_00000001.backend.json");
+        std::fs::write(&checkpoint, b"{}").unwrap();
+        std::fs::write(&backend, b"{}").unwrap();
+
+        let mut state = sample_state();
+        state.last_checkpoint = Some(checkpoint.display().to_string());
+        state.checkpoints.push(CheckpointEntry {
+            step: 1,
+            epoch: 0,
+            checkpoint: checkpoint.display().to_string(),
+            metric: Some(1.0),
+            kind: "mock".to_string(),
+            metric_mode: "minimize".to_string(),
+        });
+
+        config.backend.hidden_size += 1;
+        let mismatches = collect_resume_mismatches(&config, &manifest, &state);
+        assert!(mismatches.iter().any(|m| m.contains("backend_hidden_size")));
+    }
 }
 
 fn iter_config(config: &TrainConfig) -> BatchIterConfig {
@@ -448,6 +1432,21 @@ fn sequence_budget(config: &TrainConfig) -> SequenceBudget {
     }
 }
 
+fn estimate_epoch_steps(config: &TrainConfig) -> Result<usize> {
+    let stats = inspect_shard_batches(&config.dataset.train_shard, iter_config(config), 1)?;
+    let rows = stats.rows;
+    if rows == 0 {
+        return Ok(1);
+    }
+    Ok(rows.div_ceil(
+        config
+            .train
+            .batch_size
+            .max(1)
+            .saturating_mul(config.train.grad_accum.max(1)),
+    ))
+}
+
 fn model_estimate(config: &TrainConfig) -> Result<kkc_model::ResourceEstimate> {
     let preset = ctc_nat_preset(&config.model.preset)?;
     Ok(estimate_ctc_nat_resources(
@@ -467,6 +1466,164 @@ fn model_estimate(config: &TrainConfig) -> Result<kkc_model::ResourceEstimate> {
     ))
 }
 
+fn collect_resume_mismatches(
+    config: &TrainConfig,
+    manifest: &RunManifest,
+    state: &TrainerState,
+) -> Vec<String> {
+    let mut mismatches = Vec::new();
+    if manifest.train_shard != config.dataset.train_shard.display().to_string() {
+        mismatches.push(format!(
+            "train_shard: run={} current={}",
+            manifest.train_shard,
+            config.dataset.train_shard.display()
+        ));
+    }
+    if manifest.model_preset != config.model.preset {
+        mismatches.push(format!(
+            "model_preset: run={} current={}",
+            manifest.model_preset, config.model.preset
+        ));
+    }
+    if manifest.vocab_size != config.tokenizer.vocab_size {
+        mismatches.push(format!(
+            "vocab_size: run={} current={}",
+            manifest.vocab_size, config.tokenizer.vocab_size
+        ));
+    }
+    if manifest.backend_kind != config.backend.kind {
+        mismatches.push(format!(
+            "backend_kind: run={} current={}",
+            manifest.backend_kind, config.backend.kind
+        ));
+    }
+    if manifest.backend_hidden_size != config.backend.hidden_size {
+        mismatches.push(format!(
+            "backend_hidden_size: run={} current={}",
+            manifest.backend_hidden_size, config.backend.hidden_size
+        ));
+    }
+    if manifest.backend_output_size != config.backend.output_size {
+        mismatches.push(format!(
+            "backend_output_size: run={} current={}",
+            manifest.backend_output_size, config.backend.output_size
+        ));
+    }
+    if manifest.backend_blank_id != config.backend.blank_id {
+        mismatches.push(format!(
+            "backend_blank_id: run={} current={}",
+            manifest.backend_blank_id, config.backend.blank_id
+        ));
+    }
+    if manifest.backend_max_positions != config.backend.max_positions {
+        mismatches.push(format!(
+            "backend_max_positions: run={} current={}",
+            manifest.backend_max_positions, config.backend.max_positions
+        ));
+    }
+    if manifest.batch_size != config.train.batch_size {
+        mismatches.push(format!(
+            "batch_size: run={} current={}",
+            manifest.batch_size, config.train.batch_size
+        ));
+    }
+    if manifest.max_input_len != config.train.max_input_len {
+        mismatches.push(format!(
+            "max_input_len: run={} current={}",
+            manifest.max_input_len, config.train.max_input_len
+        ));
+    }
+    if manifest.max_target_len != config.train.max_target_len {
+        mismatches.push(format!(
+            "max_target_len: run={} current={}",
+            manifest.max_target_len, config.train.max_target_len
+        ));
+    }
+    if manifest.grad_accum != config.train.grad_accum {
+        mismatches.push(format!(
+            "grad_accum: run={} current={}",
+            manifest.grad_accum, config.train.grad_accum
+        ));
+    }
+    if manifest.block_rows != config.train.block_rows {
+        mismatches.push(format!(
+            "block_rows: run={} current={}",
+            manifest.block_rows, config.train.block_rows
+        ));
+    }
+    if manifest.seed != config.train.seed {
+        mismatches.push(format!(
+            "seed: run={} current={}",
+            manifest.seed, config.train.seed
+        ));
+    }
+    if manifest.prefetch_queue != config.runtime.prefetch_queue {
+        mismatches.push(format!(
+            "prefetch_queue: run={} current={}",
+            manifest.prefetch_queue, config.runtime.prefetch_queue
+        ));
+    }
+    match state.last_checkpoint.as_deref() {
+        Some(last_checkpoint) => {
+            if !Path::new(last_checkpoint).exists() {
+                mismatches.push(format!("last_checkpoint_missing: {}", last_checkpoint));
+            } else {
+                match last_checkpoint_entry(state) {
+                    Some(entry) => {
+                        let needs_backend = backend_kind_requires_sidecar(&entry.kind);
+                        if needs_backend {
+                            let backend_checkpoint = checkpoint_sidecar_path(
+                                last_checkpoint,
+                                ".ckpt.json",
+                                ".backend.json",
+                            );
+                            if !backend_checkpoint.exists() {
+                                mismatches.push(format!(
+                                    "backend_checkpoint_missing: {}",
+                                    backend_checkpoint.display()
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        mismatches.push(format!("last_checkpoint_untracked: {}", last_checkpoint))
+                    }
+                }
+            }
+        }
+        None => {
+            mismatches.push("last_checkpoint: run has no checkpoint to resume from".to_string())
+        }
+    }
+    mismatches
+}
+
+fn backend_kind_requires_sidecar(kind: &str) -> bool {
+    matches!(kind, "mock" | "toy" | "surrogate" | "ctc")
+}
+
+fn checkpoint_sidecar_path(checkpoint: &str, from_suffix: &str, to_suffix: &str) -> PathBuf {
+    let path = PathBuf::from(checkpoint);
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("checkpoint");
+    let replaced = file_name
+        .strip_suffix(from_suffix)
+        .map(|stem| format!("{}{}", stem, to_suffix))
+        .unwrap_or_else(|| format!("{}{}", file_name, to_suffix));
+    path.with_file_name(replaced)
+}
+
+fn last_checkpoint_entry(state: &TrainerState) -> Option<&CheckpointEntry> {
+    let last = state.last_checkpoint.as_deref()?;
+    state
+        .checkpoints
+        .iter()
+        .rev()
+        .find(|entry| entry.checkpoint == last)
+}
+
 enum BatchSource {
     Sync(BatchIter),
     Prefetched(PrefetchedBatchIter),
@@ -481,8 +1638,30 @@ impl BatchSource {
     }
 }
 
+impl trainer::BatchStream for BatchSource {
+    fn next_batch(&mut self) -> Result<Option<kkc_data::PackedBatch>> {
+        BatchSource::next_batch(self)
+    }
+}
+
 fn open_batch_source(config: &TrainConfig) -> Result<BatchSource> {
-    let iter = BatchIter::open(&config.dataset.train_shard, iter_config(config))?;
+    open_batch_source_at_cursor(config, 0)
+}
+
+fn open_eval_batch_source(config: &TrainConfig, shard: &Path) -> Result<BatchSource> {
+    let iter = BatchIter::open(shard, iter_config(config))?;
+    if config.runtime.prefetch_queue > 0 {
+        Ok(BatchSource::Prefetched(PrefetchedBatchIter::spawn(
+            iter,
+            config.runtime.prefetch_queue,
+        )))
+    } else {
+        Ok(BatchSource::Sync(iter))
+    }
+}
+
+fn open_batch_source_at_cursor(config: &TrainConfig, cursor: usize) -> Result<BatchSource> {
+    let iter = BatchIter::open_at_cursor(&config.dataset.train_shard, iter_config(config), cursor)?;
     if config.runtime.prefetch_queue > 0 {
         Ok(BatchSource::Prefetched(PrefetchedBatchIter::spawn(
             iter,

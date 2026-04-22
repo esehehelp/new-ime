@@ -9,6 +9,18 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+safetensors.workspace = true
 kkc-data = { path = "../kkc-data" }
 kkc-model = { path = "../kkc-model" }
 kkc-tokenizer = { path = "../kkc-tokenizer" }
+# Optional: enabled by `--features cuda`. Pinned to tch 0.18 which tracks
+# libtorch 2.6; `LIBTORCH` is expected to point at an existing install such as
+# the project's `.venv/Lib/site-packages/torch`.
+tch = { workspace = true, optional = true }
+
+[features]
+default = []
+cuda = ["dep:tch"]
+
+[dev-dependencies]
+tempfile = "3"

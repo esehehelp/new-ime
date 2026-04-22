@@ -21,6 +21,12 @@ Python 側の `Dataset` / `DataLoader` / collator が抱えている I/O と RAM
   - `scan-epoch`: 1 epoch 分の平均/最大 batch サイズを集計
   - `dry-train`: モデルなしで batch path の throughput を測定
   - `init-run`: run manifest / trainer state を先に固定
+  - `record-checkpoint`: checkpoint ledger を更新
+  - `show-run`: run manifest / trainer state を確認
+  - `check-resume`: 現在 config で resume 可能か検査
+  - `fit`: Rust backend で学習ループを実行
+  - 現在の `ctc` backend は最小 CPU 実装で、CTC loss / checkpoint / resume の経路確認用
+  - backend 共通の optimizer / scheduler state を内蔵
 
 ## 直近の狙い
 
@@ -39,12 +45,63 @@ cargo run -p kkc-train -- peek-batches --config configs/rust_student.toml --batc
 cargo run -p kkc-train -- scan-epoch --config configs/rust_student.toml
 cargo run -p kkc-train -- dry-train --config configs/rust_student.toml --steps 1000
 cargo run -p kkc-train -- init-run --config configs/rust_student.toml --output models/checkpoints/rust-student-20m
+cargo run -p kkc-train -- fit --config configs/rust_student.toml --run-dir models/checkpoints/rust-student-20m --steps 100 --checkpoint-every 25
+cargo run -p kkc-train -- record-checkpoint --run-dir models/checkpoints/rust-student-20m --step 2000 --epoch 1 --checkpoint models/checkpoints/rust-student-20m/checkpoint_step_2000.safetensors --metric 0.8123 --kind best
+cargo run -p kkc-train -- show-run --run-dir models/checkpoints/rust-student-20m
+cargo run -p kkc-train -- check-resume --config configs/rust_student.toml --run-dir models/checkpoints/rust-student-20m
 ```
+
+## CUDA / 非同期 I/O
+
+GPU 学習は `tch` 0.18 (libtorch 2.6 cu124) 経由。デフォルトビルドには含めず、`--features cuda` で optional。
+
+```bash
+# build (Windows, .venv の libtorch を再利用)
+export LIBTORCH="D:/Dev/new-ime/.venv/Lib/site-packages/torch"
+export LIBTORCH_BYPASS_VERSION_CHECK=1
+export PATH="$LIBTORCH/lib:$PATH"
+cargo build -p kkc-train --features cuda --release
+
+# run
+kkc-train fit \
+    --config configs/rust_student_cuda.toml \
+    --run-dir models/checkpoints/rust-student-cuda \
+    --device cuda \
+    --steps 200000 \
+    --checkpoint-every 2000 \
+    --async-ckpt-queue 2
+```
+
+`--device` は `cpu` / `cuda` / `cuda:N`。cuda feature 無しで `cuda*` を指定すると開始前に reject される。
+
+### 非同期パイプライン構成
+
+1. **Stage-1 prefetch**: shard → `PackedBatch` (既存の `PrefetchedBatchIter`)
+2. **Stage-2 prefetch**: `PackedBatch` → `StagedHostBatch` (i64/f32 連続バッファ)、
+   `gpu::StagedBatchPipeline` のワーカースレッド
+3. **H2D + compute**: 学習スレッドが stage-2 キューから取り出して tch Tensor へ upload、
+   forward / backward
+4. **Async checkpoint writer**: `pipeline::AsyncCheckpointWriter` が別スレッドで
+   ckpt を書き込み、学習ループは待たない (`--async-ckpt-queue 0` で同期にフォールバック)
+
+tokio は入れない。single-writer / single-reader の bounded `mpsc` で十分なため。
+
+### backend kind
+
+| kind | device | 実装状況 |
+|---|---|---|
+| `ctc` | cpu | CPU の hand-rolled Transformer、f64 で数値パリティ検証用 |
+| `tch-ctc-nat` | cpu / cuda | tch backend。**forward/backward は次パッチ**。現状は H2D + TrainerStep accounting の骨格 |
+
+`tch-ctc-nat` の forward/backward / CTC loss / refine は本ファイルの後続実装でカバー。
 
 ## ここから先
 
 次の実装対象は以下。
 
-1. `kkc-data` に block shuffle / prefetch queue / packed batch builder を追加
-2. `kkc-train` に CTC-NAT student の trainer を追加
-3. teacher / KD は student 完了後に別モジュール化
+1. `tch-ctc-nat` の実 forward (embed + encoder + CTC head)
+2. mask-CTC refine decoder + remask/stop head
+3. AdamW + cosine LR + warmup (tch の `nn::VarStore` + `optim` を利用)
+4. safetensors で weights snapshot、`AsyncCheckpointWriter` と接続
+5. Python trainer との数値パリティ (same seed, same init, 1 step 一致)
+6. AR teacher KD wrapper (student 完了後)

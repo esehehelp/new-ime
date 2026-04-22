@@ -8,6 +8,7 @@ members = [
     "datasets/tools/audit",
     "datasets/tools/bench-onnx",
     "datasets/tools/extract-domain",
+    "datasets/tools/extract-short",
     "datasets/tools/process-whitepaper",
     "datasets/tools/synth-homophone",
     "datasets/tools/synth-numeric-units",
@@ -48,6 +49,11 @@ thiserror = "1"
 memmap2 = "0.9"
 rayon = "1"
 rand = "0.8"
+# Optional CUDA backend. Consumers opt in via the `cuda` feature of kkc-train.
+# Matches the Python venv's torch 2.6 cu124 build so LIBTORCH can point at
+# .venv/Lib/site-packages/torch without a second libtorch download.
+tch = { version = "0.18", default-features = false }
+safetensors = "0.4"
 
 [profile.release]
 opt-level = 3
