@@ -15,7 +15,7 @@ use super::model::CtcNatModel;
 use crate::backend::{BackendConfig, TrainBackend};
 use crate::device::{resolve_tch_device, Device};
 use crate::trainer::TrainerStep;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use kkc_data::PackedBatch;
 use std::path::Path;
 use tch::nn::VarStore;
@@ -62,6 +62,15 @@ impl TchCtcNatBackend {
     }
     pub fn step_count(&self) -> usize {
         self.step_count
+    }
+    pub fn set_step_count(&mut self, step: usize) {
+        self.step_count = step;
+    }
+    pub fn set_last_loss(&mut self, loss: Option<f64>) {
+        self.last_loss = loss;
+    }
+    pub fn var_store_mut(&mut self) -> &mut VarStore {
+        &mut self.vs
     }
     pub fn trainable_param_count(&self) -> i64 {
         self.vs
@@ -169,34 +178,11 @@ impl TrainBackend for TchCtcNatBackend {
     }
 
     fn save_checkpoint(&self, path: &Path) -> Result<()> {
-        // Step 4 replaces this with safetensors. For now persist a marker
-        // so the ledger stays valid across runs.
-        let body = serde_json::json!({
-            "kind": "tch-ctc-nat",
-            "step": self.step_count,
-            "last_loss": self.last_loss,
-            "param_count": self.trainable_param_count(),
-            "note": "weights pending: safetensors snapshot lands in step 4",
-        });
-        std::fs::write(
-            path,
-            serde_json::to_vec_pretty(&body).context("serialize tch backend marker")?,
-        )
-        .with_context(|| format!("write {}", path.display()))?;
-        Ok(())
+        super::ckpt::save_backend(self, path)
     }
 
     fn load_checkpoint(&mut self, path: &Path) -> Result<()> {
-        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-        if let Some(s) = parsed.get("step").and_then(|v| v.as_u64()) {
-            self.step_count = s as usize;
-        }
-        if let Some(l) = parsed.get("last_loss").and_then(|v| v.as_f64()) {
-            self.last_loss = Some(l);
-        }
-        Ok(())
+        super::ckpt::load_backend(self, path)
     }
 }
 
@@ -316,15 +302,31 @@ mod tests {
     }
 
     #[test]
-    fn tch_backend_checkpoint_marker_round_trips() {
+    fn tch_backend_checkpoint_round_trip_preserves_step_and_weights() {
         let mut backend = TchCtcNatBackend::new(&tiny_config(), Device::Cpu).unwrap();
+        // Randomize weights so the round-trip has something real to check.
+        for var in backend.var_store().trainable_variables() {
+            tch::no_grad(|| {
+                let mut v = var;
+                let _ = v.uniform_(-0.1, 0.1);
+            });
+        }
         let packed = tiny_packed();
         let _ = backend.step(5, &packed).unwrap();
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        backend.save_checkpoint(tmp.path()).unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let anchor = tmp_dir.path().join("ckpt.backend.json");
+        backend.save_checkpoint(&anchor).unwrap();
         let mut restored = TchCtcNatBackend::new(&tiny_config(), Device::Cpu).unwrap();
-        restored.load_checkpoint(tmp.path()).unwrap();
+        restored.load_checkpoint(&anchor).unwrap();
         assert_eq!(restored.step_count(), 5);
-        assert!(restored.last_loss().is_some());
+        assert_eq!(restored.last_loss(), backend.last_loss());
+        // Verify one weight made it through.
+        let src_vars = backend.var_store().variables();
+        let loaded_vars = restored.var_store().variables();
+        for (name, sv) in src_vars.iter().take(3) {
+            let lv = &loaded_vars[name];
+            let diff = (sv - lv).abs().max().double_value(&[]);
+            assert!(diff < 1e-6, "{name} diverged after round trip");
+        }
     }
 }
