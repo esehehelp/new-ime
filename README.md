@@ -12,7 +12,7 @@
 
 ## 概要
 
-既存の自己回帰モデル (zenz-v2.5 等) に対し、**並列生成アーキテクチャ** でレイテンシ削減と
+既存の自己回帰モデル (zenz-v3.1 等) に対し、**並列生成アーキテクチャ** でレイテンシ削減と
 **1.58-bit 量子化** で極小サイズを狙う。
 
 - **モデル名**: `new-ime-model`
@@ -23,7 +23,6 @@
 - **出力**: CTC loss による並列デコード + Mask-CTC refinement
 - **学習安定化**: GLAT (Glancing Language Model Training) + Knowledge Distillation
 - **推論**: ONNX Runtime / bitnet.cpp / 比較用ベンチハーネス
-- **IME 統合**: 研究段階では `interactive.cpp` を中心とした CLI / デモ優先
 
 ## アーキテクチャ
 
@@ -179,22 +178,6 @@ new-ime/
 │       └── 30m-50k-sample.txt       # 前回 30M training log
 ├── CMakeLists.txt             # C++ ビルド
 └── pyproject.toml             # Python (uv)
-```
-
-## セットアップ
-
-### Python (モデル・データパイプライン・評価)
-
-```bash
-uv sync --group dev
-uv run pytest
-```
-
-### C++ テスト (gcc)
-
-```bash
-g++ -std=c++20 -I engine/src -o test_composing models/tests/cpp/test_composing_text.cpp engine/src/composing_text.cpp && ./test_composing
-g++ -std=c++20 -I engine/server/src -o test_ctc models/tests/cpp/test_ctc_decoder.cpp engine/server/src/ctc_decoder.cpp && ./test_ctc
 ```
 
 ## 参考文献
