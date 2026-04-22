@@ -28,6 +28,7 @@ pub struct TchCtcNatBackend {
     config: BackendConfig,
     last_loss: Option<f64>,
     step_count: usize,
+    optim: Option<super::optim::TchOptimizer>,
 }
 
 impl TchCtcNatBackend {
@@ -42,7 +43,21 @@ impl TchCtcNatBackend {
             config: config.clone(),
             last_loss: None,
             step_count: 0,
+            optim: None,
         })
+    }
+
+    /// Attach an AdamW optimizer so `step_gpu` can take a full train
+    /// step (forward → backward → optim → zero_grad). Used by the
+    /// training loop; tests that only need forward leave it unset.
+    pub fn attach_optimizer(&mut self, grad_clip: f64) -> Result<()> {
+        let optim = super::optim::TchOptimizer::from_config(&self.vs, &self.config, grad_clip)?;
+        self.optim = Some(optim);
+        Ok(())
+    }
+
+    pub fn has_optimizer(&self) -> bool {
+        self.optim.is_some()
     }
 
     pub fn device(&self) -> TchDevice {
@@ -139,8 +154,10 @@ impl TchCtcNatBackend {
         }
 
         let loss_val = loss.double_value(&[]);
-        // Accumulate gradients (optimizer step lives in step 3).
         loss.backward();
+        if let Some(opt) = self.optim.as_mut() {
+            opt.optimize(step);
+        }
 
         self.last_loss = Some(loss_val);
         self.step_count = step;
@@ -274,7 +291,6 @@ mod tests {
     /// backward + optim loop without a fully wired training harness.
     #[test]
     fn tch_backend_with_optimizer_reduces_loss_on_fixed_batch() {
-        use crate::gpu::optim::TchOptimizer;
         let cfg = BackendConfig {
             kind: "tch-ctc-nat".to_string(),
             learning_rate: 5e-2,
@@ -285,14 +301,12 @@ mod tests {
             ..tiny_config()
         };
         let mut backend = TchCtcNatBackend::new(&cfg, Device::Cpu).unwrap();
-        let mut opt = TchOptimizer::from_config(backend.var_store(), &cfg, 1.0).unwrap();
+        backend.attach_optimizer(1.0).unwrap();
         let packed = tiny_packed();
 
         let first = backend.step(1, &packed).unwrap().loss;
-        opt.optimize(1);
         for step in 2..=20 {
             let _ = backend.step(step, &packed).unwrap();
-            opt.optimize(step);
         }
         let last = backend.last_loss().unwrap();
         assert!(

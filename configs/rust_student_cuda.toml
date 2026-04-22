@@ -1,0 +1,86 @@
+# Production-ish training config for the Rust tch CTC-NAT student.
+# Matches the `phase3_30m` (Suiko-v1-small) preset in the Python trainer
+# — hidden=384, 6 encoder / 6 decoder layers, 6 heads, ffn=1536, with
+# mask-CTC refinement. Point `[dataset] train_shard` at a compiled shard
+# (kkc-train compile-shard) before running fit.
+
+[dataset]
+train_shard = "datasets/mixes/student-20m.kkc"
+
+[tokenizer]
+path = "datasets/tokenizers/char-5k.json"
+max_kanji = 6000
+vocab_size = 4801
+
+[model]
+preset = "phase3_30m"
+
+[runtime]
+param_dtype_bytes = 4
+grad_dtype_bytes = 4
+adam_state_bytes = 8
+activation_dtype_bytes = 4
+prefetch_queue = 4
+
+[eval]
+batches = 4
+
+[backend]
+kind = "tch-ctc-nat"
+optimizer = "adamw"
+scheduler = "warmup_cosine"
+# Training-rate curve matches the Python Suiko-v1-small run
+# (train_ctc_nat.py:952). 5e-4 peak + cosine decay, warmup 2000 for the
+# longer 300M-row mix.
+learning_rate = 5e-4
+init_scale = 0.02
+weight_decay = 0.01
+momentum = 0.9
+beta1 = 0.9
+beta2 = 0.999
+epsilon = 1e-8
+warmup_steps = 2000
+scheduler_total_steps = 200000
+min_lr_scale = 0.2
+
+# Architecture (Phase 3-30M preset). Leave as-is unless the preset
+# changes on the Python side.
+parameter_count = 41000000
+hidden_size = 384
+encoder_layers = 6
+num_heads = 6
+ffn_size = 1536
+decoder_layers = 6
+decoder_heads = 6
+decoder_ffn_size = 1536
+output_size = 4801
+blank_id = 4
+max_positions = 128
+mask_token_id = 5
+
+# Mask-CTC refine + learned remask/stop heads. All four weights ramp
+# from 0 over the first `refine_warmup_steps` optimizer steps to match
+# train_ctc_nat.py:185-191.
+refine_loss_weight = 1.0
+refine_warmup_steps = 5000
+refine_mask_ratio = 0.3
+refine_source = "target"
+refine_iterations = 1
+remask_loss_weight = 0.5
+remask_threshold = 0.5
+stop_loss_weight = 0.5
+stop_threshold = 0.5
+confidence_fallback = 0.5
+use_learned_remask = true
+use_learned_stop = true
+
+[train]
+# Per-device batch; with `grad_accum=1` the shard provides this many
+# rows per step. Tune upward on a 5090 once VRAM numbers are in.
+batch_size = 128
+max_input_len = 128
+max_target_len = 128
+grad_accum = 1
+block_rows = 4096
+seed = 42
+checkpoint_keep_last = 3

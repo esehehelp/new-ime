@@ -127,6 +127,10 @@ enum Command {
         /// to the synchronous path.
         #[arg(long, default_value_t = 2)]
         async_ckpt_queue: usize,
+        /// Global grad-norm clip. `0.0` disables clipping. Only honored
+        /// by the `tch-ctc-nat` backend for now; other backends ignore.
+        #[arg(long, default_value_t = 0.0)]
+        grad_clip: f64,
     },
     MockFit {
         #[arg(long)]
@@ -344,6 +348,7 @@ fn main() -> Result<()> {
             checkpoint_every,
             device,
             async_ckpt_queue,
+            grad_clip,
         } => {
             let device = Device::from_str(&device)?;
             device::require_cuda_built(device)?;
@@ -354,6 +359,7 @@ fn main() -> Result<()> {
                 checkpoint_every,
                 device,
                 async_ckpt_queue,
+                grad_clip,
             )
         }
         Command::MockFit {
@@ -361,7 +367,15 @@ fn main() -> Result<()> {
             run_dir,
             steps,
             checkpoint_every,
-        } => fit(&config, &run_dir, steps, checkpoint_every, Device::Cpu, 0),
+        } => fit(
+            &config,
+            &run_dir,
+            steps,
+            checkpoint_every,
+            Device::Cpu,
+            0,
+            0.0,
+        ),
     }
 }
 
@@ -723,6 +737,7 @@ fn fit(
     checkpoint_every: usize,
     device: Device,
     async_ckpt_queue: usize,
+    grad_clip: f64,
 ) -> Result<()> {
     let config = load_config(config_path)?;
     let manifest = read_manifest(&run_dir.join("run_manifest.json"))?;
@@ -739,7 +754,8 @@ fn fit(
         );
     }
     let mut source = open_batch_source_at_cursor(&config, state.data_cursor)?;
-    let mut backend: Box<dyn backend::TrainBackend> = new_backend(&config.backend, device)?;
+    let mut backend: Box<dyn backend::TrainBackend> =
+        new_backend(&config.backend, device, grad_clip)?;
     if let Some(entry) = last_checkpoint_entry(&state) {
         if entry.kind == backend.kind() {
             let backend_checkpoint =
@@ -912,11 +928,14 @@ fn eval_backend_dyn(
 fn new_backend(
     config: &backend::BackendConfig,
     device: Device,
+    grad_clip: f64,
 ) -> Result<Box<dyn backend::TrainBackend>> {
     #[cfg(feature = "cuda")]
     {
         if config.kind == "tch-ctc-nat" {
-            return Ok(Box::new(gpu::TchCtcNatBackend::new(config, device)?));
+            let mut backend = gpu::TchCtcNatBackend::new(config, device)?;
+            backend.attach_optimizer(grad_clip)?;
+            return Ok(Box::new(backend));
         }
     }
     #[cfg(not(feature = "cuda"))]
@@ -927,6 +946,7 @@ fn new_backend(
             );
         }
     }
+    let _ = grad_clip; // honored only by tch-ctc-nat for now
     if device.is_cuda() {
         anyhow::bail!(
             "backend `{}` has no CUDA path; choose `tch-ctc-nat` or run with --device cpu",
