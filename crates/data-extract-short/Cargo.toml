@@ -1,0 +1,14 @@
+[package]
+name = "data-extract-short"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-extract-short"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
