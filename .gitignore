@@ -1,21 +1,25 @@
-# Reference repos (cloned for reading, not part of this project)
+# Reference repos cloned for local reading only.
 /references/
 
-# Python
+# Python caches and virtualenvs.
 __pycache__/
 *.py[cod]
-*.egg-info/
-dist/
-build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 .eggs/
 *.egg
+*.egg-info/
+dist/
 venv/
 .venv/
-uv.lock
 
-# C++ build
-build/
-build_test/
+# Native build outputs.
+/build/
+/build_test/
 cmake-build-*/
 compile_commands.json
 engine/win32/*.obj
@@ -25,68 +29,71 @@ engine/win32/*.exp
 engine/win32/*.lib
 engine/win32/*.pdb
 
-# Claude local state
+# Local Claude state.
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 
-# Rust build
+# Rust build outputs.
 target/
-**/target/
 
-# ML artifacts
+# Large model artifacts and local training outputs.
 *.gguf
-*.bin
-*.safetensors
 *.onnx
 *.pt
 *.pth
-checkpoints/
-wandb/
+*.safetensors
+/checkpoints/
+/wandb/
+/parity-fixtures/
+/models/checkpoints/
+/models/dicts/
+/models/kenlm/
+/models/onnx/
 
-# Data — broad ignore (HF 経由配布、git には入れない)
-datasets/*
-!datasets/tools/
-results/
+# Local datasets and corpora.
+/datasets/audits/
+/datasets/corpus/
+/datasets/eval/
+/datasets/kenlm_corpora/
+/datasets/mixes/
+/datasets/raw/
+/datasets/tokenizers/
+
+# Experiment logs and generated result trees.
+/logs/
+/results/ablate_diversity*/
+/results/ajimee_*/
+/results/bench_*/
+/results/cvae_probe/
+/results/eval_runs*/
+/results/jinen_bench*/
+/results/kenlm_moe_bench/
+/results/onnx_*/
+/results/probe_v*/
+/results/sweep_*/alpha*.json
+/results/sweep_*/report.md
+/results/sweep_*/summary.json
+!/results/sweep_20260418_170409/summary.json
+!/results/sweep_nodict/summary.json
+!/results/sweep_user_only/summary.json
+/results/test_*.txt
+/results/corpus_v2_clean_sample/*.sample.txt
+/results/corpus_v2_sample/*.sample.txt
+
+# External data, archives, and vendored dependencies.
 *.bz2
 *.gz
 *.zip
+/tools/onnxruntime-win-x64-*/
+/engine/server/third_party/kenlm/
+/tools/mozc_import/
+/tools/merge-ut-dictionaries/
+/tools/mozc_ut_import/
 
-# OS
+# OS and editor files.
 .DS_Store
 Thumbs.db
-
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Training and bench logs
-logs/
-
-# Archived docs
-docs/old/
-
-# Models — broad ignore, コードとテストとツールのみ track
-models/*
-!models/src/
-!models/tests/
-!models/tools/
-!models/rust/
-
-# Other large artifacts
-tools/onnxruntime-win-x64-*/
-engine/server/third_party/kenlm/
-build/
-
-# Dict / external dicts source (regenerable)
-tools/mozc_import/
-tools/merge-ut-dictionaries/
-tools/mozc_ut_import/
-
-# Sweep per-config artifacts (regenerable via scripts/sweep_interactive_ctc.py)
-results/sweep_*/alpha*.json
-results/sweep_*/report.md
-
-# Rust-side parity fixtures (regenerable via tools/rust/emit_parity_fixture.py)
-parity-fixtures/
