@@ -27,6 +27,7 @@ engine/win32/*.pdb
 
 # Claude local state
 .claude/scheduled_tasks.lock
+.claude/settings.local.json
 
 # Rust build
 target/
