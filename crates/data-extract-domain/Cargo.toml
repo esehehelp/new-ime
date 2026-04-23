@@ -1,0 +1,14 @@
+[package]
+name = "data-extract-domain"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-extract-domain"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

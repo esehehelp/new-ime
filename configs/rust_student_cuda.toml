@@ -2,7 +2,7 @@
 # Matches the `phase3_30m` (Suiko-v1-small) preset in the Python trainer
 # — hidden=384, 6 encoder / 6 decoder layers, 6 heads, ffn=1536, with
 # mask-CTC refinement. Point `[dataset] train_shard` at a compiled shard
-# (kkc-train compile-shard) before running fit.
+# (rust-train compile-shard) before running fit.
 
 [dataset]
 train_shard = "datasets/mixes/student-20m.kkc"
