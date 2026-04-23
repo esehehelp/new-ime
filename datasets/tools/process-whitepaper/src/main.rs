@@ -97,12 +97,18 @@ fn main() -> Result<()> {
             retries,
             max_mib,
         } => fetch::run(&manifest, &out_dir, concurrency, retries, max_mib),
-        Command::Extract { pdf_dir, text_dir, concurrency } => {
-            extract::run(&pdf_dir, &text_dir, concurrency)
-        }
-        Command::Ingest { text_dir, out, dict, min_chars, max_chars } => {
-            ingest::run(&text_dir, &out, &dict, min_chars, max_chars)
-        }
+        Command::Extract {
+            pdf_dir,
+            text_dir,
+            concurrency,
+        } => extract::run(&pdf_dir, &text_dir, concurrency),
+        Command::Ingest {
+            text_dir,
+            out,
+            dict,
+            min_chars,
+            max_chars,
+        } => ingest::run(&text_dir, &out, &dict, min_chars, max_chars),
     }
     .with_context(|| "process-whitepaper")
 }

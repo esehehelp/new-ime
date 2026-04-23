@@ -96,8 +96,8 @@ fn is_tech(surface: &str) -> bool {
 }
 
 const ENTITY_END_MARKERS: &[char] = &[
-    '氏', '市', '区', '町', '村', '県', '府', '都', '駅', '線', '社', '会', '部', '院', '党',
-    '神', '寺', '藩', '郡', '省', '庁', '所', '殿', '様', '君', '展',
+    '氏', '市', '区', '町', '村', '県', '府', '都', '駅', '線', '社', '会', '部', '院', '党', '神',
+    '寺', '藩', '郡', '省', '庁', '所', '殿', '様', '君', '展',
 ];
 
 /// Entity: uppercase-leading ASCII run length >= 2 (brands like "Apple", "AI"),
@@ -142,11 +142,7 @@ fn parse_domains(specs: &[String]) -> Result<Vec<(String, PathBuf)>> {
             .split_once('=')
             .ok_or_else(|| anyhow!("bad --domain spec (want name=path): {}", spec))?;
         if !allowed.contains(&name) {
-            return Err(anyhow!(
-                "unknown domain {:?}; allowed: {:?}",
-                name,
-                allowed
-            ));
+            return Err(anyhow!("unknown domain {:?}; allowed: {:?}", name, allowed));
         }
         out.push((name.to_string(), PathBuf::from(path)));
     }
@@ -179,7 +175,8 @@ fn main() -> Result<()> {
             .join(", ")
     );
 
-    let input = File::open(&args.input).with_context(|| format!("open {}", args.input.display()))?;
+    let input =
+        File::open(&args.input).with_context(|| format!("open {}", args.input.display()))?;
     let mut reader = BufReader::with_capacity(8 * 1024 * 1024, input);
 
     let mut writers: HashMap<String, BufWriter<File>> = HashMap::new();

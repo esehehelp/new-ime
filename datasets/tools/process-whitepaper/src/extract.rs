@@ -13,8 +13,8 @@ use std::thread;
 
 pub fn run(pdf_dir: &Path, text_dir: &Path, concurrency: usize) -> Result<()> {
     let mut pdfs = Vec::new();
-    for ministry_entry in fs::read_dir(pdf_dir)
-        .with_context(|| format!("read_dir {}", pdf_dir.display()))?
+    for ministry_entry in
+        fs::read_dir(pdf_dir).with_context(|| format!("read_dir {}", pdf_dir.display()))?
     {
         let ministry_entry = ministry_entry?;
         if !ministry_entry.file_type()?.is_dir() {
@@ -24,12 +24,21 @@ pub fn run(pdf_dir: &Path, text_dir: &Path, concurrency: usize) -> Result<()> {
         for pdf_entry in fs::read_dir(ministry_entry.path())? {
             let pdf_entry = pdf_entry?;
             let path = pdf_entry.path();
-            if path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("pdf")) == Some(true) {
+            if path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("pdf"))
+                == Some(true)
+            {
                 pdfs.push((ministry.clone(), path));
             }
         }
     }
-    eprintln!("[extract] {} PDFs found under {}", pdfs.len(), pdf_dir.display());
+    eprintln!(
+        "[extract] {} PDFs found under {}",
+        pdfs.len(),
+        pdf_dir.display()
+    );
 
     fs::create_dir_all(text_dir)?;
     let pdfs = Arc::new(Mutex::new(pdfs.into_iter()));
@@ -55,7 +64,10 @@ pub fn run(pdf_dir: &Path, text_dir: &Path, concurrency: usize) -> Result<()> {
                         Some(x) => x,
                         None => return,
                     };
-                    let stem = pdf_path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                    let stem = pdf_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown");
                     let out_dir = text_dir.join(&ministry);
                     if let Err(e) = fs::create_dir_all(&out_dir) {
                         eprintln!("[w{worker}] mkdir {}: {}", out_dir.display(), e);
@@ -63,9 +75,7 @@ pub fn run(pdf_dir: &Path, text_dir: &Path, concurrency: usize) -> Result<()> {
                         continue;
                     }
                     let out_path: PathBuf = out_dir.join(format!("{}.txt", stem));
-                    if out_path.exists()
-                        && out_path.metadata().map(|m| m.len()).unwrap_or(0) > 0
-                    {
+                    if out_path.exists() && out_path.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
                         skipped.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
@@ -98,7 +108,11 @@ pub fn run(pdf_dir: &Path, text_dir: &Path, concurrency: usize) -> Result<()> {
                             failed.fetch_add(1, Ordering::Relaxed);
                         }
                         Err(e) => {
-                            eprintln!("[w{worker}] spawn pdftotext for {}: {}", pdf_path.display(), e);
+                            eprintln!(
+                                "[w{worker}] spawn pdftotext for {}: {}",
+                                pdf_path.display(),
+                                e
+                            );
                             failed.fetch_add(1, Ordering::Relaxed);
                         }
                     }

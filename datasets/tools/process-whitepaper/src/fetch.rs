@@ -28,9 +28,12 @@ pub fn run(
     max_mib: u64,
 ) -> Result<()> {
     let items = read_manifest(manifest)?;
-    eprintln!("[fetch] {} entries from {}", items.len(), manifest.display());
-    fs::create_dir_all(out_dir)
-        .with_context(|| format!("mkdir {}", out_dir.display()))?;
+    eprintln!(
+        "[fetch] {} entries from {}",
+        items.len(),
+        manifest.display()
+    );
+    fs::create_dir_all(out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
 
     let items = Arc::new(Mutex::new(items.into_iter()));
     let out_dir = out_dir.to_path_buf();
@@ -60,7 +63,11 @@ pub fn run(
                         let mut guard = items.lock().unwrap();
                         guard.next()
                     };
-                    let ManifestEntry { ministry, url, filename } = match item {
+                    let ManifestEntry {
+                        ministry,
+                        url,
+                        filename,
+                    } = match item {
                         Some(x) => x,
                         None => return,
                     };

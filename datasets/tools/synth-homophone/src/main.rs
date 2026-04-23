@@ -78,7 +78,10 @@ fn main() -> Result<()> {
         bail!("need at least one --input");
     }
 
-    eprintln!("[pass1] counting (reading,surface) pairs across {} input(s)", cli.inputs.len());
+    eprintln!(
+        "[pass1] counting (reading,surface) pairs across {} input(s)",
+        cli.inputs.len()
+    );
     let mut counts: AHashMap<String, AHashMap<String, u32>> = AHashMap::with_capacity(1 << 20);
     let mut pass1_rows: u64 = 0;
     for path in &cli.inputs {
@@ -103,16 +106,25 @@ fn main() -> Result<()> {
                 .or_insert(1);
             pass1_rows += 1;
             if pass1_rows % 5_000_000 == 0 {
-                eprintln!("  [pass1] {} rows, {} unique readings", pass1_rows, counts.len());
+                eprintln!(
+                    "  [pass1] {} rows, {} unique readings",
+                    pass1_rows,
+                    counts.len()
+                );
             }
         }
     }
-    eprintln!("[pass1] done. rows={}  unique_readings={}", pass1_rows, counts.len());
+    eprintln!(
+        "[pass1] done. rows={}  unique_readings={}",
+        pass1_rows,
+        counts.len()
+    );
 
     // Filter: keep readings that have ≥ min_surfaces surfaces each at
     // ≥ min_occurrences count. Store the accepted surface set so pass 2
     // can skip readings whose only-common surface is the one seen.
-    let mut homophone_lex: AHashMap<String, AHashMap<String, ()>> = AHashMap::with_capacity(1 << 17);
+    let mut homophone_lex: AHashMap<String, AHashMap<String, ()>> =
+        AHashMap::with_capacity(1 << 17);
     let mut total_kept_pairs: u64 = 0;
     for (reading, surfaces) in counts.drain() {
         let qualifying: Vec<_> = surfaces
@@ -151,8 +163,7 @@ fn main() -> Result<()> {
     }
     let mut writer = BufWriter::with_capacity(
         8 * 1024 * 1024,
-        File::create(&cli.output)
-            .with_context(|| format!("create {}", cli.output.display()))?,
+        File::create(&cli.output).with_context(|| format!("create {}", cli.output.display()))?,
     );
     let mut pair_counts: AHashMap<(String, String), u32> = AHashMap::with_capacity(1 << 18);
     let mut emitted: usize = 0;
@@ -217,14 +228,33 @@ fn open_reader(path: &PathBuf) -> Result<BufReader<File>> {
 fn serialize_python_compat<T: Serialize>(value: &T) -> Result<String> {
     struct PyFmt;
     impl serde_json::ser::Formatter for PyFmt {
-        fn begin_object_key<W: ?Sized + std::io::Write>(&mut self, w: &mut W, first: bool) -> std::io::Result<()> {
-            if first { Ok(()) } else { w.write_all(b", ") }
+        fn begin_object_key<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            if first {
+                Ok(())
+            } else {
+                w.write_all(b", ")
+            }
         }
-        fn begin_object_value<W: ?Sized + std::io::Write>(&mut self, w: &mut W) -> std::io::Result<()> {
+        fn begin_object_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+        ) -> std::io::Result<()> {
             w.write_all(b": ")
         }
-        fn begin_array_value<W: ?Sized + std::io::Write>(&mut self, w: &mut W, first: bool) -> std::io::Result<()> {
-            if first { Ok(()) } else { w.write_all(b", ") }
+        fn begin_array_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            if first {
+                Ok(())
+            } else {
+                w.write_all(b", ")
+            }
         }
     }
     let mut buf = Vec::with_capacity(256);

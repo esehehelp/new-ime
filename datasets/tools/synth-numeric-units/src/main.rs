@@ -30,7 +30,10 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "synth-numeric-units", about = "Generate unit-bearing numeric synth rows")]
+#[command(
+    name = "synth-numeric-units",
+    about = "Generate unit-bearing numeric synth rows"
+)]
 struct Cli {
     /// Output JSONL path (bunsetsu-schema compatible).
     #[arg(long)]
@@ -64,18 +67,21 @@ fn main() -> Result<()> {
     }
     let mut out = BufWriter::with_capacity(
         8 * 1024 * 1024,
-        File::create(&cli.output)
-            .with_context(|| format!("create {}", cli.output.display()))?,
+        File::create(&cli.output).with_context(|| format!("create {}", cli.output.display()))?,
     );
 
     // Each subtype gets a weight; the global target_size is split proportional.
-    let subtypes: &[(&str, u32, fn(&mut StdRng, usize, &mut dyn Write, &str) -> Result<usize>)] = &[
-        ("synth_si",        20, gen_si),
-        ("synth_imperial",  10, gen_imperial),
-        ("synth_temp",       8, gen_temp),
-        ("synth_filesize",   8, gen_filesize),
-        ("synth_forex",     15, gen_forex),
-        ("synth_percent",   10, gen_percent),
+    let subtypes: &[(
+        &str,
+        u32,
+        fn(&mut StdRng, usize, &mut dyn Write, &str) -> Result<usize>,
+    )] = &[
+        ("synth_si", 20, gen_si),
+        ("synth_imperial", 10, gen_imperial),
+        ("synth_temp", 8, gen_temp),
+        ("synth_filesize", 8, gen_filesize),
+        ("synth_forex", 15, gen_forex),
+        ("synth_percent", 10, gen_percent),
     ];
     let total_weight: u32 = subtypes.iter().map(|s| s.1).sum();
 
@@ -89,7 +95,11 @@ fn main() -> Result<()> {
         emitted_total += n;
     }
     out.flush()?;
-    eprintln!("[synth-numeric-units] wrote {} rows to {}", emitted_total, cli.output.display());
+    eprintln!(
+        "[synth-numeric-units] wrote {} rows to {}",
+        emitted_total,
+        cli.output.display()
+    );
     Ok(())
 }
 
@@ -218,7 +228,12 @@ fn pick_decimal(rng: &mut StdRng) -> (String, String) {
     let integer = rng.gen_range(0..=999u64);
     let fraction_digits = rng.gen_range(1..=3);
     let fraction: u64 = rng.gen_range(1..10u64.pow(fraction_digits));
-    let surface = format!("{}.{:0width$}", integer, fraction, width = fraction_digits as usize);
+    let surface = format!(
+        "{}.{:0width$}",
+        integer,
+        fraction,
+        width = fraction_digits as usize
+    );
     let int_reading = if integer == 0 {
         "れい".to_string()
     } else {
@@ -283,14 +298,33 @@ fn emit(
     // Python-compat formatter.
     struct PyFmt;
     impl serde_json::ser::Formatter for PyFmt {
-        fn begin_object_key<W: ?Sized + std::io::Write>(&mut self, w: &mut W, first: bool) -> std::io::Result<()> {
-            if first { Ok(()) } else { w.write_all(b", ") }
+        fn begin_object_key<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            if first {
+                Ok(())
+            } else {
+                w.write_all(b", ")
+            }
         }
-        fn begin_object_value<W: ?Sized + std::io::Write>(&mut self, w: &mut W) -> std::io::Result<()> {
+        fn begin_object_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+        ) -> std::io::Result<()> {
             w.write_all(b": ")
         }
-        fn begin_array_value<W: ?Sized + std::io::Write>(&mut self, w: &mut W, first: bool) -> std::io::Result<()> {
-            if first { Ok(()) } else { w.write_all(b", ") }
+        fn begin_array_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            if first {
+                Ok(())
+            } else {
+                w.write_all(b", ")
+            }
         }
     }
     let mut buf = Vec::with_capacity(256);
@@ -480,11 +514,7 @@ fn gen_forex(rng: &mut StdRng, budget: usize, w: &mut dyn Write, source: &str) -
         ("ルピー", "るぴー"),
         ("バーツ", "ばーつ"),
     ];
-    let prefix_opts: &[(&str, &str)] = &[
-        ("", ""),
-        ("約", "やく"),
-        ("およそ", "およそ"),
-    ];
+    let prefix_opts: &[(&str, &str)] = &[("", ""), ("約", "やく"), ("およそ", "およそ")];
     let mut written = 0;
     let mut idx = 0usize;
     while written < budget {
@@ -528,10 +558,7 @@ fn gen_percent(rng: &mut StdRng, budget: usize, w: &mut dyn Write, source: &str)
         let (num_surface, num_reading) = if use_decimal {
             pick_decimal(rng)
         } else {
-            (
-                n.to_string(),
-                number_reading(n).unwrap_or_default(),
-            )
+            (n.to_string(), number_reading(n).unwrap_or_default())
         };
         let (p_r, p_s) = PARTICLES.choose(rng).unwrap();
         let surface = format!("{}{}{}", num_surface, u_surface, p_s);

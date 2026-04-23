@@ -106,8 +106,7 @@ const SOURCES: &[Source] = &[
 
 pub fn run(out: &Path, only: Option<&str>) -> Result<()> {
     if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
     }
     let filter: Option<BTreeSet<&str>> = only.map(|s| s.split(',').map(str::trim).collect());
 
@@ -117,7 +116,8 @@ pub fn run(out: &Path, only: Option<&str>) -> Result<()> {
         .build()
         .context("build http client")?;
 
-    let mut writer = BufWriter::new(File::create(out).with_context(|| format!("create {}", out.display()))?);
+    let mut writer =
+        BufWriter::new(File::create(out).with_context(|| format!("create {}", out.display()))?);
     writeln!(writer, "ministry\turl\tfilename")?;
 
     let mut total_pdfs = 0usize;
@@ -254,16 +254,27 @@ fn href_or_text_looks_yearly(href: &str, text: &str) -> bool {
     let bytes = combined_lower.as_bytes();
     for i in 0..bytes.len().saturating_sub(3) {
         let c = bytes[i];
-        if (c == b'r' || c == b'h' || c == b's') && bytes[i + 1].is_ascii_digit() && bytes[i + 2].is_ascii_digit() {
+        if (c == b'r' || c == b'h' || c == b's')
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+        {
             return true;
         }
     }
     // 20xx / 19xx path segments.
     for i in 0..bytes.len().saturating_sub(4) {
-        if bytes[i] == b'2' && bytes[i + 1] == b'0' && bytes[i + 2].is_ascii_digit() && bytes[i + 3].is_ascii_digit() {
+        if bytes[i] == b'2'
+            && bytes[i + 1] == b'0'
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+        {
             return true;
         }
-        if bytes[i] == b'1' && bytes[i + 1] == b'9' && bytes[i + 2].is_ascii_digit() && bytes[i + 3].is_ascii_digit() {
+        if bytes[i] == b'1'
+            && bytes[i + 1] == b'9'
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+        {
             return true;
         }
     }
@@ -278,6 +289,12 @@ fn filename_for(url: &Url) -> String {
         .to_string();
     // sanitize to a safe filesystem name
     last.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }

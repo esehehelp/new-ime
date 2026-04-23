@@ -146,6 +146,8 @@ def build_models(
             lambda: _ctc("models/checkpoints/ctc-nat-30m-bunsetsu-v3/checkpoint_step_70000.pt")),
         ("ctc-nat-30m-bunsetsu-v3-step73000",
             lambda: _ctc("models/checkpoints/ctc-nat-30m-bunsetsu-v3/checkpoint_step_73000.pt")),
+        ("ctc-nat-41m-maskctc-student-wp-step20000",
+            lambda: _ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_20000.pt")),
         ("teacher-150m-teacher-step200000",
             lambda: TeacherBackend(
                 "models/checkpoints/teacher-150m-teacher/checkpoint_step_200000.pt",

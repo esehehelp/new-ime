@@ -48,8 +48,8 @@ pub fn run(
     max_chars: usize,
 ) -> Result<()> {
     eprintln!("[ingest] loading vibrato dict: {}", dict_path.display());
-    let dict_file = File::open(dict_path)
-        .with_context(|| format!("open dict {}", dict_path.display()))?;
+    let dict_file =
+        File::open(dict_path).with_context(|| format!("open dict {}", dict_path.display()))?;
     let decoder = zstd::stream::Decoder::new(dict_file).context("open zstd stream on dict")?;
     let dict = Dictionary::read(decoder).context("parse vibrato dict")?;
     let tokenizer = Tokenizer::new(dict);
@@ -57,8 +57,8 @@ pub fn run(
 
     // Collect all text files.
     let mut jobs: Vec<(String, PathBuf)> = Vec::new();
-    for ministry_entry in fs::read_dir(text_dir)
-        .with_context(|| format!("read_dir {}", text_dir.display()))?
+    for ministry_entry in
+        fs::read_dir(text_dir).with_context(|| format!("read_dir {}", text_dir.display()))?
     {
         let ministry_entry = ministry_entry?;
         if !ministry_entry.file_type()?.is_dir() {
@@ -98,7 +98,10 @@ pub fn run(
     let files_total = jobs.len();
     for (file_idx, (ministry, path)) in jobs.into_iter().enumerate() {
         if file_idx % 50 == 0 {
-            eprintln!("[ingest] {}/{} files, emitted={}", file_idx, files_total, emitted);
+            eprintln!(
+                "[ingest] {}/{} files, emitted={}",
+                file_idx, files_total, emitted
+            );
         }
         let text = match fs::read_to_string(&path) {
             Ok(t) => t,
@@ -179,7 +182,10 @@ pub fn run(
 /// Extract the `reading` field from an IPADIC feature string.
 /// Format: `品詞,品詞細分類1,品詞細分類2,品詞細分類3,活用形,活用型,原形,読み,発音`
 fn parse_reading(feature: &str) -> Option<&str> {
-    feature.split(',').nth(7).filter(|s| !s.is_empty() && *s != "*")
+    feature
+        .split(',')
+        .nth(7)
+        .filter(|s| !s.is_empty() && *s != "*")
 }
 
 fn is_kana(c: char) -> bool {
