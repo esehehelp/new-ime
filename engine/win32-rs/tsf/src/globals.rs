@@ -7,9 +7,9 @@
 #[cfg(target_os = "windows")]
 use once_cell::sync::OnceCell;
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::HMODULE;
-#[cfg(target_os = "windows")]
 use windows::core::GUID;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::HMODULE;
 
 /// CLSID — reused from engine/win32/tsf_guids.cpp
 /// `{7498E5B1-16C1-4C16-9A7E-1F6AC4B798C1}`
@@ -20,8 +20,7 @@ pub const CLSID_NEW_IME_TEXT_SERVICE: GUID =
 /// Language profile GUID — reused from engine/win32/tsf_guids.cpp
 /// `{B4819601-2CF2-42A0-9A1C-8A16E1B7994A}`
 #[cfg(target_os = "windows")]
-pub const GUID_NEW_IME_PROFILE: GUID =
-    GUID::from_u128(0xB481_9601_2CF2_42A0_9A1C_8A16_E1B7_994A);
+pub const GUID_NEW_IME_PROFILE: GUID = GUID::from_u128(0xB481_9601_2CF2_42A0_9A1C_8A16_E1B7_994A);
 
 /// Preedit input display attribute (underline). New GUID.
 /// `{F4A1B2C3-D4E5-4F06-8A17-2B3C4D5E6F78}`

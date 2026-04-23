@@ -51,9 +51,8 @@ impl SharedCharTokenizer {
             id_to_token[*id as usize] = tok.clone();
         }
 
-        let lookup = |name: &str, default: u32| -> u32 {
-            token_to_id.get(name).copied().unwrap_or(default)
-        };
+        let lookup =
+            |name: &str, default: u32| -> u32 { token_to_id.get(name).copied().unwrap_or(default) };
         Ok(Self {
             pad_id: lookup("[PAD]", 0),
             unk_id: lookup("[UNK]", 1),

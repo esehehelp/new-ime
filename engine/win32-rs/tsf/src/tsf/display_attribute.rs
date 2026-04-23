@@ -8,9 +8,9 @@
 //! `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` category. The actual atoms are
 //! looked up at Activate time via `ITfCategoryMgr::RegisterGUID`.
 
+use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::TextServices::*;
-use windows::core::*;
 
 use crate::globals::*;
 use crate::tsf::text_input_processor::NewImeTextService_Impl;
@@ -18,10 +18,8 @@ use crate::tsf::text_input_processor::NewImeTextService_Impl;
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 impl ITfDisplayAttributeProvider_Impl for NewImeTextService_Impl {
     fn EnumDisplayAttributeInfo(&self) -> Result<IEnumTfDisplayAttributeInfo> {
-        let attrs: Vec<ITfDisplayAttributeInfo> = vec![
-            InputAttribute.into(),
-            ConvertedAttribute.into(),
-        ];
+        let attrs: Vec<ITfDisplayAttributeInfo> =
+            vec![InputAttribute.into(), ConvertedAttribute.into()];
         Ok(DisplayAttributeEnum::new(attrs).into())
     }
 
@@ -58,11 +56,20 @@ impl ITfDisplayAttributeInfo_Impl for InputAttribute_Impl {
                 return Err(E_POINTER.into());
             }
             *pda = TF_DISPLAYATTRIBUTE {
-                crText: TF_DA_COLOR { r#type: TF_CT_NONE, ..Default::default() },
-                crBk: TF_DA_COLOR { r#type: TF_CT_NONE, ..Default::default() },
+                crText: TF_DA_COLOR {
+                    r#type: TF_CT_NONE,
+                    ..Default::default()
+                },
+                crBk: TF_DA_COLOR {
+                    r#type: TF_CT_NONE,
+                    ..Default::default()
+                },
                 lsStyle: TF_LS_DOT,
                 fBoldLine: FALSE,
-                crLine: TF_DA_COLOR { r#type: TF_CT_NONE, ..Default::default() },
+                crLine: TF_DA_COLOR {
+                    r#type: TF_CT_NONE,
+                    ..Default::default()
+                },
                 bAttr: TF_ATTR_INPUT,
             };
         }
@@ -92,11 +99,20 @@ impl ITfDisplayAttributeInfo_Impl for ConvertedAttribute_Impl {
                 return Err(E_POINTER.into());
             }
             *pda = TF_DISPLAYATTRIBUTE {
-                crText: TF_DA_COLOR { r#type: TF_CT_NONE, ..Default::default() },
-                crBk: TF_DA_COLOR { r#type: TF_CT_NONE, ..Default::default() },
+                crText: TF_DA_COLOR {
+                    r#type: TF_CT_NONE,
+                    ..Default::default()
+                },
+                crBk: TF_DA_COLOR {
+                    r#type: TF_CT_NONE,
+                    ..Default::default()
+                },
                 lsStyle: TF_LS_SOLID,
                 fBoldLine: TRUE,
-                crLine: TF_DA_COLOR { r#type: TF_CT_NONE, ..Default::default() },
+                crLine: TF_DA_COLOR {
+                    r#type: TF_CT_NONE,
+                    ..Default::default()
+                },
                 bAttr: TF_ATTR_TARGET_CONVERTED,
             };
         }

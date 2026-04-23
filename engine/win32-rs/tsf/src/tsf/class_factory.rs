@@ -3,9 +3,9 @@
 //! Pattern taken from karukan-tsf (MIT/Apache-2.0). The only allocation
 //! path the DLL ever hands out is `NewImeTextService` — no aggregation.
 
+use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::*;
-use windows::core::*;
 
 use crate::globals::{dll_add_ref, dll_release};
 use crate::tsf::text_input_processor::NewImeTextService;

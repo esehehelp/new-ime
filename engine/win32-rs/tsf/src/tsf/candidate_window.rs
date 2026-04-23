@@ -5,11 +5,11 @@
 //! needs: Meiryo UI font, DPI-scaled, selection highlight, and — new —
 //! 10-per-page pagination so wider beams don't drown the UI.
 
+use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::*;
 
 const PAGE_SIZE: usize = 10;
 const ITEM_HEIGHT: i32 = 24;
@@ -67,7 +67,11 @@ impl CandidateWindow {
 
         let height = visible_rows as i32 * scale(ITEM_HEIGHT, s)
             + scale(PADDING, s) * 2
-            + if total > PAGE_SIZE { scale(FOOTER_HEIGHT, s) } else { 0 };
+            + if total > PAGE_SIZE {
+                scale(FOOTER_HEIGHT, s)
+            } else {
+                0
+            };
         let width = calc_width(candidates, s, total > PAGE_SIZE);
         unsafe {
             let _ = SetWindowPos(
@@ -181,14 +185,18 @@ fn calc_width(candidates: &[String], s: f64, paginated: bool) -> i32 {
         .map(|c| c.chars().count())
         .max()
         .unwrap_or(4);
-    let base = max_chars as i32 * scale(CHAR_WIDTH, s)
-        + scale(LABEL_WIDTH, s)
-        + scale(PADDING, s) * 2;
+    let base =
+        max_chars as i32 * scale(CHAR_WIDTH, s) + scale(LABEL_WIDTH, s) + scale(PADDING, s) * 2;
     let footer = if paginated { scale(60, s) } else { 0 };
     base.max(scale(MIN_WIDTH, s)).max(footer)
 }
 
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_PAINT => {
             unsafe { paint(hwnd) };

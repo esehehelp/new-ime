@@ -56,12 +56,11 @@ pub fn prefix_beam_search(
         let mut idx: Vec<usize> = (0..vocab).collect();
         // Partial sort by log prob descending.
         idx.select_nth_unstable_by(top_k - 1, |&a, &b| {
-            row[b].partial_cmp(&row[a]).unwrap_or(std::cmp::Ordering::Equal)
+            row[b]
+                .partial_cmp(&row[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
-        let mut top: Vec<(u32, f32)> = idx[..top_k]
-            .iter()
-            .map(|&i| (i as u32, row[i]))
-            .collect();
+        let mut top: Vec<(u32, f32)> = idx[..top_k].iter().map(|&i| (i as u32, row[i])).collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         step_topk.push(top);
     }
@@ -122,21 +121,21 @@ pub fn prefix_beam_search(
         .into_iter()
         .map(|(p, (pb, pnb))| {
             let s = rank(&p, pb, pnb, lm, lm_alpha, lm_beta);
-            BeamHypothesis { tokens: p, score: s }
+            BeamHypothesis {
+                tokens: p,
+                score: s,
+            }
         })
         .collect();
     final_list.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     final_list
 }
 
-fn merge(
-    beam: &mut HashMap<Vec<u32>, (f32, f32)>,
-    prefix: Vec<u32>,
-    pb: f32,
-    pnb: f32,
-) {
+fn merge(beam: &mut HashMap<Vec<u32>, (f32, f32)>, prefix: Vec<u32>, pb: f32, pnb: f32) {
     match beam.get_mut(&prefix) {
         Some(entry) => {
             entry.0 = logsumexp(entry.0, pb);
@@ -195,11 +194,7 @@ mod tests {
     #[test]
     fn blank_separated_repeats_expand() {
         // Step 0: token 1, Step 1: blank, Step 2: token 1. Expected: [1,1].
-        let logits = arr2(&[
-            [-3.0, -0.1, -3.0],
-            [-0.1, -3.0, -3.0],
-            [-3.0, -0.1, -3.0],
-        ]);
+        let logits = arr2(&[[-3.0, -0.1, -3.0], [-0.1, -3.0, -3.0], [-3.0, -0.1, -3.0]]);
         let out = prefix_beam_search(&logits, 0, 4, 3, None, 0.0, 0.0);
         assert_eq!(out[0].tokens, vec![1, 1]);
     }

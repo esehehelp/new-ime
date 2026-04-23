@@ -117,7 +117,11 @@ impl Drop for AsyncConverter {
     }
 }
 
-fn worker_loop(rx: mpsc::Receiver<Request>, session: Arc<Mutex<EngineSession>>, shared: Arc<Shared>) {
+fn worker_loop(
+    rx: mpsc::Receiver<Request>,
+    session: Arc<Mutex<EngineSession>>,
+    shared: Arc<Shared>,
+) {
     while shared.alive.load(Ordering::SeqCst) {
         // Block on the next request.
         let first = match rx.recv() {

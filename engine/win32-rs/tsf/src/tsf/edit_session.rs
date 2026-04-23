@@ -8,9 +8,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use windows::core::*;
 use windows::Win32::Foundation::FALSE;
 use windows::Win32::UI::TextServices::*;
-use windows::core::*;
 
 use crate::engine_bridge::Action;
 
@@ -143,12 +143,7 @@ impl ActionEditSession {
         Ok(())
     }
 
-    unsafe fn apply_display_attribute(
-        &self,
-        ec: u32,
-        range: &ITfRange,
-        atom: u32,
-    ) -> Result<()> {
+    unsafe fn apply_display_attribute(&self, ec: u32, range: &ITfRange, atom: u32) -> Result<()> {
         let prop: ITfProperty = unsafe { self.context.GetProperty(&GUID_PROP_ATTRIBUTE)? };
         let variant = windows_core::VARIANT::from(atom as i32);
         unsafe { prop.SetValue(ec, range, &variant)? };

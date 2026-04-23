@@ -61,14 +61,21 @@ pub enum KeyKind {
 
 enum Phase {
     Empty,
-    Composing { candidates: Vec<String> },
-    Converting { candidates: Vec<String>, selected: usize },
+    Composing {
+        candidates: Vec<String>,
+    },
+    Converting {
+        candidates: Vec<String>,
+        selected: usize,
+    },
     /// Temporary raw-ASCII mode. Entered via Shift+letter, exited by
     /// Enter (commits buffer) or Escape (discards). Mirrors MS-IME /
     /// karukan: letters (case preserved), digits, space and `-` append
     /// verbatim; any other key commits the buffer first and then re-
     /// enters the normal flow.
-    Alphabet { buffer: String },
+    Alphabet {
+        buffer: String,
+    },
 }
 
 pub struct EngineBridge {
@@ -111,7 +118,6 @@ impl EngineBridge {
             cached_prefix_kanji: String::new(),
         }
     }
-
 
     pub fn is_active(&self) -> bool {
         !matches!(self.phase, Phase::Empty)
@@ -212,7 +218,10 @@ impl EngineBridge {
         let preedit = buffer.clone();
         self.phase = Phase::Alphabet { buffer };
         actions.push(Action::UpdatePreedit { text: preedit });
-        KeyOutcome { consumed: true, actions }
+        KeyOutcome {
+            consumed: true,
+            actions,
+        }
     }
 
     pub fn handle_char(&mut self, c: char) -> KeyOutcome {
@@ -237,13 +246,18 @@ impl EngineBridge {
                 actions.push(Action::HideCandidates);
                 self.composing.reset();
                 self.composing.input_char(c);
-                self.phase = Phase::Composing { candidates: Vec::new() };
+                self.phase = Phase::Composing {
+                    candidates: Vec::new(),
+                };
                 let candidates = self.dispatch_live();
                 let preedit = self.live_preedit();
                 let _ = &candidates;
                 self.phase = Phase::Composing { candidates };
                 actions.push(Action::UpdatePreedit { text: preedit });
-                KeyOutcome { consumed: true, actions }
+                KeyOutcome {
+                    consumed: true,
+                    actions,
+                }
             }
             _ => {
                 self.composing.input_char(c);
@@ -297,8 +311,8 @@ impl EngineBridge {
                 if self.composing.is_empty() {
                     self.phase = Phase::Empty;
                     self.last_applied_reading.clear();
-                self.cached_prefix_reading.clear();
-                self.cached_prefix_kanji.clear();
+                    self.cached_prefix_reading.clear();
+                    self.cached_prefix_kanji.clear();
                     return KeyOutcome {
                         consumed: true,
                         actions: vec![Action::EndComposition],
@@ -337,7 +351,10 @@ impl EngineBridge {
                 }
                 let selected = 0;
                 let first = list.first().cloned().unwrap_or_default();
-                self.phase = Phase::Converting { candidates: list.clone(), selected };
+                self.phase = Phase::Converting {
+                    candidates: list.clone(),
+                    selected,
+                };
                 KeyOutcome {
                     consumed: true,
                     actions: vec![
@@ -374,7 +391,10 @@ impl EngineBridge {
                 self.last_applied_reading.clear();
                 self.cached_prefix_reading.clear();
                 self.cached_prefix_kanji.clear();
-                KeyOutcome { consumed: true, actions }
+                KeyOutcome {
+                    consumed: true,
+                    actions,
+                }
             }
             Phase::Composing { candidates } => {
                 let cand_top = candidates.first().cloned();
@@ -472,7 +492,11 @@ impl EngineBridge {
     }
 
     fn move_selection(&mut self, delta: i32) -> KeyOutcome {
-        let Phase::Converting { candidates, selected } = &mut self.phase else {
+        let Phase::Converting {
+            candidates,
+            selected,
+        } = &mut self.phase
+        else {
             return not_consumed();
         };
         let n = candidates.len();
@@ -488,7 +512,10 @@ impl EngineBridge {
             consumed: true,
             actions: vec![
                 Action::UpdatePreedit { text },
-                Action::ShowCandidates { list: list_snap, selected: new_sel },
+                Action::ShowCandidates {
+                    list: list_snap,
+                    selected: new_sel,
+                },
             ],
         }
     }
@@ -512,7 +539,10 @@ impl EngineBridge {
             let _ = &candidates;
             self.phase = Phase::Composing { candidates };
             actions.push(Action::UpdatePreedit { text: preedit });
-            return KeyOutcome { consumed: true, actions };
+            return KeyOutcome {
+                consumed: true,
+                actions,
+            };
         }
         match &self.phase {
             Phase::Alphabet { .. } => unreachable!(), // handled above
@@ -537,7 +567,10 @@ impl EngineBridge {
                 self.phase = Phase::Composing { candidates };
                 actions.push(Action::HideCandidates);
                 actions.push(Action::UpdatePreedit { text: preedit });
-                KeyOutcome { consumed: true, actions }
+                KeyOutcome {
+                    consumed: true,
+                    actions,
+                }
             }
         }
     }
@@ -618,8 +651,10 @@ impl EngineBridge {
                 return format!("{}{}{}", cached_k, tail, pending);
             }
             if cached_r.starts_with(hira) {
-                let shrink_chars =
-                    cached_r.chars().count().saturating_sub(hira.chars().count());
+                let shrink_chars = cached_r
+                    .chars()
+                    .count()
+                    .saturating_sub(hira.chars().count());
                 let kanji_chars: Vec<char> = cached_k.chars().collect();
                 let keep = kanji_chars.len().saturating_sub(shrink_chars);
                 let trimmed: String = kanji_chars[..keep].iter().collect();
@@ -630,8 +665,12 @@ impl EngineBridge {
     }
 
     fn run_convert(&self, reading: &str) -> Vec<String> {
-        let Some(engine) = &self.engine else { return Vec::new(); };
-        let Ok(mut guard) = engine.lock() else { return Vec::new(); };
+        let Some(engine) = &self.engine else {
+            return Vec::new();
+        };
+        let Ok(mut guard) = engine.lock() else {
+            return Vec::new();
+        };
         match guard.convert(&self.context, reading) {
             Ok(list) => list,
             Err(e) => {
@@ -642,7 +681,11 @@ impl EngineBridge {
     }
 
     fn commit_converting(&mut self) -> Vec<Action> {
-        let Phase::Converting { candidates, selected } = &self.phase else {
+        let Phase::Converting {
+            candidates,
+            selected,
+        } = &self.phase
+        else {
             return vec![];
         };
         let text = candidates.get(*selected).cloned().unwrap_or_default();
@@ -660,6 +703,8 @@ impl EngineBridge {
 }
 
 fn not_consumed() -> KeyOutcome {
-    KeyOutcome { consumed: false, actions: vec![] }
+    KeyOutcome {
+        consumed: false,
+        actions: vec![],
+    }
 }
-

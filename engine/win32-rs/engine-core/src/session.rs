@@ -237,10 +237,7 @@ impl EngineSession {
     /// entity). `category_estimator` becomes the default
     /// `{general, tech, entity}` estimator — the caller can overwrite
     /// `self.category_estimator` afterwards to customise the profile.
-    pub fn attach_kenlm_moe(
-        &mut self,
-        paths: &HashMap<String, std::path::PathBuf>,
-    ) -> Result<()> {
+    pub fn attach_kenlm_moe(&mut self, paths: &HashMap<String, std::path::PathBuf>) -> Result<()> {
         let moe = KenLMMixture::load(paths, self.tokenizer.clone())
             .with_context(|| "load kenlm mixture")?;
         self.category_estimator = Some(CategoryEstimator::new(moe.domains().to_vec()));
@@ -397,7 +394,11 @@ impl EngineSession {
             .try_extract_tensor::<f32>()
             .map_err(ort_err)?;
         let dims = shape.as_ref();
-        anyhow::ensure!(dims.len() == 3, "unexpected refiner logits rank {}", dims.len());
+        anyhow::ensure!(
+            dims.len() == 3,
+            "unexpected refiner logits rank {}",
+            dims.len()
+        );
         let vocab = dims[2] as usize;
         let mut logits = Array2::<f32>::zeros((hyp_len, vocab));
         for t in 0..hyp_len {
@@ -516,8 +517,7 @@ impl EngineSession {
                     .map(|i| {
                         let row = refine.logits.row(i);
                         let max_logit = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                        let sum_exp: f32 =
-                            row.iter().map(|v| (v - max_logit).exp()).sum();
+                        let sum_exp: f32 = row.iter().map(|v| (v - max_logit).exp()).sum();
                         // softmax max prob in log-sum-exp-stable form.
                         let max_prob = 1.0 / sum_exp;
                         (i, max_prob)
@@ -590,11 +590,9 @@ impl EngineSession {
                     best_val = val;
                 }
             }
-            hypothesis_ids[pos] = sanitize_refiner_token(
-                best_idx as u32,
-                collapsed[pos].token_id,
-                &self.tokenizer,
-            ) as i64;
+            hypothesis_ids[pos] =
+                sanitize_refiner_token(best_idx as u32, collapsed[pos].token_id, &self.tokenizer)
+                    as i64;
         }
         let final_ids: Vec<u32> = hypothesis_ids[..hyp_len]
             .iter()
@@ -784,7 +782,11 @@ pub fn select_mask_positions(
     ranked.into_iter().map(|(idx, _, _)| idx).collect()
 }
 
-pub fn sanitize_refiner_token(predicted: u32, fallback: u32, tokenizer: &SharedCharTokenizer) -> u32 {
+pub fn sanitize_refiner_token(
+    predicted: u32,
+    fallback: u32,
+    tokenizer: &SharedCharTokenizer,
+) -> u32 {
     if predicted == tokenizer.pad_id
         || predicted == tokenizer.cls_id
         || predicted == tokenizer.sep_id
@@ -833,9 +835,7 @@ fn normalize_candidate(s: &str) -> String {
         .map(|c| match c {
             ',' | '\u{FF0C}' => '\u{3001}',
             '.' | '\u{FF0E}' => '\u{3002}',
-            '\u{FF01}'..='\u{FF5E}' => {
-                char::from_u32(c as u32 - 0xFEE0).unwrap_or(c)
-            }
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
             other => other,
         })
         .collect();
@@ -887,10 +887,26 @@ mod tests {
         let proposal = ProposalOutput {
             log_probs: Array2::<f32>::zeros((4, 3)),
             frames: vec![
-                ProposalFrame { top1_id: 4, top1_log_prob: -0.1, top2_log_prob: -0.4 },
-                ProposalFrame { top1_id: 8, top1_log_prob: -0.2, top2_log_prob: -0.7 },
-                ProposalFrame { top1_id: 8, top1_log_prob: -0.3, top2_log_prob: -0.9 },
-                ProposalFrame { top1_id: 9, top1_log_prob: -0.2, top2_log_prob: -1.1 },
+                ProposalFrame {
+                    top1_id: 4,
+                    top1_log_prob: -0.1,
+                    top2_log_prob: -0.4,
+                },
+                ProposalFrame {
+                    top1_id: 8,
+                    top1_log_prob: -0.2,
+                    top2_log_prob: -0.7,
+                },
+                ProposalFrame {
+                    top1_id: 8,
+                    top1_log_prob: -0.3,
+                    top2_log_prob: -0.9,
+                },
+                ProposalFrame {
+                    top1_id: 9,
+                    top1_log_prob: -0.2,
+                    top2_log_prob: -1.1,
+                },
             ],
             input_len: 4,
         };
@@ -900,13 +916,41 @@ mod tests {
     #[test]
     fn collapse_frames_with_alignment_tracks_spans_and_confidence() {
         let frames = vec![
-            ProposalFrame { top1_id: 4, top1_log_prob: -0.1, top2_log_prob: -1.0 },
-            ProposalFrame { top1_id: 7, top1_log_prob: -0.4, top2_log_prob: -0.5 },
-            ProposalFrame { top1_id: 7, top1_log_prob: -0.2, top2_log_prob: -0.8 },
-            ProposalFrame { top1_id: 4, top1_log_prob: -0.1, top2_log_prob: -1.1 },
-            ProposalFrame { top1_id: 7, top1_log_prob: -0.9, top2_log_prob: -0.92 },
-            ProposalFrame { top1_id: 9, top1_log_prob: -0.3, top2_log_prob: -1.2 },
-            ProposalFrame { top1_id: 9, top1_log_prob: -0.25, top2_log_prob: -0.6 },
+            ProposalFrame {
+                top1_id: 4,
+                top1_log_prob: -0.1,
+                top2_log_prob: -1.0,
+            },
+            ProposalFrame {
+                top1_id: 7,
+                top1_log_prob: -0.4,
+                top2_log_prob: -0.5,
+            },
+            ProposalFrame {
+                top1_id: 7,
+                top1_log_prob: -0.2,
+                top2_log_prob: -0.8,
+            },
+            ProposalFrame {
+                top1_id: 4,
+                top1_log_prob: -0.1,
+                top2_log_prob: -1.1,
+            },
+            ProposalFrame {
+                top1_id: 7,
+                top1_log_prob: -0.9,
+                top2_log_prob: -0.92,
+            },
+            ProposalFrame {
+                top1_id: 9,
+                top1_log_prob: -0.3,
+                top2_log_prob: -1.2,
+            },
+            ProposalFrame {
+                top1_id: 9,
+                top1_log_prob: -0.25,
+                top2_log_prob: -0.6,
+            },
         ];
         let collapsed = collapse_frames_with_alignment(&frames, 4);
         assert_eq!(collapsed.len(), 3);
@@ -1008,7 +1052,9 @@ mod tests {
         assert!(session.has_refiner());
         session.configure_refiner(true, 0.999, 2);
 
-        let greedy = session.greedy_decode("", "きょうは").expect("greedy decode");
+        let greedy = session
+            .greedy_decode("", "きょうは")
+            .expect("greedy decode");
         assert!(!greedy.is_empty());
 
         let refined = session.convert("", "きょうは").expect("refined convert");

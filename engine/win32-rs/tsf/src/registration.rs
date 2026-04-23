@@ -7,13 +7,13 @@
 //! reach us in modern apps.
 
 #[cfg(target_os = "windows")]
+use windows::core::w;
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::BOOL;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Registry::*;
-#[cfg(target_os = "windows")]
-use windows::core::w;
 
 #[cfg(target_os = "windows")]
 use crate::globals::*;

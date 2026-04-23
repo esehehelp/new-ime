@@ -14,10 +14,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use new_ime_engine_core::EngineSession;
+use windows::core::*;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::TextServices::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::*;
 
 use crate::async_convert::{AsyncConverter, WM_APP_CONVERT_DONE};
 use crate::engine_bridge::EngineBridge;
@@ -142,8 +142,8 @@ fn find_model_paths() -> Option<ModelPaths> {
 
 #[cfg(target_os = "windows")]
 fn dll_dir() -> Option<PathBuf> {
-    use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
     use crate::globals::DLL_INSTANCE;
+    use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
     let hmodule = DLL_INSTANCE.get().map(|s| s.0).unwrap_or_default();
     let mut buf = [0u16; 260];
     let len = unsafe { GetModuleFileNameW(hmodule, &mut buf) } as usize;
@@ -155,7 +155,9 @@ fn dll_dir() -> Option<PathBuf> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn dll_dir() -> Option<PathBuf> { None }
+fn dll_dir() -> Option<PathBuf> {
+    None
+}
 
 // ---- notify HWND for async convert results ----
 
@@ -228,7 +230,9 @@ fn on_async_done(svc: &NewImeTextService_Impl) {
         };
         inner.engine.apply_async_result()
     };
-    let Some(preedit) = update else { return; };
+    let Some(preedit) = update else {
+        return;
+    };
     if preedit.is_empty() {
         return;
     }
@@ -251,7 +255,9 @@ fn on_async_done(svc: &NewImeTextService_Impl) {
             inner.atom_converted,
         )
     };
-    let Some(tm) = thread_mgr else { return; };
+    let Some(tm) = thread_mgr else {
+        return;
+    };
 
     let context: ITfContext = unsafe {
         let doc = match tm.GetFocus() {
@@ -276,7 +282,9 @@ fn on_async_done(svc: &NewImeTextService_Impl) {
     };
     let session = ActionEditSession::new(
         context.clone(),
-        vec![Action::UpdatePreedit { text: preedit.clone() }],
+        vec![Action::UpdatePreedit {
+            text: preedit.clone(),
+        }],
         composition_cell.clone(),
         composition_sink,
         atom_input,
@@ -284,11 +292,7 @@ fn on_async_done(svc: &NewImeTextService_Impl) {
     );
     let edit_session: ITfEditSession = session.into();
     unsafe {
-        let _ = context.RequestEditSession(
-            client_id,
-            &edit_session,
-            TF_ES_SYNC | TF_ES_READWRITE,
-        );
+        let _ = context.RequestEditSession(client_id, &edit_session, TF_ES_SYNC | TF_ES_READWRITE);
     }
     // Propagate any composition-lifecycle change back to the service and
     // remember what we just painted so the next update can dedup.
@@ -306,7 +310,9 @@ fn resolve_display_atoms() -> (u32, u32) {
         match cat_mgr {
             Ok(m) => {
                 let input = m.RegisterGUID(&GUID_DISPLAY_ATTRIBUTE_INPUT).unwrap_or(0);
-                let converted = m.RegisterGUID(&GUID_DISPLAY_ATTRIBUTE_CONVERTED).unwrap_or(0);
+                let converted = m
+                    .RegisterGUID(&GUID_DISPLAY_ATTRIBUTE_CONVERTED)
+                    .unwrap_or(0);
                 (input, converted)
             }
             Err(e) => {
@@ -495,12 +501,11 @@ impl ITfTextInputProcessorEx_Impl for NewImeTextService_Impl {
             // On/Off".
             use crate::globals::GUID_PRESERVED_KEY_ONOFF;
             let key = TF_PRESERVEDKEY {
-                uVKey: 0x19,  // VK_KANJI (Hankaku/Zenkaku on JP keyboards)
+                uVKey: 0x19, // VK_KANJI (Hankaku/Zenkaku on JP keyboards)
                 uModifiers: 0,
             };
             let desc: Vec<u16> = "IME On/Off".encode_utf16().collect();
-            let _ =
-                keystroke_mgr.PreserveKey(tid, &GUID_PRESERVED_KEY_ONOFF, &key, &desc);
+            let _ = keystroke_mgr.PreserveKey(tid, &GUID_PRESERVED_KEY_ONOFF, &key, &desc);
         }
         {
             let mut inner = self.inner.borrow_mut();

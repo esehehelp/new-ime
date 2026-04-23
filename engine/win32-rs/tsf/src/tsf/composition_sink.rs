@@ -5,8 +5,8 @@
 //! failure mode that crashed the C++ TSF build on Enter (double Release of
 //! the `composition_` member).
 
-use windows::Win32::UI::TextServices::*;
 use windows::core::*;
+use windows::Win32::UI::TextServices::*;
 
 use crate::tsf::text_input_processor::NewImeTextService_Impl;
 

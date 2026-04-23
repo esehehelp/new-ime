@@ -3,9 +3,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use windows::core::*;
 use windows::Win32::Foundation::{BOOL, FALSE, LPARAM, TRUE, WPARAM};
 use windows::Win32::UI::TextServices::*;
-use windows::core::*;
 
 use crate::engine_bridge::{Action, KeyKind};
 use crate::keymap::classify_vk;
@@ -47,12 +47,7 @@ impl ITfKeyEventSink_Impl for NewImeTextService_Impl {
         Ok(BOOL::from(inner.engine.would_consume(kind)))
     }
 
-    fn OnKeyDown(
-        &self,
-        pic: Option<&ITfContext>,
-        wparam: WPARAM,
-        _lparam: LPARAM,
-    ) -> Result<BOOL> {
+    fn OnKeyDown(&self, pic: Option<&ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
         let vk = wparam.0 as u32;
 
         if is_toggle_key(vk, alt_down()) {
@@ -123,20 +118,11 @@ impl ITfKeyEventSink_Impl for NewImeTextService_Impl {
         Ok(FALSE)
     }
 
-    fn OnKeyUp(
-        &self,
-        _pic: Option<&ITfContext>,
-        _wparam: WPARAM,
-        _lparam: LPARAM,
-    ) -> Result<BOOL> {
+    fn OnKeyUp(&self, _pic: Option<&ITfContext>, _wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
         Ok(FALSE)
     }
 
-    fn OnPreservedKey(
-        &self,
-        pic: Option<&ITfContext>,
-        rguid: *const GUID,
-    ) -> Result<BOOL> {
+    fn OnPreservedKey(&self, pic: Option<&ITfContext>, rguid: *const GUID) -> Result<BOOL> {
         use crate::globals::GUID_PRESERVED_KEY_ONOFF;
         unsafe {
             if rguid.is_null() {
@@ -356,11 +342,7 @@ fn current_caret_screen_pos(
     });
     let edit_session: ITfEditSession = session.into();
     unsafe {
-        let _ = context.RequestEditSession(
-            client_id,
-            &edit_session,
-            TF_ES_SYNC | TF_ES_READ,
-        );
+        let _ = context.RequestEditSession(client_id, &edit_session, TF_ES_SYNC | TF_ES_READ);
     }
     let r = result.borrow();
     *r

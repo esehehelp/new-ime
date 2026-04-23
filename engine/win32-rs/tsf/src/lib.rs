@@ -21,10 +21,10 @@ pub mod tsf;
 
 #[cfg(target_os = "windows")]
 mod dll_exports {
+    use windows::core::*;
     use windows::Win32::Foundation::{
         BOOL, CLASS_E_CLASSNOTAVAILABLE, E_POINTER, HMODULE, S_FALSE, S_OK, TRUE,
     };
-    use windows::core::*;
 
     use crate::globals::*;
     use crate::tsf::class_factory::NewImeClassFactory;
@@ -32,7 +32,11 @@ mod dll_exports {
     const DLL_PROCESS_ATTACH: u32 = 1;
 
     #[unsafe(no_mangle)]
-    extern "system" fn DllMain(hinstance: HMODULE, reason: u32, _reserved: *mut core::ffi::c_void) -> BOOL {
+    extern "system" fn DllMain(
+        hinstance: HMODULE,
+        reason: u32,
+        _reserved: *mut core::ffi::c_void,
+    ) -> BOOL {
         if reason == DLL_PROCESS_ATTACH {
             let _ = DLL_INSTANCE.set(SyncHmodule(hinstance));
             std::panic::set_hook(Box::new(|info| {
