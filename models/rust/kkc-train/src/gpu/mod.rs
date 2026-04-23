@@ -23,6 +23,3 @@ pub mod optim;
 mod parity;
 
 pub use backend::TchCtcNatBackend;
-pub use batch::{GpuBatch, StagedBatchPipeline, StagedHostBatch};
-pub use model::{CtcNatForward, CtcNatModel};
-pub use optim::TchOptimizer;

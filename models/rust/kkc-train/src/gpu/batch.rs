@@ -68,8 +68,11 @@ pub struct GpuBatch {
     pub input_lengths: Tensor,
     pub target_lengths: Tensor,
     pub batch_size: usize,
+    #[allow(dead_code)]
     pub max_input_len: usize,
+    #[allow(dead_code)]
     pub max_target_len: usize,
+    #[allow(dead_code)]
     pub order_cursor: usize,
     pub bytes: usize,
     pub non_padding_input_tokens: usize,
@@ -114,6 +117,7 @@ impl GpuBatch {
 /// Stage-2 prefetch: owns a worker thread that pulls `PackedBatch` off a
 /// CPU-side producer, stages it on the host, and hands it back over a
 /// bounded channel.
+#[allow(dead_code)]
 pub struct StagedBatchPipeline<P>
 where
     P: BatchProducer<Item = PackedBatch> + Send + 'static,
@@ -124,6 +128,7 @@ where
     _marker: std::marker::PhantomData<P>,
 }
 
+#[allow(dead_code)]
 impl<P> StagedBatchPipeline<P>
 where
     P: BatchProducer<Item = PackedBatch> + Send + 'static,
@@ -167,6 +172,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn stage_loop<P>(tx: SyncSender<Result<StagedHostBatch>>, producer: &mut P)
 where
     P: BatchProducer<Item = PackedBatch>,

@@ -164,15 +164,7 @@ impl TchOptimizer {
         self.zero_grad(vs);
     }
 
-    pub fn base_lr(&self) -> f64 {
-        self.base_lr
-    }
-    pub fn weight_decay(&self) -> f64 {
-        self.weight_decay
-    }
-    pub fn grad_clip(&self) -> f64 {
-        self.grad_clip
-    }
+    #[cfg(test)]
     pub fn adam_step(&self) -> i64 {
         self.adam_step
     }
@@ -314,7 +306,10 @@ mod tests {
 
         let after = Vec::<f64>::try_from(&w).unwrap();
         assert!(
-            before.iter().zip(after.iter()).any(|(a, b)| (a - b).abs() > 1e-8),
+            before
+                .iter()
+                .zip(after.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-8),
             "optim.step() did not change weights"
         );
     }

@@ -95,16 +95,129 @@ pub fn resolve_tch_device(device: Device) -> Result<tch::Device> {
     match device {
         Device::Cpu => Ok(tch::Device::Cpu),
         Device::Cuda(idx) => {
-            if !tch::Cuda::is_available() {
-                bail!("requested {device} but libtorch reports no CUDA device");
+            prime_windows_torch_dlls()?;
+            let count = tch::Cuda::device_count();
+            if count <= 0 {
+                let is_available = tch::Cuda::is_available();
+                let cudnn_is_available = tch::Cuda::cudnn_is_available();
+                let has_cuda = tch::utils::has_cuda();
+                let has_cudart = tch::utils::has_cudart();
+                bail!(
+                    "requested {device} but libtorch reports no CUDA device \
+                     (device_count={count}, is_available={is_available}, \
+                     cudnn_is_available={cudnn_is_available}, has_cuda={has_cuda}, \
+                     has_cudart={has_cudart}). \
+                     when building against the project wheel, set \
+                     LIBTORCH_USE_PYTORCH=1 and PYTHON to the virtualenv \
+                     interpreter before cargo build/run"
+                );
             }
-            let count = tch::Cuda::device_count() as usize;
+            let count = count as usize;
             if idx >= count {
                 bail!("cuda:{idx} requested but only {count} device(s) visible");
             }
             Ok(tch::Device::Cuda(idx))
         }
     }
+}
+
+#[cfg(all(feature = "cuda", windows))]
+fn prime_windows_torch_dlls() -> Result<()> {
+    use std::ffi::{c_void, OsStr};
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+
+    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+    const LOAD_LIBRARY_SEARCH_USER_DIRS: u32 = 0x0000_0400;
+
+    unsafe extern "system" {
+        fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+        fn AddDllDirectory(new_directory: *const u16) -> *mut c_void;
+        fn LoadLibraryW(file_name: *const u16) -> *mut c_void;
+    }
+
+    fn discover_torch_lib_dir() -> Option<PathBuf> {
+        if let Ok(root) = std::env::var("LIBTORCH") {
+            let path = PathBuf::from(root).join("lib");
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+        if let Ok(py) = std::env::var("PYTHON") {
+            let path = Path::new(&py)
+                .parent()?
+                .parent()?
+                .join("Lib")
+                .join("site-packages")
+                .join("torch")
+                .join("lib");
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    fn to_wide(value: &OsStr) -> Vec<u16> {
+        value.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let Some(torch_lib) = discover_torch_lib_dir() else {
+            return Ok(());
+        };
+        if !torch_lib.is_dir() {
+            return Ok(());
+        }
+
+        let torch_lib_wide = to_wide(torch_lib.as_os_str());
+        unsafe {
+            let _ = SetDefaultDllDirectories(
+                LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS,
+            );
+            let cookie = AddDllDirectory(torch_lib_wide.as_ptr());
+            if cookie.is_null() {
+                return Err(format!(
+                    "AddDllDirectory failed for {}",
+                    torch_lib.display()
+                ));
+            }
+        }
+
+        for dll in [
+            "c10.dll",
+            "c10_cuda.dll",
+            "torch.dll",
+            "torch_cpu.dll",
+            "torch_cuda.dll",
+            "cudart64_12.dll",
+            "caffe2_nvrtc.dll",
+            "nvrtc64_120_0.dll",
+        ] {
+            let path = torch_lib.join(dll);
+            if !path.is_file() {
+                continue;
+            }
+            let wide = to_wide(path.as_os_str());
+            unsafe {
+                if LoadLibraryW(wide.as_ptr()).is_null() {
+                    return Err(format!("LoadLibraryW failed for {}", path.display()));
+                }
+            }
+        }
+
+        Ok(())
+    })
+    .as_ref()
+    .map_err(|err| anyhow::anyhow!(err.clone()))?;
+    Ok(())
+}
+
+#[cfg(all(feature = "cuda", not(windows)))]
+fn prime_windows_torch_dlls() -> Result<()> {
+    Ok(())
 }
 
 #[cfg(not(feature = "cuda"))]

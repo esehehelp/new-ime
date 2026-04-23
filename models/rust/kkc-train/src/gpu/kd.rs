@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Knowledge distillation wrapper for the tch training step.
 //!
 //! Ports the Python KD mechanics from `models/src/training/kd.py`:
@@ -224,23 +226,17 @@ mod tests {
 
     #[test]
     fn hard_example_mask_low_conf_filters_confident_samples() {
-        let conf = Tensor::from_slice(&[0.1f32, 0.9, 0.55, 0.4])
-            .to_kind(Kind::Float);
+        let conf = Tensor::from_slice(&[0.1f32, 0.9, 0.55, 0.4]).to_kind(Kind::Float);
         let mask = hard_example_mask(&conf, 0.6, GateMode::LowConf);
-        let rows: Vec<bool> = (0..4)
-            .map(|i| mask.int64_value(&[i]) != 0)
-            .collect();
+        let rows: Vec<bool> = (0..4).map(|i| mask.int64_value(&[i]) != 0).collect();
         assert_eq!(rows, vec![true, false, true, true]);
     }
 
     #[test]
     fn hard_example_mask_high_conf_is_inverse() {
-        let conf = Tensor::from_slice(&[0.1f32, 0.9, 0.55, 0.4])
-            .to_kind(Kind::Float);
+        let conf = Tensor::from_slice(&[0.1f32, 0.9, 0.55, 0.4]).to_kind(Kind::Float);
         let mask = hard_example_mask(&conf, 0.6, GateMode::HighConf);
-        let rows: Vec<bool> = (0..4)
-            .map(|i| mask.int64_value(&[i]) != 0)
-            .collect();
+        let rows: Vec<bool> = (0..4).map(|i| mask.int64_value(&[i]) != 0).collect();
         assert_eq!(rows, vec![false, true, false, false]);
     }
 

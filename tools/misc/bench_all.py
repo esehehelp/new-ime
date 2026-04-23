@@ -191,6 +191,47 @@ REGISTRY: list[tuple[str, callable]] = [
         lambda: _onnx_greedy(V2_ONNX_INT8)),
 
     # ====================================================================
+    # Mid-training sanity: student-200m-wp step 20000 (mask-CTC refine v3 run).
+    # Not canonical; surfaced behind --models filter for progress tracking.
+    # ====================================================================
+    ("ctc-nat-41m-maskctc-student-wp-step20000__greedy",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_20000.pt", lm=False)),
+    ("ctc-nat-41m-maskctc-student-wp-step20000__kenlm",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_20000.pt", lm=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step20000__kenlm-moe",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_20000.pt", lm=False, moe=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step40000__greedy",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_40000.pt", lm=False)),
+    ("ctc-nat-41m-maskctc-student-wp-step40000__kenlm",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_40000.pt", lm=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step40000__kenlm-moe",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_40000.pt", lm=False, moe=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step60000__greedy",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_60000.pt", lm=False)),
+    ("ctc-nat-41m-maskctc-student-wp-step60000__kenlm",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_60000.pt", lm=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step60000__kenlm-moe",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_60000.pt", lm=False, moe=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step80000__greedy",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_80000.pt", lm=False)),
+    ("ctc-nat-41m-maskctc-student-wp-step80000__kenlm",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_80000.pt", lm=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step80000__kenlm-moe",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_80000.pt", lm=False, moe=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step90000__greedy",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_90000.pt", lm=False)),
+    ("ctc-nat-41m-maskctc-student-wp-step90000__kenlm",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_90000.pt", lm=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step90000__kenlm-moe",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/checkpoint_step_90000.pt", lm=False, moe=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step100000__greedy",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/final.pt", lm=False)),
+    ("ctc-nat-41m-maskctc-student-wp-step100000__kenlm",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/final.pt", lm=True)),
+    ("ctc-nat-41m-maskctc-student-wp-step100000__kenlm-moe",
+        lambda: ctc("models/checkpoints/ctc-nat-41m-maskctc-student-wp/final.pt", lm=False, moe=True)),
+
+    # ====================================================================
     # Reference (competitors, not shipping): zenz family across size tiers.
     # ====================================================================
     ("zenz-v2.5-xsmall__beam5",

@@ -1320,6 +1320,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kkc-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "kkc-tokenizer",
+ "safetensors 0.4.5",
+ "serde",
+ "serde_json",
+ "tch",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "kkc-data"
 version = "0.1.0"
 dependencies = [

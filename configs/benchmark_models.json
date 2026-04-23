@@ -1,0 +1,293 @@
+{
+  "defaults": {
+    "train_config": "configs/suiko_v2_small__suiko_corpus_v2_300m.toml",
+    "output_root": "results/bench_all",
+    "tuning": {
+      "enabled": true,
+      "bench": "probe_v3",
+      "passes": 2,
+      "alpha": {
+        "min": 0.0,
+        "max": 0.8,
+        "step": 0.05
+      },
+      "beta": {
+        "min": 0.0,
+        "max": 0.8,
+        "step": 0.05
+      }
+    },
+    "benches": {
+      "probe_v3": {
+        "enabled_by_default": true,
+        "path": "datasets/eval/probe/probe.json"
+      },
+      "ajimee_jwtd_v2": {
+        "enabled_by_default": true,
+        "path": "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+      }
+    }
+  },
+  "models": [
+    {
+      "enabled": true,
+      "base_name": "Suiko-v1-small",
+      "params": "41M",
+      "model_path": "models/checkpoints/ctc-nat-41m-maskctc-student-wp/final.pt",
+      "config": "configs/suiko_v2_small__suiko_corpus_v2_300m.toml",
+      "device": "cpu",
+      "variants": [
+        {
+          "enabled": true,
+          "name_suffix": "greedy",
+          "runner": "python_ctc_nat",
+          "decoding": {
+            "num_beams": 1,
+            "num_return": 1
+          },
+          "kenlm": {
+            "enabled": false,
+            "path": null,
+            "alpha": 0.0,
+            "beta": 0.0
+          },
+          "kenlm_moe": {
+            "enabled": false,
+            "alpha": 0.0,
+            "beta": 0.0,
+            "paths_by_domain": {}
+          }
+        },
+        {
+          "enabled": true,
+          "name_suffix": "kenlm",
+          "runner": "python_ctc_nat",
+          "decoding": {
+            "num_beams": 5,
+            "num_return": 5
+          },
+          "kenlm": {
+            "enabled": true,
+            "path": "models/kenlm/kenlm_general_train_4gram_probing.bin",
+            "alpha": 0.2,
+            "beta": 0.6
+          },
+          "kenlm_moe": {
+            "enabled": false,
+            "alpha": 0.0,
+            "beta": 0.0,
+            "paths_by_domain": {}
+          },
+          "tuning": {
+            "enabled": true
+          }
+        },
+        {
+          "enabled": true,
+          "name_suffix": "kenlm-moe",
+          "runner": "python_ctc_nat",
+          "decoding": {
+            "num_beams": 5,
+            "num_return": 5
+          },
+          "kenlm": {
+            "enabled": false,
+            "path": null,
+            "alpha": 0.0,
+            "beta": 0.0
+          },
+          "kenlm_moe": {
+            "enabled": true,
+            "alpha": 0.2,
+            "beta": 0.6,
+            "paths_by_domain": {
+              "general": "models/kenlm/kenlm_general_train_4gram_probing.bin",
+              "tech": "models/kenlm/kenlm_tech_4gram.bin",
+              "entity": "models/kenlm/kenlm_entity_4gram.bin"
+            }
+          },
+          "tuning": {
+            "enabled": true
+          }
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "base_name": "ctc-nat-30m-student",
+      "params": "30M",
+      "model_path": "models/checkpoints/ctc-nat-30m-student/checkpoint_step_160000.pt",
+      "config": "configs/suiko_v2_small__suiko_corpus_v2_300m.toml",
+      "device": "cpu",
+      "variants": [
+        {
+          "enabled": true,
+          "name_suffix": "greedy",
+          "runner": "rust_native",
+          "decoding": {
+            "num_beams": 1,
+            "num_return": 1
+          },
+          "kenlm": {
+            "enabled": false,
+            "path": null,
+            "alpha": 0.0,
+            "beta": 0.0
+          },
+          "kenlm_moe": {
+            "enabled": false,
+            "alpha": 0.0,
+            "beta": 0.0,
+            "paths_by_domain": {}
+          }
+        },
+        {
+          "enabled": true,
+          "name_suffix": "kenlm",
+          "runner": "python_ctc_nat",
+          "decoding": {
+            "num_beams": 5,
+            "num_return": 5
+          },
+          "kenlm": {
+            "enabled": true,
+            "path": "models/kenlm/kenlm_general_train_4gram_probing.bin",
+            "alpha": 0.2,
+            "beta": 0.6
+          },
+          "kenlm_moe": {
+            "enabled": false,
+            "alpha": 0.0,
+            "beta": 0.0,
+            "paths_by_domain": {}
+          },
+          "tuning": {
+            "enabled": true
+          }
+        },
+        {
+          "enabled": true,
+          "name_suffix": "kenlm-moe",
+          "runner": "python_ctc_nat",
+          "decoding": {
+            "num_beams": 5,
+            "num_return": 5
+          },
+          "kenlm": {
+            "enabled": false,
+            "path": null,
+            "alpha": 0.0,
+            "beta": 0.0
+          },
+          "kenlm_moe": {
+            "enabled": true,
+            "alpha": 0.2,
+            "beta": 0.6,
+            "paths_by_domain": {
+              "general": "models/kenlm/kenlm_general_train_4gram_probing.bin",
+              "tech": "models/kenlm/kenlm_tech_4gram.bin",
+              "entity": "models/kenlm/kenlm_entity_4gram.bin"
+            }
+          },
+          "tuning": {
+            "enabled": true
+          }
+        },
+        {
+          "enabled": true,
+          "name_suffix": "onnx-fp32 greedy",
+          "runner": "python_onnx_ctc_greedy",
+          "model_path": "models/onnx/ctc-nat-30m-student-step160000.fp32.onnx",
+          "tokenizer_path": "models/onnx/ctc-nat-30m-student-step160000.fp32.tokenizer.json"
+        },
+        {
+          "enabled": true,
+          "name_suffix": "onnx-int8 greedy",
+          "runner": "python_onnx_ctc_greedy",
+          "model_path": "models/onnx/ctc-nat-30m-student-step160000.int8.onnx",
+          "tokenizer_path": "models/onnx/ctc-nat-30m-student-step160000.fp32.tokenizer.json"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "name": "zenz-v2.5-xsmall",
+      "params": "30M",
+      "runner": "python_zenz",
+      "model_path": "references/zenz-v2.5-xsmall",
+      "device": "cpu",
+      "decoding": {
+        "num_beams": 5,
+        "num_return": 5
+      }
+    },
+    {
+      "enabled": true,
+      "name": "zenz-v2.5-small",
+      "params": "91M",
+      "runner": "python_zenz",
+      "model_path": "references/zenz-v2.5-small",
+      "device": "cpu",
+      "decoding": {
+        "num_beams": 5,
+        "num_return": 5
+      }
+    },
+    {
+      "enabled": true,
+      "name": "zenz-v2.5-medium",
+      "params": "310M",
+      "runner": "python_zenz",
+      "model_path": "references/zenz-v2.5-medium",
+      "device": "cpu",
+      "decoding": {
+        "num_beams": 5,
+        "num_return": 5
+      }
+    },
+    {
+      "enabled": true,
+      "name": "zenz-v3.1-small",
+      "params": "91M",
+      "runner": "python_zenz",
+      "model_path": "references/zenz-v3.1-small",
+      "device": "cpu",
+      "decoding": {
+        "num_beams": 5,
+        "num_return": 5
+      }
+    },
+    {
+      "enabled": true,
+      "name": "jinen-v1-xsmall",
+      "params": "35.8M",
+      "runner": "python_jinen",
+      "model_path": "togatogah/jinen-v1-xsmall",
+      "device": "cpu",
+      "decoding": {
+        "num_beams": 5,
+        "num_return": 5
+      }
+    },
+    {
+      "enabled": true,
+      "name": "jinen-v1-small",
+      "params": "110M",
+      "runner": "python_jinen",
+      "model_path": "togatogah/jinen-v1-small",
+      "device": "cpu",
+      "decoding": {
+        "num_beams": 5,
+        "num_return": 5
+      }
+    },
+    {
+      "enabled": true,
+      "name": "teacher-150m-teacher",
+      "params": "150M",
+      "runner": "python_teacher",
+      "model_path": "models/checkpoints/teacher-150m-teacher/checkpoint_step_200000.pt",
+      "device": "cpu"
+    }
+  ]
+}

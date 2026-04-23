@@ -16,6 +16,7 @@ members = [
     "models/rust/kkc-tokenizer",
     "models/rust/kkc-data",
     "models/rust/kkc-model",
+    "models/rust/kkc-bench",
     "models/rust/kkc-train",
     "engine/tools/interactive-rs",
     "engine/win32-rs/engine-core",

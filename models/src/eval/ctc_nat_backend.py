@@ -33,6 +33,18 @@ from models.src.eval.run_eval import ConversionBackend
 from models.src.model.ctc_nat import CTCNAT, PRESETS
 
 
+_OPTIONAL_LEGACY_STATE_PREFIXES = (
+    "refine_decoder.",
+    "refine_head.",
+    "remask_head.",
+    "stop_head.",
+)
+
+
+def _is_optional_legacy_state_key(key: str) -> bool:
+    return key.startswith(_OPTIONAL_LEGACY_STATE_PREFIXES)
+
+
 class CTCNATBackend(ConversionBackend):
     def __init__(
         self,
@@ -80,7 +92,24 @@ class CTCNATBackend(ConversionBackend):
             vocab_size=vocab_size,
             use_cvae=bool(self.ckpt.get("use_cvae", False)),
         )
-        self.model.load_state_dict(self.ckpt["model_state_dict"])
+        load_result = self.model.load_state_dict(
+            self.ckpt["model_state_dict"],
+            strict=False,
+        )
+        missing_keys = list(load_result.missing_keys)
+        unexpected_keys = list(load_result.unexpected_keys)
+        unsupported_missing = [k for k in missing_keys if not _is_optional_legacy_state_key(k)]
+        unsupported_unexpected = [k for k in unexpected_keys if not _is_optional_legacy_state_key(k)]
+        if unsupported_missing or unsupported_unexpected:
+            details: list[str] = []
+            if unsupported_missing:
+                details.append(f"missing={unsupported_missing}")
+            if unsupported_unexpected:
+                details.append(f"unexpected={unsupported_unexpected}")
+            raise RuntimeError(
+                "checkpoint state_dict is incompatible with CTCNATBackend: "
+                + "; ".join(details)
+            )
         self.device = torch.device(device)
         self.model.to(self.device).eval()
         self.max_context = max_context
@@ -111,6 +140,9 @@ class CTCNATBackend(ConversionBackend):
         self.top_p = float(top_p)
         self.mask_refine_k = max(0, int(mask_refine_k))
         self.mask_refine_alt = max(2, int(mask_refine_alt))
+        self.has_mask_refine_weights = not missing_keys
+        if missing_keys:
+            self.mask_refine_k = 0
         self.lm_estimator = None
         if lm_paths_by_domain and (self.lm_alpha > 0.0 or self.lm_beta > 0.0):
             from models.src.eval.kenlm_mixture import CategoryEstimator, KenLMMixtureScorer

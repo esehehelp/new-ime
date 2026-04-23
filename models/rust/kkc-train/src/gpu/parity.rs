@@ -88,13 +88,7 @@ mod tests {
         let input_lengths = load_safetensor(&ctc_path, "input_lengths");
         let target_lengths = load_safetensor(&ctc_path, "target_lengths");
 
-        let loss = ctc_proposal_loss(
-            &logits,
-            &targets,
-            &input_lengths,
-            &target_lengths,
-            blank_id,
-        );
+        let loss = ctc_proposal_loss(&logits, &targets, &input_lengths, &target_lengths, blank_id);
         let got = loss.double_value(&[]);
         let diff = (got - expected).abs();
         assert!(
@@ -109,8 +103,7 @@ mod tests {
         if skip_if_missing(&path) {
             return;
         }
-        let payload: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let base_lr = payload["config"]["base_lr"].as_f64().unwrap();
         let warmup = payload["config"]["warmup_steps"].as_u64().unwrap() as usize;
         let total = payload["config"]["total_steps"].as_u64().unwrap() as usize;

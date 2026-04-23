@@ -49,6 +49,7 @@ pub fn run_training_loop<S, B>(
     state: &mut TrainerState,
     run_dir: &Path,
     config: TrainerLoopConfig,
+    mut on_step: impl FnMut(&mut B, &mut TrainerState, TrainerStep) -> Result<()>,
 ) -> Result<TrainerSummary>
 where
     S: BatchStream,
@@ -75,6 +76,7 @@ where
                 config.ckpt_sender.as_ref(),
             )?;
         }
+        on_step(backend, state, step_out)?;
     }
     let elapsed_sec = started.elapsed().as_secs_f64().max(1e-9);
     let executed_steps = state.step.saturating_sub(start_step);
@@ -262,11 +264,7 @@ fn prune_checkpoints(
         let mut paths: Vec<PathBuf> = vec![
             PathBuf::from(&entry.checkpoint),
             checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".backend.json"),
-            checkpoint_sidecar_path(
-                &entry.checkpoint,
-                ".ckpt.json",
-                ".weights.safetensors",
-            ),
+            checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".weights.safetensors"),
             checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".optim.safetensors"),
         ];
         // Drop duplicates if the above happens to collide on identical

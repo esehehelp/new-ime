@@ -31,7 +31,9 @@ pub fn ctc_proposal_loss(
     blank_id: i64,
 ) -> Tensor {
     // tch `ctc_loss` expects log_probs in `[T, B, V]` order.
-    let log_probs = proposal_logits.log_softmax(-1, Kind::Float).permute([1, 0, 2]);
+    let log_probs = proposal_logits
+        .log_softmax(-1, Kind::Float)
+        .permute([1, 0, 2]);
     Tensor::ctc_loss_tensor(
         &log_probs,
         target_ids,
@@ -86,9 +88,11 @@ pub fn build_target_refinement(
     // picked, pick a deterministic random position inside the valid
     // span via splitmix64(step, row_idx) — matches the CPU reference
     // and avoids a position-0 bias.
-    let any = mask_positions
-        .to_kind(Kind::Int64)
-        .sum_dim_intlist([1i64].as_ref(), /*keepdim=*/ true, Kind::Int64); // [B, 1]
+    let any = mask_positions.to_kind(Kind::Int64).sum_dim_intlist(
+        [1i64].as_ref(),
+        /*keepdim=*/ true,
+        Kind::Int64,
+    ); // [B, 1]
     let needs_force = any.eq(0).logical_and(&target_lengths.unsqueeze(-1).gt(0)); // [B, 1]
 
     // Build forced indices on CPU (tiny, [B]) then move to device.
@@ -118,15 +122,15 @@ pub fn refine_mlm_loss(
     target_ids: &Tensor,
     mask_positions: &Tensor,
 ) -> Tensor {
-    let (b, s, v) = refined_logits
-        .size3()
-        .expect("refined_logits must be 3-D");
+    let (b, s, v) = refined_logits.size3().expect("refined_logits must be 3-D");
     let logits_flat = refined_logits.view([b * s, v]);
     let targets_flat = target_ids.view([b * s]);
     let mask_flat = mask_positions.view([b * s]);
 
     let log_probs = logits_flat.log_softmax(-1, Kind::Float); // [B*S, V]
-    let neg_ll = -log_probs.gather(1, &targets_flat.unsqueeze(-1), false).squeeze_dim(-1); // [B*S]
+    let neg_ll = -log_probs
+        .gather(1, &targets_flat.unsqueeze(-1), false)
+        .squeeze_dim(-1); // [B*S]
     let masked = &neg_ll * &mask_flat.to_kind(Kind::Float);
     let denom = mask_flat
         .to_kind(Kind::Float)
@@ -146,9 +150,7 @@ pub fn remask_loss(
 ) -> Tensor {
     let refined_argmax = refined_logits.argmax(-1, false); // [B, S]
     let wrong = refined_argmax.ne_tensor(target_ids); // [B, S] bool
-    let target = wrong
-        .logical_and(valid_positions)
-        .to_kind(Kind::Float); // [B, S]
+    let target = wrong.logical_and(valid_positions).to_kind(Kind::Float); // [B, S]
     let losses = remask_logits.binary_cross_entropy_with_logits::<Tensor>(
         &target,
         None,
@@ -171,11 +173,12 @@ pub fn stop_loss(
 ) -> Tensor {
     let refined_argmax = refined_logits.argmax(-1, false); // [B, S]
     let correct = refined_argmax.eq_tensor(target_ids); // [B, S]
-    // A row is "fully correct" if every valid position matches.
+                                                        // A row is "fully correct" if every valid position matches.
     let wrong_positions = correct.logical_not().logical_and(valid_positions); // [B, S]
-    let any_wrong = wrong_positions
-        .to_kind(Kind::Int64)
-        .sum_dim_intlist([1i64].as_ref(), false, Kind::Int64); // [B]
+    let any_wrong =
+        wrong_positions
+            .to_kind(Kind::Int64)
+            .sum_dim_intlist([1i64].as_ref(), false, Kind::Int64); // [B]
     let target = any_wrong.eq(0).to_kind(Kind::Float); // [B]
     stop_logit.binary_cross_entropy_with_logits::<Tensor>(&target, None, None, Reduction::Mean)
 }
@@ -223,9 +226,11 @@ mod tests {
             .int64_value(&[]);
         assert_eq!(outside_mask, 0);
         // at least one masked position per non-empty row
-        let per_row = mask_positions
-            .to_kind(Kind::Int64)
-            .sum_dim_intlist([1i64].as_ref(), false, Kind::Int64);
+        let per_row = mask_positions.to_kind(Kind::Int64).sum_dim_intlist(
+            [1i64].as_ref(),
+            false,
+            Kind::Int64,
+        );
         let r0 = per_row.int64_value(&[0]);
         let r1 = per_row.int64_value(&[1]);
         assert!(r0 >= 1 && r1 >= 1, "rows had 0 masks: r0={r0} r1={r1}");

@@ -20,11 +20,18 @@ use kkc_data::{
 use kkc_model::{ctc_nat_preset, estimate_ctc_nat_resources, BatchShape, RuntimeAssumptions};
 use kkc_tokenizer::SharedCharTokenizer;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
 
 const MAX_SEQUENCE_U16: usize = u16::MAX as usize;
+
+macro_rules! train_log {
+    ($($arg:tt)*) => {{
+        eprintln!($($arg)*);
+    }};
+}
 
 #[derive(Parser)]
 #[command(
@@ -112,11 +119,17 @@ enum Command {
         #[arg(long, default_value = "cpu")]
         device: String,
     },
-    Fit {
+    #[command(alias = "fit")]
+    Train {
         #[arg(long)]
         config: PathBuf,
         #[arg(long)]
         run_dir: PathBuf,
+        /// Resume from the existing run manifest/state/checkpoints.
+        /// When omitted, `train` treats the config as the source of truth
+        /// and re-initializes the run metadata even if the run dir already exists.
+        #[arg(long, default_value_t = false)]
+        resume: bool,
         #[arg(long, default_value_t = 100)]
         steps: usize,
         #[arg(long, default_value_t = 50)]
@@ -134,6 +147,9 @@ enum Command {
         /// by the `tch-ctc-nat` backend for now; other backends ignore.
         #[arg(long, default_value_t = 0.0)]
         grad_clip: f64,
+        /// Emit per-step timing breakdowns for the active backend.
+        #[arg(long, default_value_t = false)]
+        debug: bool,
     },
     MockFit {
         #[arg(long)]
@@ -155,6 +171,8 @@ struct TrainConfig {
     runtime: RuntimeConfig,
     #[serde(default)]
     eval: EvalSection,
+    #[serde(default)]
+    probe: ProbeSection,
     #[serde(default)]
     backend: backend::BackendConfig,
     train: TrainSection,
@@ -208,6 +226,16 @@ struct TrainSection {
     seed: u64,
     #[serde(default = "default_checkpoint_keep_last")]
     checkpoint_keep_last: usize,
+    #[serde(default = "default_log_every")]
+    log_every: usize,
+    #[serde(default = "default_loss_window")]
+    loss_window: usize,
+    #[serde(default = "default_eval_every")]
+    eval_every: usize,
+    #[serde(default = "default_early_log_every")]
+    early_log_every: usize,
+    #[serde(default = "default_early_log_steps")]
+    early_log_steps: usize,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -215,6 +243,17 @@ struct EvalSection {
     shard: Option<PathBuf>,
     #[serde(default)]
     batches: usize,
+    #[serde(default)]
+    print_samples: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ProbeSection {
+    path: Option<PathBuf>,
+    #[serde(default)]
+    every: usize,
+    #[serde(default)]
+    limit: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -340,6 +379,26 @@ fn default_checkpoint_keep_last() -> usize {
     2
 }
 
+fn default_log_every() -> usize {
+    100
+}
+
+fn default_loss_window() -> usize {
+    100
+}
+
+fn default_eval_every() -> usize {
+    2000
+}
+
+fn default_early_log_every() -> usize {
+    10
+}
+
+fn default_early_log_steps() -> usize {
+    200
+}
+
 fn default_param_dtype_bytes() -> usize {
     2
 }
@@ -399,25 +458,29 @@ fn main() -> Result<()> {
             device::require_cuda_built(device)?;
             eval_command(&config, run_dir.as_deref(), batches, device)
         }
-        Command::Fit {
+        Command::Train {
             config,
             run_dir,
+            resume,
             steps,
             checkpoint_every,
             device,
             async_ckpt_queue,
             grad_clip,
+            debug,
         } => {
             let device = Device::from_str(&device)?;
             device::require_cuda_built(device)?;
             fit(
                 &config,
                 &run_dir,
+                resume,
                 steps,
                 checkpoint_every,
                 device,
                 async_ckpt_queue,
                 grad_clip,
+                debug,
             )
         }
         Command::MockFit {
@@ -428,11 +491,13 @@ fn main() -> Result<()> {
         } => fit(
             &config,
             &run_dir,
+            false,
             steps,
             checkpoint_every,
             Device::Cpu,
             0,
             0.0,
+            false,
         ),
     }
 }
@@ -814,18 +879,26 @@ fn check_resume(config_path: &Path, run_dir: &Path) -> Result<()> {
 fn fit(
     config_path: &Path,
     run_dir: &Path,
+    resume: bool,
     steps: usize,
     checkpoint_every: usize,
     device: Device,
     async_ckpt_queue: usize,
     grad_clip: f64,
+    debug: bool,
 ) -> Result<()> {
+    train_log!("[kkc-train] ensuring run dir");
+    ensure_run_initialized(config_path, run_dir, resume)?;
+    train_log!("[kkc-train] loading config");
     let config = load_config(config_path)?;
+    train_log!("[kkc-train] loading tokenizer");
+    let tokenizer = load_tokenizer(&config)?;
+    train_log!("[kkc-train] reading manifest/state");
     let manifest = read_manifest(&run_dir.join("run_manifest.json"))?;
     let state_path = run_dir.join("trainer_state.json");
     let mut state = read_state(&state_path)?;
     let mismatches = collect_resume_mismatches(&config, &manifest, &state);
-    if !mismatches.is_empty() && state.step > 0 {
+    if resume && !mismatches.is_empty() && state.step > 0 {
         anyhow::bail!("run is not resume-compatible; use check-resume first");
     }
     if device.is_cuda() && !device::backend_supports_cuda(&config.backend.kind) {
@@ -834,7 +907,6 @@ fn fit(
             config.backend.kind,
         );
     }
-    let mut source = open_batch_source_at_cursor(&config, state.data_cursor)?;
     // CLI --grad-clip overrides the config-resident value when set to a
     // nonzero number. Log the override so resume drift is visible in
     // the training log, not just the manifest.
@@ -849,8 +921,23 @@ fn fit(
     } else {
         config.backend.grad_clip
     };
-    let mut backend: Box<dyn backend::TrainBackend> =
-        new_backend(&config.backend, device, effective_grad_clip, /*with_optimizer=*/ true)?;
+    train_log!("[kkc-train] estimating resources");
+    let estimate = model_estimate(&config)?;
+    let batch_plan = sequence_budget(&config).estimate();
+    let epoch_steps = estimate_epoch_steps(&config)?;
+    train_log!(
+        "[kkc-train] opening batch source at cursor {}",
+        state.data_cursor
+    );
+    let mut source = open_batch_source_at_cursor(&config, state.data_cursor)?;
+    train_log!("[kkc-train] initializing backend {}", config.backend.kind);
+    let mut backend: Box<dyn backend::TrainBackend> = new_backend(
+        &config.backend,
+        device,
+        effective_grad_clip,
+        /*with_optimizer=*/ true,
+    )?;
+    backend.set_debug(debug);
     let ckpt_writer = if async_ckpt_queue > 0 {
         Some(pipeline::AsyncCheckpointWriter::spawn(async_ckpt_queue))
     } else {
@@ -864,17 +951,42 @@ fn fit(
             backend.attach_ckpt_sender(sender);
         }
     }
-    if let Some(entry) = last_checkpoint_entry(&state) {
-        if entry.kind == backend.kind() {
-            let backend_checkpoint =
-                checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".backend.json");
-            if backend_checkpoint.exists() {
-                backend.load_checkpoint(&backend_checkpoint)?;
+    if resume {
+        if let Some(entry) = last_checkpoint_entry(&state) {
+            if entry.kind == backend.kind() {
+                let backend_checkpoint =
+                    checkpoint_sidecar_path(&entry.checkpoint, ".ckpt.json", ".backend.json");
+                if backend_checkpoint.exists() {
+                    train_log!(
+                        "[kkc-train] loading backend checkpoint {}",
+                        backend_checkpoint.display()
+                    );
+                    backend.load_checkpoint(&backend_checkpoint)?;
+                }
             }
         }
     }
     let target_step = state.step.saturating_add(steps);
     let prune_sender = ckpt_writer.as_ref().and_then(|w| w.sender());
+    let mut running_losses: VecDeque<f64> =
+        VecDeque::with_capacity(config.train.loss_window.max(1));
+    let mut last_log = Instant::now();
+    let mut probe_items: Option<Vec<ProbeItem>> = None;
+    train_log!("[kkc-train] startup summary");
+    print_train_startup(
+        &config,
+        run_dir,
+        device,
+        &state,
+        steps,
+        checkpoint_every,
+        &estimate,
+        &batch_plan,
+        epoch_steps,
+        None,
+        effective_grad_clip,
+    )?;
+    train_log!("[kkc-train] entering training loop");
     let summary = trainer::run_training_loop(
         &mut source,
         backend.as_mut(),
@@ -883,23 +995,147 @@ fn fit(
         trainer::TrainerLoopConfig {
             target_step,
             checkpoint_every,
-            epoch_steps: estimate_epoch_steps(&config)?,
+            epoch_steps,
             grad_accum: config.train.grad_accum,
             checkpoint_keep_last: config.train.checkpoint_keep_last,
             ckpt_sender: prune_sender,
         },
+        |backend, state, step_out| {
+            running_losses.push_back(step_out.loss);
+            while running_losses.len() > config.train.loss_window.max(1) {
+                running_losses.pop_front();
+            }
+
+            let regular_log_due =
+                config.train.log_every > 0 && state.step % config.train.log_every == 0;
+            let early_log_due = config.train.early_log_every > 0
+                && state.step <= config.train.early_log_steps
+                && state.step % config.train.early_log_every == 0;
+            if regular_log_due || early_log_due {
+                let now = Instant::now();
+                let interval = if regular_log_due {
+                    config.train.log_every
+                } else {
+                    config.train.early_log_every
+                };
+                let rate = interval as f64 / last_log.elapsed().as_secs_f64().max(1e-6);
+                last_log = now;
+                let avg_loss = running_losses.iter().copied().sum::<f64>()
+                    / running_losses.len().max(1) as f64;
+                let lr = backend_current_lr(&config.backend, state.step);
+                train_log!(
+                    "[step {}] loss={:.4} avg{}={:.4} lr={:.6} rate={:.2} steps/s",
+                    state.step,
+                    step_out.loss,
+                    config.train.loss_window,
+                    avg_loss,
+                    lr,
+                    rate
+                );
+            }
+
+            if checkpoint_every > 0 && state.step % checkpoint_every == 0 {
+                train_log!(
+                    "[ckpt] saved {}",
+                    state.last_checkpoint.as_deref().unwrap_or("null")
+                );
+            }
+
+            if config.train.eval_every > 0 && state.step % config.train.eval_every == 0 {
+                let eval_summary =
+                    eval_backend_dyn(&config, backend, &tokenizer, config.eval.batches.max(1))?;
+                train_log!(
+                    "[eval {}] loss={:.4} EM={:.4} CharAcc={:.4} blank={:.3} pred_len={:.1}/{:.1}",
+                    state.step,
+                    eval_summary.loss,
+                    eval_summary.exact_match_top1,
+                    eval_summary.char_acc_top1,
+                    eval_summary.blank_fraction,
+                    eval_summary.mean_decoded_chars,
+                    eval_summary.mean_target_chars
+                );
+                for (idx, sample) in eval_summary.samples.iter().enumerate() {
+                    train_log!(
+                        "  sample{}: ref={} pred={}",
+                        idx + 1,
+                        sample.reference.chars().take(40).collect::<String>(),
+                        sample.prediction.chars().take(40).collect::<String>()
+                    );
+                }
+                if config.probe.every > 0 && state.step % config.probe.every == 0 {
+                    maybe_load_probe_items(&mut probe_items, &config.probe)?;
+                    if let Some(items) = probe_items.as_ref() {
+                        let (em1, n, cats) = evaluate_probe(
+                            backend,
+                            &tokenizer,
+                            items,
+                            config.train.max_input_len,
+                            40,
+                        )?;
+                        let cat_bits = cats
+                            .iter()
+                            .map(|(k, v)| format!("{k}={v:.2}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if cat_bits.is_empty() {
+                            train_log!("[probe {}] EM1={:.4} n={}", state.step, em1, n);
+                        } else {
+                            train_log!(
+                                "[probe {}] EM1={:.4} n={} {}",
+                                state.step,
+                                em1,
+                                n,
+                                cat_bits
+                            );
+                        }
+                    }
+                }
+            } else {
+                if config.probe.every > 0 && state.step % config.probe.every == 0 {
+                    maybe_load_probe_items(&mut probe_items, &config.probe)?;
+                    if let Some(items) = probe_items.as_ref() {
+                        let (em1, n, cats) = evaluate_probe(
+                            backend,
+                            &tokenizer,
+                            items,
+                            config.train.max_input_len,
+                            40,
+                        )?;
+                        let cat_bits = cats
+                            .iter()
+                            .map(|(k, v)| format!("{k}={v:.2}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if cat_bits.is_empty() {
+                            train_log!("[probe {}] EM1={:.4} n={}", state.step, em1, n);
+                        } else {
+                            train_log!(
+                                "[probe {}] EM1={:.4} n={} {}",
+                                state.step,
+                                em1,
+                                n,
+                                cat_bits
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(())
+        },
     )?;
+    train_log!("[kkc-train] training loop finished");
     let eval_loss = if config.eval.batches > 0 {
         Some(eval_backend_dyn(
             &config,
             backend.as_mut(),
+            &tokenizer,
             config.eval.batches,
         )?)
     } else {
         None
     };
-    if let Some(eval_loss) = eval_loss {
-        update_last_checkpoint_metric(&mut state, eval_loss, "minimize");
+    if let Some(eval_summary) = eval_loss.as_ref() {
+        update_last_checkpoint_metric(&mut state, eval_summary.loss, "minimize");
     }
     // Drop the backend BEFORE finishing the writer. The backend holds a
     // `SyncSender` clone for its async checkpoint path; leaving it alive
@@ -931,10 +1167,48 @@ fn fit(
     println!(
         "fit_eval_loss: {}",
         eval_loss
-            .map(|v| format!("{v:.6}"))
+            .as_ref()
+            .map(|v| format!("{:.6}", v.loss))
             .unwrap_or_else(|| "null".to_string())
     );
     Ok(())
+}
+
+fn ensure_run_initialized(config_path: &Path, run_dir: &Path, resume: bool) -> Result<()> {
+    let manifest_path = run_dir.join("run_manifest.json");
+    let state_path = run_dir.join("trainer_state.json");
+    let has_manifest = manifest_path.exists();
+    let has_state = state_path.exists();
+    if !resume {
+        if has_manifest || has_state {
+            eprintln!(
+                "[kkc-train] starting fresh from config; reinitializing {}",
+                run_dir.display()
+            );
+        } else {
+            eprintln!(
+                "[kkc-train] run dir is not initialized; creating {}",
+                run_dir.display()
+            );
+        }
+        return init_run(config_path, run_dir);
+    }
+    match (has_manifest, has_state) {
+        (true, true) => Ok(()),
+        (false, false) => {
+            eprintln!(
+                "[kkc-train] run dir is not initialized; creating {}",
+                run_dir.display()
+            );
+            init_run(config_path, run_dir)
+        }
+        _ => anyhow::bail!(
+            "run dir is partially initialized: manifest_exists={} state_exists={} at {}",
+            has_manifest,
+            has_state,
+            run_dir.display()
+        ),
+    }
 }
 
 fn eval_command(
@@ -969,10 +1243,26 @@ fn eval_command(
         }
     }
     let batches = batches.unwrap_or(config.eval.batches.max(1));
-    let loss = eval_backend_dyn(&config, backend.as_mut(), batches)?;
+    let tokenizer = load_tokenizer(&config)?;
+    let summary = eval_backend_dyn(&config, backend.as_mut(), &tokenizer, batches)?;
     println!("eval_backend: {}", config.backend.kind);
     println!("eval_batches: {}", batches);
-    println!("eval_loss: {:.6}", loss);
+    println!("eval_loss: {:.6}", summary.loss);
+    println!("eval_em: {:.4}", summary.exact_match_top1);
+    println!("eval_char_acc: {:.4}", summary.char_acc_top1);
+    println!("eval_blank_fraction: {:.3}", summary.blank_fraction);
+    println!(
+        "eval_pred_len: {:.1}/{:.1}",
+        summary.mean_decoded_chars, summary.mean_target_chars
+    );
+    for (idx, sample) in summary.samples.iter().enumerate() {
+        println!(
+            "  sample{}: ref={} pred={}",
+            idx + 1,
+            sample.reference.chars().take(40).collect::<String>(),
+            sample.prediction.chars().take(40).collect::<String>()
+        );
+    }
     Ok(())
 }
 
@@ -989,11 +1279,270 @@ fn load_config(config_path: &Path) -> Result<TrainConfig> {
 /// Calls `eval_step` so the tch backend's `no_grad` forward is honored
 /// and the optimizer stays idle — critical for `best_checkpoint`
 /// correctness (the post-fit eval must not continue training).
+#[derive(Debug, Clone)]
+struct EvalSample {
+    reference: String,
+    prediction: String,
+}
+
+#[derive(Debug, Clone)]
+struct EvalSummary {
+    loss: f64,
+    exact_match_top1: f64,
+    char_acc_top1: f64,
+    blank_fraction: f64,
+    mean_decoded_chars: f64,
+    mean_target_chars: f64,
+    samples: Vec<EvalSample>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbeItem {
+    #[serde(default)]
+    #[serde(alias = "context_text")]
+    context: String,
+    #[serde(alias = "input")]
+    reading: String,
+    #[serde(alias = "expected_output")]
+    references: Vec<String>,
+    #[serde(default)]
+    category: Option<String>,
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    if a.is_empty() {
+        return b.chars().count();
+    }
+    if b.is_empty() {
+        return a.chars().count();
+    }
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut dp: Vec<usize> = (0..=b_chars.len()).collect();
+    for (i, a_ch) in a_chars.iter().enumerate() {
+        let mut prev = dp[0];
+        dp[0] = i + 1;
+        for (j, b_ch) in b_chars.iter().enumerate() {
+            let temp = dp[j + 1];
+            dp[j + 1] = if a_ch == b_ch {
+                prev
+            } else {
+                1 + prev.min(dp[j]).min(dp[j + 1])
+            };
+            prev = temp;
+        }
+    }
+    *dp.last().unwrap_or(&0)
+}
+
+fn character_accuracy(reference: &str, hypothesis: &str) -> f64 {
+    let ref_len = reference.chars().count();
+    if ref_len == 0 {
+        return if hypothesis.is_empty() { 1.0 } else { 0.0 };
+    }
+    let dist = edit_distance(reference, hypothesis);
+    (1.0 - dist as f64 / ref_len as f64).max(0.0)
+}
+
+fn load_tokenizer(config: &TrainConfig) -> Result<SharedCharTokenizer> {
+    match &config.tokenizer.path {
+        Some(path) => SharedCharTokenizer::load(path),
+        None => Ok(SharedCharTokenizer::new_default(config.tokenizer.max_kanji)),
+    }
+}
+
+fn backend_current_lr(config: &backend::BackendConfig, step: usize) -> f64 {
+    optim::OptimizerState::new(config)
+        .map(|opt| opt.current_lr(step))
+        .unwrap_or(config.learning_rate)
+}
+
+fn format_estimate_gb(bytes: usize) -> f64 {
+    bytes as f64 / 1024f64.powi(3)
+}
+
+fn print_train_startup(
+    config: &TrainConfig,
+    run_dir: &Path,
+    device: Device,
+    state: &TrainerState,
+    steps: usize,
+    checkpoint_every: usize,
+    estimate: &kkc_model::ResourceEstimate,
+    plan: &kkc_data::BatchPlan,
+    epoch_steps: usize,
+    probe_len: Option<usize>,
+    effective_grad_clip: f64,
+) -> Result<()> {
+    let shard_meta = read_shard_metadata(&config.dataset.train_shard)?;
+    train_log!("train_name: Suiko-v2-small");
+    train_log!("corpus_name: Suiko-Corpus-v2-300m");
+    train_log!("run_dir: {}", run_dir.display());
+    train_log!("device: {}", device);
+    train_log!("backend: {}", config.backend.kind);
+    train_log!("train_shard: {}", config.dataset.train_shard.display());
+    if let Some(eval_shard) = config
+        .eval
+        .shard
+        .as_ref()
+        .or(config.dataset.eval_shard.as_ref())
+    {
+        train_log!("eval_shard: {}", eval_shard.display());
+    }
+    if let Some(path) = &config.tokenizer.path {
+        train_log!("tokenizer: {}", path.display());
+    } else {
+        train_log!(
+            "tokenizer: default(max_kanji={})",
+            config.tokenizer.max_kanji
+        );
+    }
+    train_log!("model_preset: {}", config.model.preset);
+    train_log!(
+        "model_config: hidden={} enc_layers={} heads={} ffn={} dec_layers={} dec_heads={} dec_ffn={} vocab={} max_pos={}",
+        config.backend.hidden_size,
+        config.backend.encoder_layers,
+        config.backend.num_heads,
+        config.backend.ffn_size,
+        config.backend.decoder_layers,
+        config.backend.decoder_heads,
+        config.backend.decoder_ffn_size,
+        config.backend.output_size,
+        config.backend.max_positions
+    );
+    train_log!(
+        "optimizer: kind={} scheduler={} lr={} weight_decay={} warmup_steps={} total_steps={} min_lr_scale={}",
+        config.backend.optimizer,
+        config.backend.scheduler,
+        config.backend.learning_rate,
+        config.backend.weight_decay,
+        config.backend.warmup_steps,
+        config.backend.scheduler_total_steps,
+        config.backend.min_lr_scale
+    );
+    train_log!(
+        "refine: weight={} warmup_steps={} mask_ratio={} source={} iterations={} remask_weight={} stop_weight={} learned_remask={} learned_stop={}",
+        config.backend.refine_loss_weight,
+        config.backend.refine_warmup_steps,
+        config.backend.refine_mask_ratio,
+        config.backend.refine_source,
+        config.backend.refine_iterations,
+        config.backend.remask_loss_weight,
+        config.backend.stop_loss_weight,
+        config.backend.use_learned_remask,
+        config.backend.use_learned_stop
+    );
+    train_log!(
+        "train_config: batch_size={} grad_accum={} effective_batch={} max_input_len={} max_target_len={} block_rows={} seed={} prefetch_queue={} grad_clip={}",
+        config.train.batch_size,
+        config.train.grad_accum,
+        config.train.batch_size * config.train.grad_accum,
+        config.train.max_input_len,
+        config.train.max_target_len,
+        config.train.block_rows,
+        config.train.seed,
+        config.runtime.prefetch_queue,
+        effective_grad_clip
+    );
+    train_log!(
+        "logging: log_every={} early_log_every={} early_log_steps={} loss_window={} eval_every={} checkpoint_every={} checkpoint_keep_last={}",
+        config.train.log_every,
+        config.train.early_log_every,
+        config.train.early_log_steps,
+        config.train.loss_window,
+        config.train.eval_every,
+        checkpoint_every,
+        config.train.checkpoint_keep_last
+    );
+    let probe_items = probe_len
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "deferred".to_string());
+    train_log!(
+        "probe: every={} items={} path={}",
+        config.probe.every,
+        probe_items,
+        config
+            .probe
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "null".to_string())
+    );
+    train_log!(
+        "eval: batches={} print_samples={}",
+        config.eval.batches,
+        config.eval.print_samples
+    );
+    if let Some(meta) = shard_meta {
+        train_log!(
+            "dataset: rows={} vocab_size={} max_reading_tokens={} max_surface_tokens={} sources={}",
+            meta.row_count,
+            meta.vocab_size,
+            meta.max_reading_tokens,
+            meta.max_surface_tokens,
+            meta.sources.len()
+        );
+    }
+    train_log!(
+        "params: {:.2}M",
+        estimate.parameter_count as f64 / 1_000_000.0
+    );
+    train_log!(
+        "param_mem: {:.2} GB",
+        format_estimate_gb(estimate.parameter_bytes)
+    );
+    train_log!(
+        "opt+grad_mem: {:.2} GB",
+        format_estimate_gb(estimate.gradient_bytes + estimate.optimizer_bytes)
+    );
+    train_log!(
+        "activation: {:.2} GB",
+        format_estimate_gb(estimate.activation_bytes)
+    );
+    train_log!(
+        "logits: {:.2} GB",
+        format_estimate_gb(estimate.logits_bytes)
+    );
+    train_log!(
+        "total_step_est: {:.2} GB",
+        format_estimate_gb(
+            plan.per_batch_bytes * config.train.grad_accum + estimate.total_step_bytes
+        )
+    );
+    train_log!(
+        "batch_bytes: input={} target={} attention={} total={}",
+        plan.input_token_bytes,
+        plan.target_token_bytes,
+        plan.attention_bytes,
+        plan.per_batch_bytes
+    );
+    train_log!("epoch_estimate: optimizer_steps_per_epoch={}", epoch_steps);
+    if state.step > 0 {
+        train_log!(
+            "resume: step={} epoch={} data_cursor={} last_checkpoint={}",
+            state.step,
+            state.epoch,
+            state.data_cursor,
+            state.last_checkpoint.as_deref().unwrap_or("null")
+        );
+    } else {
+        train_log!("resume: false");
+    }
+    if config.train.log_every > steps.max(1) {
+        train_log!("warning: log_every exceeds requested optimizer steps");
+    }
+    if config.train.eval_every > 0 && config.train.eval_every > steps.max(1) {
+        train_log!("warning: eval_every exceeds requested optimizer steps");
+    }
+    Ok(())
+}
+
 fn eval_backend_dyn(
     config: &TrainConfig,
     backend: &mut dyn backend::TrainBackend,
+    tokenizer: &SharedCharTokenizer,
     batches: usize,
-) -> Result<f64> {
+) -> Result<EvalSummary> {
     let eval_path = config
         .eval
         .shard
@@ -1003,18 +1552,171 @@ fn eval_backend_dyn(
     let mut source = open_eval_batch_source(config, eval_path)?;
     let mut total_loss = 0.0;
     let mut seen = 0usize;
+    let mut blank_fraction_sum = 0.0;
+    let mut char_acc_sum = 0.0;
+    let mut exact_match_sum = 0.0;
+    let mut decoded_len_sum = 0.0;
+    let mut target_len_sum = 0.0;
+    let mut sample_count = 0usize;
+    let mut samples = Vec::new();
     for _ in 0..batches.max(1) {
         let Some(batch) = source.next_batch()? else {
             break;
         };
-        let step = backend.eval_step(1, &batch)?;
-        total_loss += step.loss;
+        let out = backend.eval_batch_output(1, &batch)?;
+        total_loss += out.step.loss;
         seen += 1;
+        if let Some(blank) = out.blank_fraction {
+            blank_fraction_sum += blank;
+        }
+        if let Some(decoded_ids) = out.decoded_ids {
+            for (row_idx, pred_ids) in decoded_ids.iter().enumerate() {
+                let target_len = batch.target_lengths[row_idx] as usize;
+                let start = row_idx * batch.max_target_len;
+                let end = start + target_len.min(batch.max_target_len);
+                let reference = tokenizer.decode(&batch.target_ids[start..end]);
+                let prediction = tokenizer.decode(pred_ids);
+                char_acc_sum += character_accuracy(&reference, &prediction);
+                exact_match_sum += f64::from(reference == prediction);
+                decoded_len_sum += prediction.chars().count() as f64;
+                target_len_sum += reference.chars().count() as f64;
+                sample_count += 1;
+                if samples.len() < config.eval.print_samples {
+                    samples.push(EvalSample {
+                        reference,
+                        prediction,
+                    });
+                }
+            }
+        }
     }
     if seen == 0 {
-        return Ok(0.0);
+        return Ok(EvalSummary {
+            loss: 0.0,
+            exact_match_top1: 0.0,
+            char_acc_top1: 0.0,
+            blank_fraction: 0.0,
+            mean_decoded_chars: 0.0,
+            mean_target_chars: 0.0,
+            samples,
+        });
     }
-    Ok(total_loss / seen as f64)
+    Ok(EvalSummary {
+        loss: total_loss / seen as f64,
+        exact_match_top1: exact_match_sum / sample_count.max(1) as f64,
+        char_acc_top1: char_acc_sum / sample_count.max(1) as f64,
+        blank_fraction: blank_fraction_sum / seen as f64,
+        mean_decoded_chars: decoded_len_sum / sample_count.max(1) as f64,
+        mean_target_chars: target_len_sum / sample_count.max(1) as f64,
+        samples,
+    })
+}
+
+fn load_probe_items(path: &Path, limit: usize) -> Result<Vec<ProbeItem>> {
+    let started = Instant::now();
+    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    train_log!(
+        "[kkc-train] loading probe items path={} bytes={} limit={}",
+        path.display(),
+        bytes,
+        limit
+    );
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("read probe {}", path.display()))?;
+    train_log!(
+        "[kkc-train] probe file read ok chars={} elapsed_sec={:.3}",
+        text.chars().count(),
+        started.elapsed().as_secs_f64()
+    );
+    train_log!("[kkc-train] probe parse start");
+    let mut items: Vec<ProbeItem> =
+        serde_json::from_str(&text).with_context(|| format!("parse probe {}", path.display()))?;
+    if limit > 0 && items.len() > limit {
+        items.truncate(limit);
+    }
+    train_log!(
+        "[kkc-train] probe parse ok items={} elapsed_sec={:.3}",
+        items.len(),
+        started.elapsed().as_secs_f64()
+    );
+    Ok(items)
+}
+
+fn maybe_load_probe_items(cache: &mut Option<Vec<ProbeItem>>, probe: &ProbeSection) -> Result<()> {
+    if cache.is_some() || probe.every == 0 {
+        return Ok(());
+    }
+    let path = match probe.path.as_ref() {
+        Some(path) => path,
+        None => return Ok(()),
+    };
+    *cache = Some(load_probe_items(path, probe.limit)?);
+    Ok(())
+}
+
+fn evaluate_probe(
+    backend: &mut dyn backend::TrainBackend,
+    tokenizer: &SharedCharTokenizer,
+    items: &[ProbeItem],
+    max_seq_len: usize,
+    max_context: usize,
+) -> Result<(f64, usize, BTreeMap<String, f64>)> {
+    train_log!("[kkc-train] probe eval start items={}", items.len());
+    let mut hits = 0usize;
+    let mut per_cat_hits: BTreeMap<String, usize> = BTreeMap::new();
+    let mut per_cat_total: BTreeMap<String, usize> = BTreeMap::new();
+    for (idx, item) in items.iter().enumerate() {
+        let context = if item.context.chars().count() > max_context {
+            item.context
+                .chars()
+                .rev()
+                .take(max_context)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>()
+        } else {
+            item.context.clone()
+        };
+        let mut ids = tokenizer.encode_with_special(&context, &item.reading);
+        ids.truncate(max_seq_len);
+        let batch = kkc_data::PackedBatch {
+            input_ids: ids.clone(),
+            attention_mask: vec![1; ids.len()],
+            target_ids: Vec::new(),
+            input_lengths: vec![ids.len() as u16],
+            target_lengths: vec![0],
+            source_ids: vec![0],
+            batch_size: 1,
+            max_input_len: ids.len(),
+            max_target_len: 0,
+            order_cursor: 0,
+        };
+        let mut rows = backend.decode_top1(&batch)?;
+        let predicted = rows
+            .pop()
+            .map(|ids| tokenizer.decode(&ids))
+            .unwrap_or_default();
+        let hit = usize::from(item.references.iter().any(|r| r == &predicted));
+        hits += hit;
+        let category = item.category.clone().unwrap_or_else(|| "_unk".to_string());
+        *per_cat_hits.entry(category.clone()).or_insert(0) += hit;
+        *per_cat_total.entry(category).or_insert(0) += 1;
+        if (idx + 1) % 50 == 0 || idx + 1 == items.len() {
+            train_log!(
+                "[kkc-train] probe eval progress {}/{}",
+                idx + 1,
+                items.len()
+            );
+        }
+    }
+    let mut cats = BTreeMap::new();
+    for (cat, total) in per_cat_total {
+        let hit = per_cat_hits.get(&cat).copied().unwrap_or(0);
+        cats.insert(cat, hit as f64 / total.max(1) as f64);
+    }
+    train_log!("[kkc-train] probe eval done items={}", items.len());
+    Ok((hits as f64 / items.len().max(1) as f64, items.len(), cats))
 }
 
 /// Build the training backend for the configured kind and device. CPU kinds
@@ -1182,6 +1884,15 @@ fn validate_config(config: &TrainConfig) -> Result<()> {
             config.tokenizer.vocab_size
         );
     }
+    if config.train.loss_window == 0 {
+        anyhow::bail!("train.loss_window must be > 0");
+    }
+    if config.eval.print_samples > 16 {
+        anyhow::bail!("eval.print_samples must be <= 16");
+    }
+    if config.probe.every > 0 && config.probe.path.is_none() {
+        anyhow::bail!("probe.path must be set when probe.every > 0");
+    }
     if let Some(metadata) = read_shard_metadata(&config.dataset.train_shard)? {
         if metadata.vocab_size != config.tokenizer.vocab_size {
             anyhow::bail!(
@@ -1277,6 +1988,7 @@ mod tests {
                 prefetch_queue: 0,
             },
             eval: EvalSection::default(),
+            probe: ProbeSection::default(),
             backend: backend::BackendConfig {
                 kind: "mock".to_string(),
                 ..backend::BackendConfig::default()
@@ -1289,6 +2001,11 @@ mod tests {
                 block_rows: 4096,
                 seed: 42,
                 checkpoint_keep_last: 2,
+                log_every: 100,
+                loss_window: 100,
+                eval_every: 2000,
+                early_log_every: 10,
+                early_log_steps: 200,
             },
         }
     }
@@ -1779,19 +2496,59 @@ fn collect_resume_mismatches(
         ));
     }
     for (label, run, cur) in [
-        ("learning_rate", manifest.learning_rate, config.backend.learning_rate),
-        ("weight_decay", manifest.weight_decay, config.backend.weight_decay),
+        (
+            "learning_rate",
+            manifest.learning_rate,
+            config.backend.learning_rate,
+        ),
+        (
+            "weight_decay",
+            manifest.weight_decay,
+            config.backend.weight_decay,
+        ),
         ("beta1", manifest.beta1, config.backend.beta1),
         ("beta2", manifest.beta2, config.backend.beta2),
         ("epsilon", manifest.epsilon, config.backend.epsilon),
-        ("min_lr_scale", manifest.min_lr_scale, config.backend.min_lr_scale),
-        ("refine_loss_weight", manifest.refine_loss_weight, config.backend.refine_loss_weight),
-        ("refine_mask_ratio", manifest.refine_mask_ratio, config.backend.refine_mask_ratio),
-        ("remask_loss_weight", manifest.remask_loss_weight, config.backend.remask_loss_weight),
-        ("remask_threshold", manifest.remask_threshold, config.backend.remask_threshold),
-        ("stop_loss_weight", manifest.stop_loss_weight, config.backend.stop_loss_weight),
-        ("stop_threshold", manifest.stop_threshold, config.backend.stop_threshold),
-        ("confidence_fallback", manifest.confidence_fallback, config.backend.confidence_fallback),
+        (
+            "min_lr_scale",
+            manifest.min_lr_scale,
+            config.backend.min_lr_scale,
+        ),
+        (
+            "refine_loss_weight",
+            manifest.refine_loss_weight,
+            config.backend.refine_loss_weight,
+        ),
+        (
+            "refine_mask_ratio",
+            manifest.refine_mask_ratio,
+            config.backend.refine_mask_ratio,
+        ),
+        (
+            "remask_loss_weight",
+            manifest.remask_loss_weight,
+            config.backend.remask_loss_weight,
+        ),
+        (
+            "remask_threshold",
+            manifest.remask_threshold,
+            config.backend.remask_threshold,
+        ),
+        (
+            "stop_loss_weight",
+            manifest.stop_loss_weight,
+            config.backend.stop_loss_weight,
+        ),
+        (
+            "stop_threshold",
+            manifest.stop_threshold,
+            config.backend.stop_threshold,
+        ),
+        (
+            "confidence_fallback",
+            manifest.confidence_fallback,
+            config.backend.confidence_fallback,
+        ),
         ("grad_clip", manifest.grad_clip, config.backend.grad_clip),
     ] {
         // Ignore the "manifest was created before this field existed"

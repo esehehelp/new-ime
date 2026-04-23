@@ -5,11 +5,8 @@
 //! libtorch versions). A companion JSON metadata file stores training
 //! bookkeeping (step, loss, kind, param count).
 //!
-//! **Scope note**: optimizer state (AdamW m/v) is NOT persisted in this
-//! revision. `tch::nn::Optimizer` in tch 0.18 does not expose per-param
-//! moment buffers, so resume restarts AdamW from zero. Acceptable for
-//! the next Suiko run — the m/v recover within a few hundred steps of
-//! training — and tracked as a follow-up for full bit-for-bit resume.
+//! Optimizer state is saved alongside the weights when an optimizer is
+//! attached so resumed GPU runs keep AdamW moments and step count.
 
 use super::backend::TchCtcNatBackend;
 use crate::pipeline::CheckpointWrite;
@@ -22,13 +19,16 @@ use std::path::{Path, PathBuf};
 use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
 
+#[allow(dead_code)]
 pub const WEIGHTS_SUFFIX: &str = ".weights.safetensors";
+#[allow(dead_code)]
 pub const OPTIM_SUFFIX: &str = ".optim.safetensors";
 /// The trainer ledger + resume check both require `<step>.backend.json`
 /// to exist next to `<step>.ckpt.json`. The tch backend treats this
 /// anchor file AS the metadata payload (step, loss, weight file name,
 /// format version) so there is no second `.meta.json` sidecar to keep
 /// in sync with the anchor.
+#[allow(dead_code)]
 pub const BACKEND_SUFFIX: &str = ".backend.json";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,20 +71,14 @@ fn tensor_from_view_typed(bytes: &[u8], shape: &[i64], kind: Kind) -> Result<Ten
     let numel = bytes.len() / elem_bytes;
     let expected: i64 = shape.iter().product();
     if expected as usize != numel {
-        bail!(
-            "payload numel {numel} does not match shape {shape:?} (expected {expected})"
-        );
+        bail!("payload numel {numel} does not match shape {shape:?} (expected {expected})");
     }
     let dst = Tensor::zeros(shape, (kind, Device::Cpu));
     // Safety: dst was just allocated with this kind+shape, is contiguous
     // and owns its storage. We're writing exactly `bytes.len()` bytes
     // starting at the data pointer.
     unsafe {
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            dst.data_ptr() as *mut u8,
-            bytes.len(),
-        );
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.data_ptr() as *mut u8, bytes.len());
     }
     Ok(dst)
 }
@@ -154,9 +148,7 @@ fn var_store_bytes(vs: &VarStore) -> Result<Vec<u8>> {
 /// Serialize a `(name, tensor)` map (e.g. optimizer state) into
 /// safetensors bytes. Same encoding as `var_store_bytes` but pulls
 /// from an arbitrary map instead of a VarStore.
-pub(super) fn tensors_to_bytes(
-    tensors: &BTreeMap<String, Tensor>,
-) -> Result<Vec<u8>> {
+pub(super) fn tensors_to_bytes(tensors: &BTreeMap<String, Tensor>) -> Result<Vec<u8>> {
     let mut buffers: BTreeMap<String, (Vec<u8>, Vec<usize>, Dtype)> = BTreeMap::new();
     for (name, tensor) in tensors.iter() {
         buffers.insert(name.clone(), tensor_to_bytes(tensor)?);
@@ -164,9 +156,7 @@ pub(super) fn tensors_to_bytes(
     serialize_buffers(&buffers)
 }
 
-fn serialize_buffers(
-    buffers: &BTreeMap<String, (Vec<u8>, Vec<usize>, Dtype)>,
-) -> Result<Vec<u8>> {
+fn serialize_buffers(buffers: &BTreeMap<String, (Vec<u8>, Vec<usize>, Dtype)>) -> Result<Vec<u8>> {
     let views: Vec<(String, TensorView)> = buffers
         .iter()
         .map(|(name, (bytes, shape, dtype))| {
@@ -195,18 +185,6 @@ pub(super) fn tensors_from_bytes(bytes: &[u8]) -> Result<BTreeMap<String, Tensor
 
 /// Serialize every variable (trainable and non-trainable) of `vs` into
 /// a safetensors file at `path`.
-pub fn save_var_store(vs: &VarStore, path: &Path) -> Result<()> {
-    let bytes = var_store_bytes(vs)?;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create dir {}", parent.display()))?;
-        }
-    }
-    std::fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
 /// Load every named tensor from `path` into `vs` in place. Shape and
 /// dtype must match; unknown names and missing names both error so
 /// silent drift is caught immediately.
@@ -300,8 +278,7 @@ pub fn save_backend(backend: &TchCtcNatBackend, anchor: &Path) -> Result<()> {
     // AdamW m/v reset on every resume, which silently alters the loss
     // curve. Only present when the backend actually has an optim
     // attached (eval runs pass a backend with no optim).
-    let optim_payload: Option<(PathBuf, Vec<u8>)> = if let Some(state) =
-        backend.optim_state_dict()
+    let optim_payload: Option<(PathBuf, Vec<u8>)> = if let Some(state) = backend.optim_state_dict()
     {
         Some((optim_path_for(anchor), tensors_to_bytes(&state)?))
     } else {
@@ -364,10 +341,9 @@ pub fn save_backend(backend: &TchCtcNatBackend, anchor: &Path) -> Result<()> {
 }
 
 pub fn load_backend(backend: &mut TchCtcNatBackend, anchor: &Path) -> Result<()> {
-    let bytes =
-        std::fs::read(anchor).with_context(|| format!("read {}", anchor.display()))?;
-    let meta: CheckpointMeta = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse {}", anchor.display()))?;
+    let bytes = std::fs::read(anchor).with_context(|| format!("read {}", anchor.display()))?;
+    let meta: CheckpointMeta =
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", anchor.display()))?;
     if meta.format_version != CHECKPOINT_FORMAT_VERSION {
         bail!(
             "checkpoint {} has format version {}, expected {}",
@@ -400,8 +376,8 @@ pub fn load_backend(backend: &mut TchCtcNatBackend, anchor: &Path) -> Result<()>
     // so the behavior isn't silent.
     let optim_path = optim_path_for(anchor);
     if optim_path.exists() {
-        let optim_bytes = std::fs::read(&optim_path)
-            .with_context(|| format!("read {}", optim_path.display()))?;
+        let optim_bytes =
+            std::fs::read(&optim_path).with_context(|| format!("read {}", optim_path.display()))?;
         let state = tensors_from_bytes(&optim_bytes)?;
         backend.load_optim_state_dict(&state)?;
     } else if backend.has_optimizer() {
@@ -447,7 +423,7 @@ mod tests {
         let anchor = dir.path().join("ckpt.backend.json");
         let cfg = tiny_config();
 
-        let mut source = TchCtcNatBackend::new(&cfg, KkcDevice::Cpu).unwrap();
+        let source = TchCtcNatBackend::new(&cfg, KkcDevice::Cpu).unwrap();
         // Vary every parameter from zero-init so weights are non-trivial.
         for var in source.var_store().trainable_variables() {
             tch::no_grad(|| {

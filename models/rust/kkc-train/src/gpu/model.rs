@@ -35,6 +35,7 @@ use tch::{Kind, Tensor};
 
 /// All tensors the model produces per batch. Kept as one struct so the
 /// loss module in step 2 can consume a single value.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug)]
 pub struct CtcNatForward {
     pub encoder_out: Tensor,
@@ -74,9 +75,6 @@ pub struct CtcNatModel {
     remask_head: nn::Linear,
     stop_head: nn::Linear,
 
-    hidden: i64,
-    vocab: i64,
-    max_positions: i64,
     pub blank_id: i64,
     pub mask_token_id: i64,
 }
@@ -105,12 +103,8 @@ impl CtcNatModel {
         let encoder_final_norm =
             nn::layer_norm(p / "enc_final_norm", vec![hidden], Default::default());
 
-        let proposal_pos_embed = nn::embedding(
-            p / "proposal_pos_embed",
-            max_positions,
-            hidden,
-            embed_cfg,
-        );
+        let proposal_pos_embed =
+            nn::embedding(p / "proposal_pos_embed", max_positions, hidden, embed_cfg);
         let proposal_layers = (0..config.decoder_layers as i64)
             .map(|i| {
                 DecoderLayer::new(
@@ -158,9 +152,6 @@ impl CtcNatModel {
             refine_head_bias,
             remask_head,
             stop_head,
-            hidden,
-            vocab,
-            max_positions,
             blank_id: config.blank_id as i64,
             mask_token_id: config.mask_token_id as i64,
         })
@@ -174,16 +165,6 @@ impl CtcNatModel {
         let w = &self.token_embed.ws; // [V, H]
         let w_t = w.transpose(0, 1); // [H, V]
         x.matmul(&w_t) + bias
-    }
-
-    pub fn vocab(&self) -> i64 {
-        self.vocab
-    }
-    pub fn hidden(&self) -> i64 {
-        self.hidden
-    }
-    pub fn max_positions(&self) -> i64 {
-        self.max_positions
     }
 
     /// Encode `input_ids [B, T]` → `encoder_out [B, T, H]`.
@@ -225,24 +206,17 @@ impl CtcNatModel {
         encoder_out: &Tensor,
         encoder_mask: &Tensor,
     ) -> (Tensor, Tensor, Tensor) {
-        let (b, t) = hypothesis_ids
-            .size2()
-            .expect("hypothesis_ids must be 2-D");
+        let (b, t) = hypothesis_ids.size2().expect("hypothesis_ids must be 2-D");
         let device = hypothesis_ids.device();
         let positions = Tensor::arange(t, (Kind::Int64, device))
             .unsqueeze(0)
             .expand([b, t], false);
         // refine decoder shares the encoder's token embedding (see Python
         // ctc_nat.py:127-140 — `tied_embedding = encoder.get_input_embedding()`).
-        let mut x = self.token_embed.forward(hypothesis_ids)
-            + self.refine_pos_embed.forward(&positions);
+        let mut x =
+            self.token_embed.forward(hypothesis_ids) + self.refine_pos_embed.forward(&positions);
         for layer in &self.refine_layers {
-            x = layer.forward(
-                &x,
-                encoder_out,
-                Some(hypothesis_mask),
-                Some(encoder_mask),
-            );
+            x = layer.forward(&x, encoder_out, Some(hypothesis_mask), Some(encoder_mask));
         }
         let x = self.refine_final_norm.forward(&x);
         let refined_logits = self.tied_projection(&x, &self.refine_head_bias); // [B, T, V]
@@ -251,11 +225,8 @@ impl CtcNatModel {
         // Stop head: mean-pool valid positions then project to scalar.
         // Python stop_head takes the mean over attention_mask-valid tokens.
         let mask_f = hypothesis_mask.to_kind(Kind::Float).unsqueeze(-1); // [B, T, 1]
-        let summed = (&x * &mask_f).sum_dim_intlist(
-            [1i64].as_ref(),
-            /*keepdim=*/ false,
-            Kind::Float,
-        ); // [B, H]
+        let summed =
+            (&x * &mask_f).sum_dim_intlist([1i64].as_ref(), /*keepdim=*/ false, Kind::Float); // [B, H]
         let counts = mask_f
             .sum_dim_intlist([1i64].as_ref(), false, Kind::Float)
             .clamp_min(1.0); // [B, 1]
@@ -266,6 +237,7 @@ impl CtcNatModel {
     }
 
     /// Forward without refinement — cheap smoke path used by unit tests.
+    #[cfg(test)]
     pub fn forward_proposal_only(
         &self,
         input_ids: &Tensor,
@@ -287,6 +259,7 @@ impl CtcNatModel {
     /// `mask_token_id` substituted at sampled positions — see
     /// `backend::CtcBackend::build_target_refinement_batch` for the CPU
     /// reference).
+    #[cfg(test)]
     pub fn forward_with_refine(
         &self,
         input_ids: &Tensor,

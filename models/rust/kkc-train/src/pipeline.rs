@@ -129,8 +129,7 @@ fn writer_loop(rx: Receiver<CheckpointWrite>) -> Result<usize> {
                         Ok(()) => {}
                         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                         Err(err) => {
-                            return Err(err)
-                                .with_context(|| format!("remove {}", p.display()))
+                            return Err(err).with_context(|| format!("remove {}", p.display()))
                         }
                     }
                 }
@@ -142,7 +141,12 @@ fn writer_loop(rx: Receiver<CheckpointWrite>) -> Result<usize> {
 }
 
 fn persist_one(work: &CheckpointWrite) -> Result<()> {
-    let CheckpointWrite::File { path, bytes, sidecar } = work else {
+    let CheckpointWrite::File {
+        path,
+        bytes,
+        sidecar,
+    } = work
+    else {
         return Ok(());
     };
     if let Some(parent) = path.parent() {
@@ -304,8 +308,7 @@ mod tests {
     #[test]
     fn batch_producer_cpu_path_is_identity() {
         use kkc_data::{
-            compile_jsonl_to_shard, BatchIter, BatchIterConfig, CompileOptions,
-            PrefetchedBatchIter,
+            compile_jsonl_to_shard, BatchIter, BatchIterConfig, CompileOptions, PrefetchedBatchIter,
         };
         use kkc_tokenizer::SharedCharTokenizer;
 

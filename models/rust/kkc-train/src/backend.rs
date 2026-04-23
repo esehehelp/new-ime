@@ -165,11 +165,19 @@ fn default_mask_token_id() -> usize {
     MASK_ID as usize
 }
 
+#[derive(Debug, Clone)]
+pub struct EvalBatchOutput {
+    pub step: TrainerStep,
+    pub decoded_ids: Option<Vec<Vec<u32>>>,
+    pub blank_fraction: Option<f64>,
+}
+
 pub trait TrainBackend {
     fn kind(&self) -> &'static str;
     fn step(&mut self, step: usize, batch: &PackedBatch) -> Result<TrainerStep>;
     fn save_checkpoint(&self, path: &Path) -> Result<()>;
     fn load_checkpoint(&mut self, path: &Path) -> Result<()>;
+    fn set_debug(&mut self, _enabled: bool) {}
 
     /// Forward-only evaluation. Must NOT update weights.
     ///
@@ -179,6 +187,23 @@ pub trait TrainBackend {
     /// optimizer, since their `step` is a full training iteration.
     fn eval_step(&mut self, step: usize, batch: &PackedBatch) -> Result<TrainerStep> {
         self.step(step, batch)
+    }
+
+    fn eval_batch_output(&mut self, step: usize, batch: &PackedBatch) -> Result<EvalBatchOutput> {
+        Ok(EvalBatchOutput {
+            step: self.eval_step(step, batch)?,
+            decoded_ids: None,
+            blank_fraction: None,
+        })
+    }
+
+    /// Decode-only path for cheap probe-style evaluation.
+    /// Default implementation routes through `eval_batch_output`.
+    fn decode_top1(&mut self, batch: &PackedBatch) -> Result<Vec<Vec<u32>>> {
+        Ok(self
+            .eval_batch_output(0, batch)?
+            .decoded_ids
+            .unwrap_or_default())
     }
 
     /// Hook: wire an async checkpoint writer's sender into the backend
@@ -1000,7 +1025,8 @@ impl CtcBackend {
             let mut argmax_ids = vec![0usize; refine_len];
             let mut max_probs = vec![0.0; refine_len];
             for t in 0..refine_len {
-                let probs = nn::softmax(&forward.logits[t * self.output_size..(t + 1) * self.output_size]);
+                let probs =
+                    nn::softmax(&forward.logits[t * self.output_size..(t + 1) * self.output_size]);
                 let (token, prob) = probs
                     .iter()
                     .copied()
