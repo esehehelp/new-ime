@@ -129,7 +129,9 @@ fn main() -> std::io::Result<()> {
 
     eprintln!(
         "Total: {} rows, {} characters, {} unique",
-        total_rows, total_chars, freq.len()
+        total_rows,
+        total_chars,
+        freq.len()
     );
 
     // Categorize and sort by frequency
@@ -154,7 +156,13 @@ fn main() -> std::io::Result<()> {
     }
 
     // Sort each by frequency descending
-    for list in [&mut hiragana, &mut katakana, &mut ascii, &mut kanji, &mut symbols] {
+    for list in [
+        &mut hiragana,
+        &mut katakana,
+        &mut ascii,
+        &mut kanji,
+        &mut symbols,
+    ] {
         list.sort_by(|a, b| b.1.cmp(&a.1));
     }
 

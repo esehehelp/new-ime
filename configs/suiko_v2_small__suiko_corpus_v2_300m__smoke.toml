@@ -1,4 +1,6 @@
-# Training config for `Suiko-v2-small` on `Suiko-Corpus-v2-300m`.
+# Smoke config for Suiko-v2-small — compressed schedule (5000 steps) to
+# validate the blank-penalty + mixed-refine + katakana-normalized probe
+# pipeline before committing to the full 200k-step run.
 
 [dataset]
 train_shard = "datasets/mixes/student-300m-short.kkc"
@@ -19,27 +21,28 @@ activation_dtype_bytes = 4
 prefetch_queue = 4
 
 [eval]
-batches = 2
+batches = 4
 print_samples = 5
 
 [probe]
 path = "datasets/eval/probe/probe.json"
-every = 1000
+every = 500
 limit = 0
 
 [backend]
 kind = "tch-ctc-nat"
 optimizer = "adamw"
 scheduler = "warmup_cosine"
-learning_rate = 4e-4
+learning_rate = 3e-4
 init_scale = 0.02
 weight_decay = 0.01
 momentum = 0.9
 beta1 = 0.9
 beta2 = 0.999
-epsilon = 3e-8
-warmup_steps = 3000
-scheduler_total_steps = 200000
+epsilon = 1e-8
+grad_clip = 1.0
+warmup_steps = 1000
+scheduler_total_steps = 5000
 min_lr_scale = 0.2
 parameter_count = 41000000
 hidden_size = 384
@@ -53,32 +56,40 @@ output_size = 4801
 blank_id = 4
 max_positions = 128
 mask_token_id = 5
-refine_loss_weight = 1.0
-refine_warmup_steps = 8000
+refine_loss_weight = 0.0
+refine_warmup_steps = 5000
 refine_mask_ratio = 0.3
 refine_source = "mixed"
-refine_iterations = 2
-remask_loss_weight = 0.5
+refine_iterations = 1
+remask_loss_weight = 0.0
 remask_threshold = 0.5
-stop_loss_weight = 0.5
+stop_loss_weight = 0.0
 stop_threshold = 0.5
 confidence_fallback = 0.5
 use_learned_remask = true
 use_learned_stop = true
 proposal_blank_penalty_weight = 0.05
-proposal_blank_penalty_start_step = 1000
+proposal_blank_penalty_start_step = 250
+# Dtype: local smoke runs fp32 — libtorch forces several intermediates
+# (softmax precision arg, CVAE posterior, SDP attention output) to fp32
+# and mixes them back into bf16/fp16 weight matmul paths, producing
+# dtype mismatches. Production 5090 smoke handles this via a separate
+# config once the autocast wiring is in. Keep both flags false here.
+use_bf16 = false
 use_fp16 = false
 
 [train]
-batch_size = 32
+batch_size = 64
 max_input_len = 128
 max_target_len = 128
-grad_accum = 4
+grad_accum = 2
 block_rows = 4096
 seed = 52
-checkpoint_keep_last = 3
-log_every = 500
-loss_window = 500
-eval_every = 1000
+checkpoint_keep_last = 2
+log_every = 100
+loss_window = 200
+eval_every = 500
 early_log_every = 10
-early_log_steps = 200
+early_log_steps = 100
+warmup_short_sample_steps = 1000
+warmup_short_sample_max_chars = 24

@@ -174,6 +174,10 @@ struct TrainConfig {
     #[serde(default)]
     probe: ProbeSection,
     #[serde(default)]
+    cvae: backend::CvaeConfig,
+    #[serde(default)]
+    kd: backend::KdConfig,
+    #[serde(default)]
     backend: backend::BackendConfig,
     train: TrainSection,
 }
@@ -236,6 +240,18 @@ struct TrainSection {
     early_log_every: usize,
     #[serde(default = "default_early_log_steps")]
     early_log_steps: usize,
+    /// Legacy Python parity: during the first N training steps, skip rows
+    /// whose reading is longer than `warmup_short_sample_max_chars`. CTC
+    /// alignment on short sequences is easier, so this stabilizes early
+    /// learning (legacy 30m log showed blank fraction dropping from 0.94
+    /// → 0.54 in step 500→1000 with short-sample warmup enabled).
+    /// `0` disables.
+    #[serde(default)]
+    warmup_short_sample_steps: usize,
+    /// Max char count of `reading` accepted during the short-sample
+    /// warmup window. Ignored if `warmup_short_sample_steps == 0`.
+    #[serde(default = "default_warmup_short_sample_max_chars")]
+    warmup_short_sample_max_chars: usize,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -256,16 +272,41 @@ struct ProbeSection {
     limit: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CvaeLabelCounts {
+    writer_labels: usize,
+    domain_labels: usize,
+    source_labels: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct RunManifest {
     train_shard: String,
+    #[serde(default)]
+    tokenizer_path: String,
+    #[serde(default)]
+    tokenizer_max_kanji: u32,
     model_preset: String,
     vocab_size: usize,
     backend_kind: String,
     backend_hidden_size: usize,
+    #[serde(default)]
+    backend_encoder_layers: usize,
+    #[serde(default)]
+    backend_num_heads: usize,
+    #[serde(default)]
+    backend_ffn_size: usize,
+    #[serde(default)]
+    backend_decoder_layers: usize,
+    #[serde(default)]
+    backend_decoder_heads: usize,
+    #[serde(default)]
+    backend_decoder_ffn_size: usize,
     backend_output_size: usize,
     backend_blank_id: usize,
     backend_max_positions: usize,
+    #[serde(default)]
+    backend_mask_token_id: usize,
     batch_size: usize,
     max_input_len: usize,
     max_target_len: usize,
@@ -330,7 +371,57 @@ struct RunManifest {
     #[serde(default)]
     use_learned_stop: bool,
     #[serde(default)]
+    proposal_blank_penalty_weight: f64,
+    #[serde(default)]
+    proposal_blank_penalty_start_step: usize,
+    #[serde(default)]
+    use_bf16: bool,
+    #[serde(default)]
+    use_fp16: bool,
+    #[serde(default)]
     grad_clip: f64,
+    #[serde(default)]
+    cvae_enabled: bool,
+    #[serde(default)]
+    cvae_kl_weight: f64,
+    #[serde(default)]
+    cvae_latent_size: usize,
+    #[serde(default)]
+    cvae_posterior_hidden_size: usize,
+    #[serde(default)]
+    cvae_label_hidden_size: usize,
+    #[serde(default)]
+    cvae_writer_labels: usize,
+    #[serde(default)]
+    cvae_domain_labels: usize,
+    #[serde(default)]
+    cvae_source_labels: usize,
+    #[serde(default)]
+    kd_alpha: f64,
+    #[serde(default)]
+    kd_alpha_final: Option<f64>,
+    #[serde(default)]
+    kd_alpha_decay_start: usize,
+    #[serde(default)]
+    kd_alpha_decay_steps: usize,
+    #[serde(default)]
+    kd_start_step: usize,
+    #[serde(default)]
+    kd_warmup_steps: usize,
+    #[serde(default)]
+    kd_every: usize,
+    #[serde(default)]
+    kd_hard_threshold: f64,
+    #[serde(default)]
+    kd_gate_mode: String,
+    #[serde(default)]
+    kd_temperature: f64,
+    #[serde(default)]
+    kd_teacher_run_dir: String,
+    #[serde(default)]
+    kd_teacher_checkpoint: String,
+    #[serde(default)]
+    kd_fp16: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,6 +476,10 @@ fn default_log_every() -> usize {
 
 fn default_loss_window() -> usize {
     100
+}
+
+fn default_warmup_short_sample_max_chars() -> usize {
+    24
 }
 
 fn default_eval_every() -> usize {
@@ -586,6 +681,8 @@ fn compile_shard(
     println!("metadata: {}", sidecar.display());
     println!("vocab size: {}", tokenizer.vocab_size());
     println!("rows: {}", metadata.row_count);
+    println!("distinct writers: {}", metadata.writers.len());
+    println!("distinct domains: {}", metadata.domains.len());
     println!("distinct sources: {}", metadata.sources.len());
     Ok(())
 }
@@ -700,17 +797,32 @@ fn init_run(config_path: &Path, output: &Path) -> Result<()> {
     let config = load_config(config_path)?;
     let estimate = model_estimate(&config)?;
     let plan = sequence_budget(&config).estimate();
+    let cvae_labels = cvae_label_counts(&config)?;
     std::fs::create_dir_all(output)
         .with_context(|| format!("create run dir {}", output.display()))?;
     let manifest = RunManifest {
         train_shard: config.dataset.train_shard.display().to_string(),
+        tokenizer_path: config
+            .tokenizer
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        tokenizer_max_kanji: config.tokenizer.max_kanji,
         model_preset: config.model.preset.clone(),
         vocab_size: config.tokenizer.vocab_size,
         backend_kind: config.backend.kind.clone(),
         backend_hidden_size: config.backend.hidden_size,
+        backend_encoder_layers: config.backend.encoder_layers,
+        backend_num_heads: config.backend.num_heads,
+        backend_ffn_size: config.backend.ffn_size,
+        backend_decoder_layers: config.backend.decoder_layers,
+        backend_decoder_heads: config.backend.decoder_heads,
+        backend_decoder_ffn_size: config.backend.decoder_ffn_size,
         backend_output_size: config.backend.output_size,
         backend_blank_id: config.backend.blank_id,
         backend_max_positions: config.backend.max_positions,
+        backend_mask_token_id: config.backend.mask_token_id,
         batch_size: config.train.batch_size,
         max_input_len: config.train.max_input_len,
         max_target_len: config.train.max_target_len,
@@ -749,7 +861,32 @@ fn init_run(config_path: &Path, output: &Path) -> Result<()> {
         confidence_fallback: config.backend.confidence_fallback,
         use_learned_remask: config.backend.use_learned_remask,
         use_learned_stop: config.backend.use_learned_stop,
+        proposal_blank_penalty_weight: config.backend.proposal_blank_penalty_weight,
+        proposal_blank_penalty_start_step: config.backend.proposal_blank_penalty_start_step,
+        use_bf16: config.backend.use_bf16,
+        use_fp16: config.backend.use_fp16,
         grad_clip: config.backend.grad_clip,
+        cvae_enabled: config.cvae.enabled,
+        cvae_kl_weight: config.cvae.kl_weight,
+        cvae_latent_size: config.cvae.latent_size,
+        cvae_posterior_hidden_size: config.cvae.posterior_hidden_size,
+        cvae_label_hidden_size: config.cvae.label_hidden_size,
+        cvae_writer_labels: cvae_labels.writer_labels,
+        cvae_domain_labels: cvae_labels.domain_labels,
+        cvae_source_labels: cvae_labels.source_labels,
+        kd_alpha: config.kd.alpha,
+        kd_alpha_final: config.kd.alpha_final,
+        kd_alpha_decay_start: config.kd.alpha_decay_start,
+        kd_alpha_decay_steps: config.kd.alpha_decay_steps,
+        kd_start_step: config.kd.start_step,
+        kd_warmup_steps: config.kd.warmup_steps,
+        kd_every: config.kd.every,
+        kd_hard_threshold: config.kd.hard_threshold,
+        kd_gate_mode: config.kd.gate_mode.as_str().to_string(),
+        kd_temperature: config.kd.temperature,
+        kd_teacher_run_dir: config.kd.teacher_run_dir.clone(),
+        kd_teacher_checkpoint: config.kd.teacher_checkpoint.clone(),
+        kd_fp16: config.kd.fp16,
     };
     let manifest_path = output.join("run_manifest.json");
     std::fs::write(
@@ -932,12 +1069,13 @@ fn fit(
     let mut source = open_batch_source_at_cursor(&config, state.data_cursor)?;
     train_log!("[rust-train] initializing backend {}", config.backend.kind);
     let mut backend: Box<dyn backend::TrainBackend> = new_backend(
-        &config.backend,
+        &config,
         device,
         effective_grad_clip,
         /*with_optimizer=*/ true,
     )?;
     backend.set_debug(debug);
+    backend.set_grad_accum_divisor(config.train.grad_accum.max(1));
     let ckpt_writer = if async_ckpt_queue > 0 {
         Some(pipeline::AsyncCheckpointWriter::spawn(async_ckpt_queue))
     } else {
@@ -1070,7 +1208,7 @@ fn fit(
                             &tokenizer,
                             items,
                             config.train.max_input_len,
-                            40,
+                            32,
                         )?;
                         let cat_bits = cats
                             .iter()
@@ -1099,7 +1237,7 @@ fn fit(
                             &tokenizer,
                             items,
                             config.train.max_input_len,
-                            40,
+                            32,
                         )?;
                         let cat_bits = cats
                             .iter()
@@ -1229,7 +1367,7 @@ fn eval_command(
     // Eval path: no optimizer — `eval_step` is forward-only so the
     // AdamW m/v buffers would just be wasted memory.
     let mut backend: Box<dyn backend::TrainBackend> =
-        new_backend(&config.backend, device, 0.0, /*with_optimizer=*/ false)?;
+        new_backend(&config, device, 0.0, /*with_optimizer=*/ false)?;
     if let Some(run_dir) = run_dir {
         let state = read_state(&run_dir.join("trainer_state.json"))?;
         if let Some(entry) = last_checkpoint_entry(&state) {
@@ -1263,6 +1401,44 @@ fn eval_command(
             sample.prediction.chars().take(40).collect::<String>()
         );
     }
+    if config.probe.path.is_some() {
+        let mut probe_items: Option<Vec<ProbeItem>> = None;
+        maybe_load_probe_items_force(&mut probe_items, &config.probe)?;
+        if let Some(items) = probe_items.as_ref() {
+            let (em1, n, cats) = evaluate_probe(
+                backend.as_mut(),
+                &tokenizer,
+                items,
+                config.train.max_input_len,
+                32,
+            )?;
+            let cat_bits = cats
+                .iter()
+                .map(|(k, v)| format!("{k}={v:.2}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if cat_bits.is_empty() {
+                println!("eval_probe_em1: {:.4} n={}", em1, n);
+            } else {
+                println!("eval_probe_em1: {:.4} n={} {}", em1, n, cat_bits);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn maybe_load_probe_items_force(
+    cache: &mut Option<Vec<ProbeItem>>,
+    probe: &ProbeSection,
+) -> Result<()> {
+    if cache.is_some() {
+        return Ok(());
+    }
+    let path = match probe.path.as_ref() {
+        Some(path) => path,
+        None => return Ok(()),
+    };
+    *cache = Some(load_probe_items(path, probe.limit)?);
     Ok(())
 }
 
@@ -1307,6 +1483,15 @@ struct ProbeItem {
     references: Vec<String>,
     #[serde(default)]
     category: Option<String>,
+}
+
+fn normalize_probe_reading(s: &str) -> String {
+    s.chars()
+        .map(|c| match c as u32 {
+            0x30A1..=0x30F6 => char::from_u32((c as u32) - 0x60).unwrap_or(c),
+            _ => c,
+        })
+        .collect()
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -1431,6 +1616,30 @@ fn print_train_startup(
         config.backend.stop_loss_weight,
         config.backend.use_learned_remask,
         config.backend.use_learned_stop
+    );
+    train_log!(
+        "cvae: enabled={} kl_weight={} latent_size={} posterior_hidden={} label_hidden={}",
+        config.cvae.enabled,
+        config.cvae.kl_weight,
+        config.cvae.latent_size,
+        config.cvae.posterior_hidden_size,
+        config.cvae.label_hidden_size
+    );
+    train_log!(
+        "kd: alpha={} alpha_final={:?} every={} threshold={} gate={} temperature={} teacher_run_dir={} checkpoint={} fp16={}",
+        config.kd.alpha,
+        config.kd.alpha_final,
+        config.kd.every,
+        config.kd.hard_threshold,
+        config.kd.gate_mode.as_str(),
+        config.kd.temperature,
+        if config.kd.teacher_run_dir.is_empty() {
+            "<none>"
+        } else {
+            config.kd.teacher_run_dir.as_str()
+        },
+        config.kd.teacher_checkpoint,
+        config.kd.fp16
     );
     train_log!(
         "train_config: batch_size={} grad_accum={} effective_batch={} max_input_len={} max_target_len={} block_rows={} seed={} prefetch_queue={} grad_clip={}",
@@ -1666,6 +1875,7 @@ fn evaluate_probe(
     let mut per_cat_hits: BTreeMap<String, usize> = BTreeMap::new();
     let mut per_cat_total: BTreeMap<String, usize> = BTreeMap::new();
     for (idx, item) in items.iter().enumerate() {
+        let reading = normalize_probe_reading(&item.reading);
         let context = if item.context.chars().count() > max_context {
             item.context
                 .chars()
@@ -1678,7 +1888,7 @@ fn evaluate_probe(
         } else {
             item.context.clone()
         };
-        let mut ids = tokenizer.encode_with_special(&context, &item.reading);
+        let mut ids = tokenizer.encode_with_special(&context, &reading);
         ids.truncate(max_seq_len);
         let batch = rust_data::PackedBatch {
             input_ids: ids.clone(),
@@ -1686,6 +1896,8 @@ fn evaluate_probe(
             target_ids: Vec::new(),
             input_lengths: vec![ids.len() as u16],
             target_lengths: vec![0],
+            writer_ids: vec![0],
+            domain_ids: vec![0],
             source_ids: vec![0],
             batch_size: 1,
             max_input_len: ids.len(),
@@ -1731,15 +1943,28 @@ fn evaluate_probe(
 /// path — no optim is attached, skipping the wasted allocation for
 /// read-only workloads like `eval_command`.
 fn new_backend(
-    config: &backend::BackendConfig,
+    config: &TrainConfig,
     device: Device,
     grad_clip: f64,
     with_optimizer: bool,
 ) -> Result<Box<dyn backend::TrainBackend>> {
     #[cfg(feature = "cuda")]
     {
-        if config.kind == "tch-ctc-nat" {
-            let mut backend = gpu::TchCtcNatBackend::new(config, device)?;
+        if config.backend.kind == "tch-ctc-nat" {
+            let cvae_labels = cvae_label_counts(config)?;
+            let student_tokenizer = load_tokenizer(config)?;
+            let mut backend = gpu::TchCtcNatBackend::new(
+                &config.backend,
+                &config.cvae,
+                &config.kd,
+                gpu::model::CvaeLabelSpaces::new(
+                    cvae_labels.writer_labels,
+                    cvae_labels.domain_labels,
+                    cvae_labels.source_labels,
+                ),
+                &student_tokenizer,
+                device,
+            )?;
             if with_optimizer {
                 backend.attach_optimizer(grad_clip)?;
             }
@@ -1748,7 +1973,7 @@ fn new_backend(
     }
     #[cfg(not(feature = "cuda"))]
     {
-        if config.kind == "tch-ctc-nat" {
+        if config.backend.kind == "tch-ctc-nat" {
             anyhow::bail!(
                 "backend `tch-ctc-nat` requires building rust-train with `--features cuda`",
             );
@@ -1759,10 +1984,10 @@ fn new_backend(
     if device.is_cuda() {
         anyhow::bail!(
             "backend `{}` has no CUDA path; choose `tch-ctc-nat` or run with --device cpu",
-            config.kind,
+            config.backend.kind,
         );
     }
-    Ok(Box::new(backend::BackendKind::new(config)?))
+    Ok(Box::new(backend::BackendKind::new(&config.backend)?))
 }
 
 fn read_manifest(path: &Path) -> Result<RunManifest> {
@@ -1815,6 +2040,27 @@ fn read_shard_metadata(path: &Path) -> Result<Option<ShardMetadata>> {
     let metadata =
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", sidecar.display()))?;
     Ok(Some(metadata))
+}
+
+fn cvae_label_counts(config: &TrainConfig) -> Result<CvaeLabelCounts> {
+    if !config.cvae.enabled {
+        return Ok(CvaeLabelCounts {
+            writer_labels: 1,
+            domain_labels: 1,
+            source_labels: 1,
+        });
+    }
+    let metadata = read_shard_metadata(&config.dataset.train_shard)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "cvae.enabled=true requires shard metadata sidecar at {}.meta.json",
+            config.dataset.train_shard.display()
+        )
+    })?;
+    Ok(CvaeLabelCounts {
+        writer_labels: metadata.writers.len() + 1,
+        domain_labels: metadata.domains.len() + 1,
+        source_labels: metadata.sources.len() + 1,
+    })
 }
 
 fn validate_config(config: &TrainConfig) -> Result<()> {
@@ -1893,6 +2139,15 @@ fn validate_config(config: &TrainConfig) -> Result<()> {
     if config.probe.every > 0 && config.probe.path.is_none() {
         anyhow::bail!("probe.path must be set when probe.every > 0");
     }
+    if config.backend.use_bf16 && config.backend.use_fp16 {
+        anyhow::bail!("backend.use_bf16 and backend.use_fp16 are mutually exclusive");
+    }
+    if config.backend.proposal_blank_penalty_weight < 0.0 {
+        anyhow::bail!(
+            "backend.proposal_blank_penalty_weight must be >= 0 (got {})",
+            config.backend.proposal_blank_penalty_weight
+        );
+    }
     if let Some(metadata) = read_shard_metadata(&config.dataset.train_shard)? {
         if metadata.vocab_size != config.tokenizer.vocab_size {
             anyhow::bail!(
@@ -1926,6 +2181,27 @@ fn validate_config(config: &TrainConfig) -> Result<()> {
                 config.dataset.train_shard.display()
             );
         }
+    }
+    if config.cvae.enabled {
+        let _ = cvae_label_counts(config)?;
+        if config.cvae.latent_size == 0 {
+            anyhow::bail!("cvae.latent_size must be > 0 when cvae.enabled=true");
+        }
+        if config.cvae.posterior_hidden_size == 0 {
+            anyhow::bail!("cvae.posterior_hidden_size must be > 0 when cvae.enabled=true");
+        }
+        if config.cvae.label_hidden_size == 0 {
+            anyhow::bail!("cvae.label_hidden_size must be > 0 when cvae.enabled=true");
+        }
+    }
+    if config.kd.alpha < 0.0 {
+        anyhow::bail!("kd.alpha must be >= 0");
+    }
+    if config.kd.temperature <= 0.0 {
+        anyhow::bail!("kd.temperature must be > 0");
+    }
+    if config.kd.alpha > 0.0 && config.kd.teacher_run_dir.is_empty() {
+        anyhow::bail!("kd.teacher_run_dir must be set when kd.alpha > 0");
     }
     let _ = crate::optim::OptimizerState::new(&config.backend)?;
     Ok(())
@@ -1989,6 +2265,8 @@ mod tests {
             },
             eval: EvalSection::default(),
             probe: ProbeSection::default(),
+            cvae: backend::CvaeConfig::default(),
+            kd: backend::KdConfig::default(),
             backend: backend::BackendConfig {
                 kind: "mock".to_string(),
                 ..backend::BackendConfig::default()
@@ -2006,6 +2284,8 @@ mod tests {
                 eval_every: 2000,
                 early_log_every: 10,
                 early_log_steps: 200,
+                warmup_short_sample_steps: 0,
+                warmup_short_sample_max_chars: 24,
             },
         }
     }
@@ -2013,13 +2293,22 @@ mod tests {
     fn sample_manifest(run_dir: &Path) -> RunManifest {
         RunManifest {
             train_shard: run_dir.join("train.kkc").display().to_string(),
+            tokenizer_path: String::new(),
+            tokenizer_max_kanji: 6000,
             model_preset: "phase3_20m".to_string(),
             vocab_size: 4801,
             backend_kind: "mock".to_string(),
             backend_hidden_size: 32,
+            backend_encoder_layers: 2,
+            backend_num_heads: 4,
+            backend_ffn_size: 128,
+            backend_decoder_layers: 2,
+            backend_decoder_heads: 4,
+            backend_decoder_ffn_size: 128,
             backend_output_size: 512,
             backend_blank_id: 4,
             backend_max_positions: 128,
+            backend_mask_token_id: 5,
             batch_size: 32,
             max_input_len: 128,
             max_target_len: 128,
@@ -2057,7 +2346,32 @@ mod tests {
             confidence_fallback: 0.5,
             use_learned_remask: true,
             use_learned_stop: true,
+            proposal_blank_penalty_weight: 0.0,
+            proposal_blank_penalty_start_step: 0,
+            use_bf16: false,
+            use_fp16: false,
             grad_clip: 0.0,
+            cvae_enabled: false,
+            cvae_kl_weight: 0.05,
+            cvae_latent_size: 64,
+            cvae_posterior_hidden_size: 256,
+            cvae_label_hidden_size: 128,
+            cvae_writer_labels: 1,
+            cvae_domain_labels: 1,
+            cvae_source_labels: 1,
+            kd_alpha: 0.0,
+            kd_alpha_final: None,
+            kd_alpha_decay_start: 0,
+            kd_alpha_decay_steps: 0,
+            kd_start_step: 0,
+            kd_warmup_steps: 0,
+            kd_every: 1,
+            kd_hard_threshold: 0.6,
+            kd_gate_mode: "low_conf".to_string(),
+            kd_temperature: 2.0,
+            kd_teacher_run_dir: String::new(),
+            kd_teacher_checkpoint: "best".to_string(),
+            kd_fp16: true,
         }
     }
 
@@ -2120,12 +2434,14 @@ mod tests {
         std::fs::write(
             format!("{}.meta.json", config.dataset.train_shard.display()),
             r#"{
-  "shard_version": 1,
+  "shard_version": 2,
   "row_count": 1,
   "max_context_chars": 40,
   "max_reading_tokens": 8,
   "max_surface_tokens": 8,
   "vocab_size": 6653,
+  "writers": {},
+  "domains": {},
   "sources": { "test": 1 }
 }"#,
         )
@@ -2395,6 +2711,24 @@ fn collect_resume_mismatches(
             config.dataset.train_shard.display()
         ));
     }
+    let tokenizer_path = config
+        .tokenizer
+        .path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    if manifest.tokenizer_path != tokenizer_path {
+        mismatches.push(format!(
+            "tokenizer_path: run={} current={}",
+            manifest.tokenizer_path, tokenizer_path
+        ));
+    }
+    if manifest.tokenizer_max_kanji != config.tokenizer.max_kanji {
+        mismatches.push(format!(
+            "tokenizer_max_kanji: run={} current={}",
+            manifest.tokenizer_max_kanji, config.tokenizer.max_kanji
+        ));
+    }
     if manifest.model_preset != config.model.preset {
         mismatches.push(format!(
             "model_preset: run={} current={}",
@@ -2424,6 +2758,47 @@ fn collect_resume_mismatches(
             "backend_output_size: run={} current={}",
             manifest.backend_output_size, config.backend.output_size
         ));
+    }
+    for (label, run, cur) in [
+        (
+            "backend_encoder_layers",
+            manifest.backend_encoder_layers,
+            config.backend.encoder_layers,
+        ),
+        (
+            "backend_num_heads",
+            manifest.backend_num_heads,
+            config.backend.num_heads,
+        ),
+        (
+            "backend_ffn_size",
+            manifest.backend_ffn_size,
+            config.backend.ffn_size,
+        ),
+        (
+            "backend_decoder_layers",
+            manifest.backend_decoder_layers,
+            config.backend.decoder_layers,
+        ),
+        (
+            "backend_decoder_heads",
+            manifest.backend_decoder_heads,
+            config.backend.decoder_heads,
+        ),
+        (
+            "backend_decoder_ffn_size",
+            manifest.backend_decoder_ffn_size,
+            config.backend.decoder_ffn_size,
+        ),
+        (
+            "backend_mask_token_id",
+            manifest.backend_mask_token_id,
+            config.backend.mask_token_id,
+        ),
+    ] {
+        if run != cur {
+            mismatches.push(format!("{label}: run={run} current={cur}"));
+        }
     }
     if manifest.backend_blank_id != config.backend.blank_id {
         mismatches.push(format!(
@@ -2550,6 +2925,22 @@ fn collect_resume_mismatches(
             config.backend.confidence_fallback,
         ),
         ("grad_clip", manifest.grad_clip, config.backend.grad_clip),
+        (
+            "cvae_kl_weight",
+            manifest.cvae_kl_weight,
+            config.cvae.kl_weight,
+        ),
+        ("kd_alpha", manifest.kd_alpha, config.kd.alpha),
+        (
+            "kd_hard_threshold",
+            manifest.kd_hard_threshold,
+            config.kd.hard_threshold,
+        ),
+        (
+            "kd_temperature",
+            manifest.kd_temperature,
+            config.kd.temperature,
+        ),
     ] {
         // Ignore the "manifest was created before this field existed"
         // case (run==0.0) for keys with a natural default of 0.0. The
@@ -2581,9 +2972,110 @@ fn collect_resume_mismatches(
             manifest.refine_iterations,
             config.backend.refine_iterations,
         ),
+        (
+            "cvae_latent_size",
+            manifest.cvae_latent_size,
+            config.cvae.latent_size,
+        ),
+        (
+            "cvae_posterior_hidden_size",
+            manifest.cvae_posterior_hidden_size,
+            config.cvae.posterior_hidden_size,
+        ),
+        (
+            "cvae_label_hidden_size",
+            manifest.cvae_label_hidden_size,
+            config.cvae.label_hidden_size,
+        ),
+        (
+            "kd_alpha_decay_start",
+            manifest.kd_alpha_decay_start,
+            config.kd.alpha_decay_start,
+        ),
+        (
+            "kd_alpha_decay_steps",
+            manifest.kd_alpha_decay_steps,
+            config.kd.alpha_decay_steps,
+        ),
+        (
+            "kd_start_step",
+            manifest.kd_start_step,
+            config.kd.start_step,
+        ),
+        (
+            "kd_warmup_steps",
+            manifest.kd_warmup_steps,
+            config.kd.warmup_steps,
+        ),
+        ("kd_every", manifest.kd_every, config.kd.every),
     ] {
         if run != cur && !(run == 0 && manifest.optimizer.is_empty()) {
             mismatches.push(format!("{label}: run={run} current={cur}"));
+        }
+    }
+    if manifest.cvae_enabled != config.cvae.enabled {
+        mismatches.push(format!(
+            "cvae_enabled: run={} current={}",
+            manifest.cvae_enabled, config.cvae.enabled
+        ));
+    }
+    if manifest.kd_alpha_final != config.kd.alpha_final {
+        mismatches.push(format!(
+            "kd_alpha_final: run={:?} current={:?}",
+            manifest.kd_alpha_final, config.kd.alpha_final
+        ));
+    }
+    if manifest.kd_gate_mode != config.kd.gate_mode.as_str() {
+        mismatches.push(format!(
+            "kd_gate_mode: run={} current={}",
+            manifest.kd_gate_mode,
+            config.kd.gate_mode.as_str()
+        ));
+    }
+    if manifest.kd_teacher_run_dir != config.kd.teacher_run_dir {
+        mismatches.push(format!(
+            "kd_teacher_run_dir: run={} current={}",
+            manifest.kd_teacher_run_dir, config.kd.teacher_run_dir
+        ));
+    }
+    if manifest.kd_teacher_checkpoint != config.kd.teacher_checkpoint {
+        mismatches.push(format!(
+            "kd_teacher_checkpoint: run={} current={}",
+            manifest.kd_teacher_checkpoint, config.kd.teacher_checkpoint
+        ));
+    }
+    if manifest.kd_fp16 != config.kd.fp16 {
+        mismatches.push(format!(
+            "kd_fp16: run={} current={}",
+            manifest.kd_fp16, config.kd.fp16
+        ));
+    }
+    if config.cvae.enabled {
+        match cvae_label_counts(config) {
+            Ok(counts) => {
+                for (label, run, cur) in [
+                    (
+                        "cvae_writer_labels",
+                        manifest.cvae_writer_labels,
+                        counts.writer_labels,
+                    ),
+                    (
+                        "cvae_domain_labels",
+                        manifest.cvae_domain_labels,
+                        counts.domain_labels,
+                    ),
+                    (
+                        "cvae_source_labels",
+                        manifest.cvae_source_labels,
+                        counts.source_labels,
+                    ),
+                ] {
+                    if run != cur {
+                        mismatches.push(format!("{label}: run={run} current={cur}"));
+                    }
+                }
+            }
+            Err(err) => mismatches.push(format!("cvae_label_counts: {err}")),
         }
     }
     if !manifest.optimizer.is_empty() {
@@ -2676,16 +3168,30 @@ fn last_checkpoint_entry(state: &TrainerState) -> Option<&CheckpointEntry> {
         .find(|entry| entry.checkpoint == last)
 }
 
-enum BatchSource {
+struct BatchSource {
+    kind: BatchSourceKind,
+    /// Short-sample warmup window: while `step < warmup_steps`, the Sync
+    /// iterator is told to skip rows with reading tokens longer than
+    /// `warmup_max_tokens`. Once `step >= warmup_steps` the filter is
+    /// cleared. Prefetched sources do not support this (the worker
+    /// thread has moved the iter) — callers must use Sync while warmup
+    /// is active.
+    warmup_steps: usize,
+    warmup_max_tokens: usize,
+    warmup_applied: bool,
+    warmup_cleared: bool,
+}
+
+enum BatchSourceKind {
     Sync(BatchIter),
     Prefetched(PrefetchedBatchIter),
 }
 
 impl BatchSource {
     fn next_batch(&mut self) -> Result<Option<rust_data::PackedBatch>> {
-        match self {
-            BatchSource::Sync(iter) => iter.next_batch(),
-            BatchSource::Prefetched(iter) => iter.next_batch(),
+        match &mut self.kind {
+            BatchSourceKind::Sync(iter) => iter.next_batch(),
+            BatchSourceKind::Prefetched(iter) => iter.next_batch(),
         }
     }
 }
@@ -2693,6 +3199,26 @@ impl BatchSource {
 impl trainer::BatchStream for BatchSource {
     fn next_batch(&mut self) -> Result<Option<rust_data::PackedBatch>> {
         BatchSource::next_batch(self)
+    }
+
+    fn on_step_start(&mut self, step: usize) {
+        if self.warmup_steps == 0 {
+            return;
+        }
+        if let BatchSourceKind::Sync(iter) = &mut self.kind {
+            if step <= self.warmup_steps && !self.warmup_applied {
+                iter.set_max_reading_tokens(Some(self.warmup_max_tokens));
+                self.warmup_applied = true;
+            } else if step > self.warmup_steps && !self.warmup_cleared {
+                iter.set_max_reading_tokens(None);
+                self.warmup_cleared = true;
+                eprintln!(
+                    "[rust-train] short-sample warmup ended at step {} (max_chars={})",
+                    step - 1,
+                    self.warmup_max_tokens
+                );
+            }
+        }
     }
 }
 
@@ -2702,24 +3228,46 @@ fn open_batch_source(config: &TrainConfig) -> Result<BatchSource> {
 
 fn open_eval_batch_source(config: &TrainConfig, shard: &Path) -> Result<BatchSource> {
     let iter = BatchIter::open(shard, iter_config(config))?;
-    if config.runtime.prefetch_queue > 0 {
-        Ok(BatchSource::Prefetched(PrefetchedBatchIter::spawn(
+    let kind = if config.runtime.prefetch_queue > 0 {
+        BatchSourceKind::Prefetched(PrefetchedBatchIter::spawn(
             iter,
             config.runtime.prefetch_queue,
-        )))
+        ))
     } else {
-        Ok(BatchSource::Sync(iter))
-    }
+        BatchSourceKind::Sync(iter)
+    };
+    Ok(BatchSource {
+        kind,
+        warmup_steps: 0,
+        warmup_max_tokens: 0,
+        warmup_applied: false,
+        warmup_cleared: false,
+    })
 }
 
 fn open_batch_source_at_cursor(config: &TrainConfig, cursor: usize) -> Result<BatchSource> {
     let iter = BatchIter::open_at_cursor(&config.dataset.train_shard, iter_config(config), cursor)?;
-    if config.runtime.prefetch_queue > 0 {
-        Ok(BatchSource::Prefetched(PrefetchedBatchIter::spawn(
+    let warmup_steps = config.train.warmup_short_sample_steps;
+    let warmup_max_tokens = config.train.warmup_short_sample_max_chars;
+    let kind = if warmup_steps > 0 {
+        // Short-sample warmup requires mutable access to the iter; the
+        // Prefetched worker has moved it away, so we force Sync mode
+        // for the entire run. Upload overhead is ~0.1ms so prefetch
+        // gain would be negligible anyway.
+        BatchSourceKind::Sync(iter)
+    } else if config.runtime.prefetch_queue > 0 {
+        BatchSourceKind::Prefetched(PrefetchedBatchIter::spawn(
             iter,
             config.runtime.prefetch_queue,
-        )))
+        ))
     } else {
-        Ok(BatchSource::Sync(iter))
-    }
+        BatchSourceKind::Sync(iter)
+    };
+    Ok(BatchSource {
+        kind,
+        warmup_steps,
+        warmup_max_tokens,
+        warmup_applied: false,
+        warmup_cleared: false,
+    })
 }

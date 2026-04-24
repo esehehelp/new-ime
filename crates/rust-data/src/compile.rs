@@ -26,6 +26,11 @@ pub struct ShardMetadata {
     pub max_reading_tokens: usize,
     pub max_surface_tokens: usize,
     pub vocab_size: usize,
+    #[serde(default)]
+    pub writers: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub domains: BTreeMap<String, u32>,
+    #[serde(default)]
     pub sources: BTreeMap<String, u32>,
 }
 
@@ -33,6 +38,8 @@ pub struct ShardMetadata {
 struct RowJob {
     seq: u64,
     row: Row,
+    writer_id: u32,
+    domain_id: u32,
     source_id: u32,
 }
 
@@ -104,6 +111,8 @@ pub fn compile_jsonl_to_shard(
     );
 
     let (result_tx, result_rx) = mpsc::sync_channel::<WorkerMessage>(worker_count * 4);
+    let mut writer_table = BTreeMap::<String, u32>::new();
+    let mut domain_table = BTreeMap::<String, u32>::new();
     let mut source_table = BTreeMap::<String, u32>::new();
 
     thread::scope(|scope| -> Result<()> {
@@ -155,9 +164,11 @@ pub fn compile_jsonl_to_shard(
             }
         }
 
-        let (reader_rows, source_ids) = reader
+        let (reader_rows, writer_ids, domain_ids, source_ids) = reader
             .join()
             .map_err(|_| anyhow::anyhow!("reader thread panicked"))??;
+        writer_table = writer_ids;
+        domain_table = domain_ids;
         source_table = source_ids;
         if row_count != reader_rows {
             anyhow::bail!(
@@ -222,6 +233,8 @@ pub fn compile_jsonl_to_shard(
         max_reading_tokens: options.max_reading_tokens,
         max_surface_tokens: options.max_surface_tokens,
         vocab_size: tokenizer.vocab_size(),
+        writers: writer_table,
+        domains: domain_table,
         sources: source_table,
     })
 }
@@ -229,31 +242,46 @@ pub fn compile_jsonl_to_shard(
 fn reader_loop(
     input: &Path,
     job_txs: Vec<SyncSender<RowJob>>,
-) -> Result<(u64, BTreeMap<String, u32>)> {
+) -> Result<(
+    u64,
+    BTreeMap<String, u32>,
+    BTreeMap<String, u32>,
+    BTreeMap<String, u32>,
+)> {
+    let mut writer_table = BTreeMap::<String, u32>::new();
+    let mut domain_table = BTreeMap::<String, u32>::new();
     let mut source_table = BTreeMap::<String, u32>::new();
     let mut row_count = 0u64;
     for row in JsonlLines::open(input).context("open jsonl")? {
         let row = row?;
-        let source_id = match row.source.as_ref() {
-            Some(source) => {
-                let next = source_table.len() as u32 + 1;
-                *source_table.entry(source.clone()).or_insert(next)
-            }
-            None => 0,
-        };
+        let writer_id = next_label_id(&mut writer_table, row.writer.as_ref());
+        let domain_id = next_label_id(&mut domain_table, row.domain.as_ref());
+        let source_id = next_label_id(&mut source_table, row.source.as_ref());
         let seq = row_count;
         let shard = (seq as usize) % job_txs.len();
         job_txs[shard]
             .send(RowJob {
                 seq,
                 row,
+                writer_id,
+                domain_id,
                 source_id,
             })
             .context("send row job")?;
         row_count += 1;
     }
     drop(job_txs);
-    Ok((row_count, source_table))
+    Ok((row_count, writer_table, domain_table, source_table))
+}
+
+fn next_label_id(table: &mut BTreeMap<String, u32>, label: Option<&String>) -> u32 {
+    match label {
+        Some(value) => {
+            let next = table.len() as u32 + 1;
+            *table.entry(value.clone()).or_insert(next)
+        }
+        None => 0,
+    }
 }
 
 fn worker_loop(
@@ -301,9 +329,17 @@ fn compile_row_job(
     reading.truncate(options.max_reading_tokens);
     surface.truncate(options.max_surface_tokens);
     context_ids.truncate(options.max_context_chars.max(1));
-    let row_bytes = 16u64 + ((reading.len() + surface.len() + context_ids.len()) as u64 * 4);
+    let row_bytes = 24u64 + ((reading.len() + surface.len() + context_ids.len()) as u64 * 4);
     let mut bytes = Vec::with_capacity(row_bytes as usize);
-    write_row_bytes(&mut bytes, &reading, &surface, &context_ids, job.source_id)?;
+    write_row_bytes(
+        &mut bytes,
+        &reading,
+        &surface,
+        &context_ids,
+        job.writer_id,
+        job.domain_id,
+        job.source_id,
+    )?;
     Ok(CompiledRow {
         seq: job.seq,
         bytes,
@@ -316,12 +352,16 @@ fn write_row_bytes(
     reading: &[u32],
     surface: &[u32],
     context: &[u32],
+    writer_id: u32,
+    domain_id: u32,
     source_id: u32,
 ) -> Result<u64> {
-    let row_bytes = 16u64 + ((reading.len() + surface.len() + context.len()) as u64 * 4);
+    let row_bytes = 24u64 + ((reading.len() + surface.len() + context.len()) as u64 * 4);
     out.write_all(&(reading.len() as u32).to_le_bytes())?;
     out.write_all(&(surface.len() as u32).to_le_bytes())?;
     out.write_all(&(context.len() as u32).to_le_bytes())?;
+    out.write_all(&writer_id.to_le_bytes())?;
+    out.write_all(&domain_id.to_le_bytes())?;
     out.write_all(&source_id.to_le_bytes())?;
     for token in reading.iter().chain(surface).chain(context) {
         out.write_all(&token.to_le_bytes())?;

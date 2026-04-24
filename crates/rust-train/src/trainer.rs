@@ -41,6 +41,11 @@ pub struct TrainerSummary {
 
 pub trait BatchStream {
     fn next_batch(&mut self) -> Result<Option<PackedBatch>>;
+    /// Called once per training step just before `next_batch` is invoked
+    /// for the first micro of the step. Lets the source toggle runtime
+    /// filters (e.g. the short-sample warmup that only accepts short
+    /// rows during the first N steps). Default is a no-op.
+    fn on_step_start(&mut self, _step: usize) {}
 }
 
 pub fn run_training_loop<S, B>(
@@ -59,6 +64,7 @@ where
     let mut last_loss = None;
     let start_step = state.step;
     while state.step < config.target_step {
+        source.on_step_start(state.step + 1);
         let Some(batch) = next_accumulated_batch(source, config.grad_accum)? else {
             break;
         };
@@ -169,6 +175,8 @@ fn merge_batches(dst: &mut PackedBatch, src: PackedBatch) {
     dst.target_ids = merged_target_ids;
     dst.input_lengths.extend(src.input_lengths);
     dst.target_lengths.extend(src.target_lengths);
+    dst.writer_ids.extend(src.writer_ids);
+    dst.domain_ids.extend(src.domain_ids);
     dst.source_ids.extend(src.source_ids);
     dst.batch_size += src.batch_size;
     dst.max_input_len = merged_input_len;
@@ -326,6 +334,8 @@ mod tests {
             target_ids: vec![3, 0],
             input_lengths: vec![2],
             target_lengths: vec![1],
+            writer_ids: vec![20],
+            domain_ids: vec![30],
             source_ids: vec![10],
             batch_size: 1,
             max_input_len: 4,
@@ -338,6 +348,8 @@ mod tests {
             target_ids: vec![7, 8],
             input_lengths: vec![3],
             target_lengths: vec![2],
+            writer_ids: vec![21],
+            domain_ids: vec![31],
             source_ids: vec![11],
             batch_size: 1,
             max_input_len: 4,
@@ -359,6 +371,8 @@ mod tests {
             target_ids: vec![3],
             input_lengths: vec![2],
             target_lengths: vec![1],
+            writer_ids: vec![20],
+            domain_ids: vec![30],
             source_ids: vec![10],
             batch_size: 1,
             max_input_len: 2,
@@ -371,6 +385,8 @@ mod tests {
             target_ids: vec![7, 8],
             input_lengths: vec![3],
             target_lengths: vec![2],
+            writer_ids: vec![21],
+            domain_ids: vec![31],
             source_ids: vec![11],
             batch_size: 1,
             max_input_len: 3,

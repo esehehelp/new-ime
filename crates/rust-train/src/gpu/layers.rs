@@ -18,7 +18,7 @@
 
 use anyhow::{bail, Result};
 use tch::nn::{self, LinearConfig, Module, Path};
-use tch::{Kind, Tensor};
+use tch::Tensor;
 
 /// Multi-head attention. Separate q/k/v/out projections so the layout is
 /// easy to inspect and serialize. We do NOT fuse q/k/v into a single
@@ -79,19 +79,23 @@ impl MultiHeadAttention {
             .view([b, tk, nh, hd])
             .transpose(1, 2);
 
-        let scale = (hd as f64).sqrt();
-        let mut scores = q.matmul(&k.transpose(-2, -1)) / scale; // [B, nh, Tq, Tk]
-
-        if let Some(pad_mask) = kv_padding_mask {
-            // pad_mask: [B, Tk], true=valid. Invalid positions → -inf so
-            // softmax zeros them out.
-            let invalid = pad_mask.logical_not().unsqueeze(1).unsqueeze(1);
-            // Broadcast to [B, 1, 1, Tk]; let matmul broadcasting reach Tq.
-            scores = scores.masked_fill(&invalid, f64::NEG_INFINITY);
-        }
-
-        let probs = scores.softmax(-1, Kind::Float);
-        let out = probs.matmul(&v); // [B, nh, Tq, hd]
+        // PyTorch's `scaled_dot_product_attention` routes to fused
+        // Flash/MemEff kernels when available, avoiding materialization
+        // of the [B, nh, Tq, Tk] score tensor. For a bool mask, `true`
+        // means *keep* (same orientation as our attention_mask), so we
+        // expand [B, Tk] → [B, 1, 1, Tk] and pass it directly.
+        let mask_expanded = kv_padding_mask.map(|pm| pm.unsqueeze(1).unsqueeze(1));
+        let out = Tensor::scaled_dot_product_attention::<Tensor>(
+            &q,
+            &k,
+            &v,
+            mask_expanded,
+            0.0,
+            false,
+            None,
+            false,
+        );
+        // out: [B, nh, Tq, hd]
         let out = out.transpose(1, 2).contiguous().view([b, tq, self.hidden]);
         self.out_proj.forward(&out)
     }
@@ -166,6 +170,7 @@ impl DecoderLayer {
         encoder_out: &Tensor,
         self_padding_mask: Option<&Tensor>,
         enc_padding_mask: Option<&Tensor>,
+        film_condition: Option<(&Tensor, &Tensor)>,
     ) -> Tensor {
         let pre = self.self_attn_norm.forward(x);
         let x = x + self.self_attn.forward(&pre, &pre, self_padding_mask);
@@ -177,7 +182,11 @@ impl DecoderLayer {
         let ffn = self
             .ffn_out
             .forward(&self.ffn_in.forward(&pre).gelu("none"));
-        &x + ffn
+        let mut x = &x + ffn;
+        if let Some((gamma, beta)) = film_condition {
+            x = gamma * x + beta;
+        }
+        x
     }
 }
 
@@ -214,7 +223,7 @@ mod tests {
         let enc = Tensor::randn([2, 7, 16], (Kind::Float, Device::Cpu));
         let self_mask = Tensor::ones([2, 5], (Kind::Bool, Device::Cpu));
         let enc_mask = Tensor::ones([2, 7], (Kind::Bool, Device::Cpu));
-        let out = dec.forward(&x, &enc, Some(&self_mask), Some(&enc_mask));
+        let out = dec.forward(&x, &enc, Some(&self_mask), Some(&enc_mask), None);
         assert_eq!(out.size(), vec![2, 5, 16]);
     }
 

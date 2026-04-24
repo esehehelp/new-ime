@@ -4,7 +4,9 @@ use std::fs::File;
 use std::path::Path;
 
 pub const MAGIC: [u8; 8] = *b"KKCSHRD1";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+const VERSION_V1: u32 = 1;
+const VERSION_V2: u32 = 2;
 const HEADER_LEN: usize = 36;
 
 #[derive(Debug, Clone, Copy)]
@@ -20,6 +22,8 @@ pub struct ShardRowRef<'a> {
     pub reading: &'a [u32],
     pub surface: &'a [u32],
     pub context: &'a [u32],
+    pub writer_id: u32,
+    pub domain_id: u32,
     pub source_id: u32,
 }
 
@@ -45,7 +49,7 @@ impl ShardReader {
             payload_offset: read_u64(&mmap[20..28]),
             index_offset: read_u64(&mmap[28..36]),
         };
-        if header.version != VERSION {
+        if !matches!(header.version, VERSION_V1 | VERSION_V2) {
             bail!("unsupported shard version {}", header.version);
         }
         Ok(Self { mmap, header })
@@ -65,8 +69,16 @@ impl ShardReader {
         let reading_len = read_u32(&self.mmap[base..base + 4]) as usize;
         let surface_len = read_u32(&self.mmap[base + 4..base + 8]) as usize;
         let context_len = read_u32(&self.mmap[base + 8..base + 12]) as usize;
-        let source_id = read_u32(&self.mmap[base + 12..base + 16]);
-        let mut cursor = base + 16;
+        let (writer_id, domain_id, source_id, mut cursor) = match self.header.version {
+            VERSION_V1 => (0, 0, 0, base + 12),
+            VERSION_V2 => (
+                read_u32(&self.mmap[base + 12..base + 16]),
+                read_u32(&self.mmap[base + 16..base + 20]),
+                read_u32(&self.mmap[base + 20..base + 24]),
+                base + 24,
+            ),
+            other => bail!("unsupported shard version {}", other),
+        };
         let reading = as_u32_slice(&self.mmap[cursor..cursor + reading_len * 4]);
         cursor += reading_len * 4;
         let surface = as_u32_slice(&self.mmap[cursor..cursor + surface_len * 4]);
@@ -76,6 +88,8 @@ impl ShardReader {
             reading,
             surface,
             context,
+            writer_id,
+            domain_id,
             source_id,
         })
     }
@@ -91,4 +105,43 @@ fn read_u64(bytes: &[u8]) -> u64 {
 
 fn as_u32_slice(bytes: &[u8]) -> &[u32] {
     unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const u32, bytes.len() / 4) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn opens_version1_rows_with_zero_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v1.kkc");
+        let mut file = File::create(&path).unwrap();
+        let payload_offset = HEADER_LEN as u64;
+        let index_offset = payload_offset + 12 + ((2 + 1 + 1) * 4) as u64;
+        file.write_all(&MAGIC).unwrap();
+        file.write_all(&VERSION_V1.to_le_bytes()).unwrap();
+        file.write_all(&1u64.to_le_bytes()).unwrap();
+        file.write_all(&payload_offset.to_le_bytes()).unwrap();
+        file.write_all(&index_offset.to_le_bytes()).unwrap();
+        file.write_all(&2u32.to_le_bytes()).unwrap();
+        file.write_all(&1u32.to_le_bytes()).unwrap();
+        file.write_all(&1u32.to_le_bytes()).unwrap();
+        file.write_all(&10u32.to_le_bytes()).unwrap();
+        file.write_all(&11u32.to_le_bytes()).unwrap();
+        file.write_all(&20u32.to_le_bytes()).unwrap();
+        file.write_all(&30u32.to_le_bytes()).unwrap();
+        file.write_all(&0u64.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let reader = ShardReader::open(&path).unwrap();
+        let row = reader.row(0).unwrap();
+        assert_eq!(reader.header().version, VERSION_V1);
+        assert_eq!(row.reading, &[10, 11]);
+        assert_eq!(row.surface, &[20]);
+        assert_eq!(row.context, &[30]);
+        assert_eq!(row.writer_id, 0);
+        assert_eq!(row.domain_id, 0);
+        assert_eq!(row.source_id, 0);
+    }
 }

@@ -395,8 +395,10 @@ pub fn load_backend(backend: &mut TchCtcNatBackend, anchor: &Path) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::BackendConfig;
+    use crate::backend::{BackendConfig, CvaeConfig, KdConfig};
     use crate::device::Device as KkcDevice;
+    use crate::gpu::model::CvaeLabelSpaces;
+    use rust_tokenizer::SharedCharTokenizer;
     use tempfile::tempdir;
 
     fn tiny_config() -> BackendConfig {
@@ -417,13 +419,25 @@ mod tests {
         }
     }
 
+    fn new_backend(cfg: &BackendConfig) -> TchCtcNatBackend {
+        TchCtcNatBackend::new(
+            cfg,
+            &CvaeConfig::default(),
+            &KdConfig::default(),
+            CvaeLabelSpaces::new(1, 1, 1),
+            &SharedCharTokenizer::new_default(64),
+            KkcDevice::Cpu,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn weights_round_trip_bitwise_identical() {
         let dir = tempdir().unwrap();
         let anchor = dir.path().join("ckpt.backend.json");
         let cfg = tiny_config();
 
-        let source = TchCtcNatBackend::new(&cfg, KkcDevice::Cpu).unwrap();
+        let source = new_backend(&cfg);
         // Vary every parameter from zero-init so weights are non-trivial.
         for var in source.var_store().trainable_variables() {
             tch::no_grad(|| {
@@ -433,7 +447,7 @@ mod tests {
         }
         save_backend(&source, &anchor).unwrap();
 
-        let mut loaded = TchCtcNatBackend::new(&cfg, KkcDevice::Cpu).unwrap();
+        let mut loaded = new_backend(&cfg);
         load_backend(&mut loaded, &anchor).unwrap();
 
         let src_vars = source.var_store().variables();
@@ -458,7 +472,7 @@ mod tests {
     fn save_backend_writes_anchor_and_weights_sync_path() {
         let dir = tempdir().unwrap();
         let anchor = dir.path().join("step_00000010.backend.json");
-        let backend = TchCtcNatBackend::new(&tiny_config(), KkcDevice::Cpu).unwrap();
+        let backend = new_backend(&tiny_config());
         save_backend(&backend, &anchor).unwrap();
         assert!(anchor.exists(), "anchor {} not written", anchor.display());
         let weights = weights_path_for(&anchor);
@@ -477,11 +491,11 @@ mod tests {
     fn load_rejects_mismatched_vocab() {
         let dir = tempdir().unwrap();
         let anchor = dir.path().join("ckpt.backend.json");
-        let source = TchCtcNatBackend::new(&tiny_config(), KkcDevice::Cpu).unwrap();
+        let source = new_backend(&tiny_config());
         save_backend(&source, &anchor).unwrap();
         let mut wrong_cfg = tiny_config();
         wrong_cfg.output_size = 16; // mismatch
-        let mut loaded = TchCtcNatBackend::new(&wrong_cfg, KkcDevice::Cpu).unwrap();
+        let mut loaded = new_backend(&wrong_cfg);
         assert!(load_backend(&mut loaded, &anchor).is_err());
     }
 }

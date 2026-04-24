@@ -134,12 +134,27 @@ fn check(
     max_len: usize,
     reject_counts: &mut HashMap<&'static str, usize>,
 ) -> Option<OutputPair> {
-    let mut reading = filters.re_leading_trailing_ws.replace_all(&pair.reading, "").to_string();
-    let mut surface = filters.re_leading_trailing_ws.replace_all(&pair.surface, "").to_string();
-    let context = filters.re_leading_trailing_ws.replace_all(&pair.context, "").to_string();
+    let mut reading = filters
+        .re_leading_trailing_ws
+        .replace_all(&pair.reading, "")
+        .to_string();
+    let mut surface = filters
+        .re_leading_trailing_ws
+        .replace_all(&pair.surface, "")
+        .to_string();
+    let context = filters
+        .re_leading_trailing_ws
+        .replace_all(&pair.context, "")
+        .to_string();
 
-    surface = filters.re_multi_ws.replace_all(&surface, "\u{3000}").to_string();
-    reading = filters.re_multi_ws.replace_all(&reading, "\u{3000}").to_string();
+    surface = filters
+        .re_multi_ws
+        .replace_all(&surface, "\u{3000}")
+        .to_string();
+    reading = filters
+        .re_multi_ws
+        .replace_all(&reading, "\u{3000}")
+        .to_string();
 
     // POS leak cleanup
     if filters.re_pos_leak.is_match(&reading) {
@@ -288,7 +303,13 @@ fn main() -> std::io::Result<()> {
                 Err(_) => continue,
             };
 
-            let cleaned = match check(&pair, &filters, args.min_len, args.max_len, &mut reject_counts) {
+            let cleaned = match check(
+                &pair,
+                &filters,
+                args.min_len,
+                args.max_len,
+                &mut reject_counts,
+            ) {
                 Some(p) => p,
                 None => continue,
             };
