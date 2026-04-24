@@ -38,6 +38,17 @@ struct Cli {
     mean_edits: f64,
     #[arg(long, default_value_t = 0.45)]
     weight_adjacent: f64,
+    #[arg(long, default_value_t = 0.20)]
+    weight_deletion: f64,
+    #[arg(long, default_value_t = 0.15)]
+    weight_insertion: f64,
+    #[arg(long, default_value_t = 0.15)]
+    weight_transposition: f64,
+    #[arg(long, default_value_t = 0.05)]
+    weight_no_convert: f64,
+    /// ノイズ後 reading の許容ドリフト (元 length の割合)。
+    #[arg(long, default_value_t = 0.5)]
+    length_drift_max: f64,
     /// 指定割合の row にのみノイズ適用 (それ以外は emit しない)。
     #[arg(long, default_value_t = 1.0)]
     augment_ratio: f64,
@@ -53,7 +64,14 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = TypoConfig {
         mean_edits: cli.mean_edits,
-        weights: vec![(TypoKind::AdjacentKey, cli.weight_adjacent)],
+        weights: vec![
+            (TypoKind::AdjacentKey, cli.weight_adjacent),
+            (TypoKind::Deletion, cli.weight_deletion),
+            (TypoKind::Insertion, cli.weight_insertion),
+            (TypoKind::Transposition, cli.weight_transposition),
+            (TypoKind::NoConvert, cli.weight_no_convert),
+        ],
+        length_drift_max: cli.length_drift_max,
     };
 
     let mut rng = StdRng::seed_from_u64(cli.seed);
