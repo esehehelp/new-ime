@@ -616,6 +616,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-pool-filter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "data-core",
+ "flate2",
+ "once_cell",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "xz2",
+ "zstd 0.13.3",
+]
+
+[[package]]
 name = "data-pool-sampler"
 version = "0.1.0"
 dependencies = [
