@@ -66,14 +66,19 @@ struct Args {
     bunsetsu_paths: Vec<String>,
 
     /// Synth pool: python-generated synth (numeric_ext) + new Rust-generated
-    /// synth (homophone, numeric_units, name). All bunsetsu-schema. Pure
-    /// synthesis, no contamination filter needed.
+    /// synth (homophone, numeric_units, name) + typo/goji noise synth. All
+    /// bunsetsu-schema or Row-schema. Pure synthesis, no contamination
+    /// filter needed. `synth_typo` / `synth_goji` are absent until
+    /// `data-synth-typo` / `data-synth-goji` are run; missing files are
+    /// skipped with a warning at startup.
     #[arg(long, num_args = 0.., default_values_t = [
         "datasets/corpus/synth/numeric.jsonl".to_string(),
         "datasets/corpus/synth/numeric_ext.jsonl".to_string(),
         "datasets/corpus/synth/homophone.jsonl".to_string(),
         "datasets/corpus/synth/numeric_units.jsonl".to_string(),
         "datasets/corpus/synth/name.jsonl".to_string(),
+        "datasets/corpus/synth/synth_typo.jsonl".to_string(),
+        "datasets/corpus/synth/synth_goji.jsonl".to_string(),
     ])]
     synth_paths: Vec<String>,
 
