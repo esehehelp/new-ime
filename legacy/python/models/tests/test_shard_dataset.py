@@ -26,7 +26,7 @@ from models.src.data.tokenizer import SharedCharTokenizer
 from models.src.training.train_ctc_nat import CTCCollator
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _find_rust_data_bin() -> Path | None:
