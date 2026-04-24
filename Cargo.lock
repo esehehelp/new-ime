@@ -2375,23 +2375,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-train"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "rust-data",
- "rust-model",
- "rust-tokenizer",
- "safetensors 0.4.5",
- "serde",
- "serde_json",
- "tch",
- "tempfile",
- "toml",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
