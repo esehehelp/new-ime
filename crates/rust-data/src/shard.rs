@@ -70,7 +70,11 @@ impl ShardReader {
         let surface_len = read_u32(&self.mmap[base + 4..base + 8]) as usize;
         let context_len = read_u32(&self.mmap[base + 8..base + 12]) as usize;
         let (writer_id, domain_id, source_id, mut cursor) = match self.header.version {
-            VERSION_V1 => (0, 0, 0, base + 12),
+            // V1 had only `source_id` at byte offset 12, 16-byte row header.
+            // writer_id / domain_id were added in V2. See
+            // legacy `kkc-data/src/shard.rs` (commit 30f102a) for the
+            // original layout.
+            VERSION_V1 => (0, 0, read_u32(&self.mmap[base + 12..base + 16]), base + 16),
             VERSION_V2 => (
                 read_u32(&self.mmap[base + 12..base + 16]),
                 read_u32(&self.mmap[base + 16..base + 20]),
@@ -113,20 +117,27 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn opens_version1_rows_with_zero_labels() {
+    fn opens_version1_rows_with_source_id() {
+        // V1 row header is 16 bytes ending with source_id (writer / domain
+        // were added in V2). Reference implementation: the legacy
+        // `kkc-data/src/shard.rs` at commit 30f102a. Production shards
+        // (datasets/mixes/*.kkc) were written with this layout.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("v1.kkc");
         let mut file = File::create(&path).unwrap();
         let payload_offset = HEADER_LEN as u64;
-        let index_offset = payload_offset + 12 + ((2 + 1 + 1) * 4) as u64;
+        let index_offset = payload_offset + 16 + ((2 + 1 + 1) * 4) as u64;
         file.write_all(&MAGIC).unwrap();
         file.write_all(&VERSION_V1.to_le_bytes()).unwrap();
         file.write_all(&1u64.to_le_bytes()).unwrap();
         file.write_all(&payload_offset.to_le_bytes()).unwrap();
         file.write_all(&index_offset.to_le_bytes()).unwrap();
+        // row header (16 bytes): reading_len, surface_len, context_len, source_id
         file.write_all(&2u32.to_le_bytes()).unwrap();
         file.write_all(&1u32.to_le_bytes()).unwrap();
         file.write_all(&1u32.to_le_bytes()).unwrap();
+        file.write_all(&7u32.to_le_bytes()).unwrap();
+        // body: reading, surface, context
         file.write_all(&10u32.to_le_bytes()).unwrap();
         file.write_all(&11u32.to_le_bytes()).unwrap();
         file.write_all(&20u32.to_le_bytes()).unwrap();
@@ -142,6 +153,6 @@ mod tests {
         assert_eq!(row.context, &[30]);
         assert_eq!(row.writer_id, 0);
         assert_eq!(row.domain_id, 0);
-        assert_eq!(row.source_id, 0);
+        assert_eq!(row.source_id, 7);
     }
 }

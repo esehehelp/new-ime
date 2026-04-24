@@ -333,10 +333,15 @@ class KanaKanjiShardDataset(Dataset):
             "<III", self._mm, base
         )
         if self.version == 1:
-            # V1 rows omit writer/domain/source. `shard.rs` synthesises zero
-            # IDs in the same case (`VERSION_V1 => (0, 0, 0, base + 12)`).
-            writer_id = domain_id = source_id = 0
-            cur = base + 12
+            # V1 row header is 16 bytes: reading_len u32, surface_len u32,
+            # context_len u32, **source_id u32** (writer / domain were
+            # added in V2). Matches the production shards compiled by the
+            # legacy kkc-data crate (commit 30f102a) and the now-corrected
+            # shard.rs V1 path.
+            writer_id = 0
+            domain_id = 0
+            (source_id,) = struct.unpack_from("<I", self._mm, base + 12)
+            cur = base + 16
         else:
             writer_id, domain_id, source_id = struct.unpack_from(
                 "<III", self._mm, base + 12
