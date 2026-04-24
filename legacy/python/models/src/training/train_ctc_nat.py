@@ -760,8 +760,13 @@ def evaluate_model(
             source_ids=batch["source_ids"] if use_cvae else None,
         )
 
-        for target_ids, target_len, pred_ids in zip(
-            batch["target_ids"], batch["target_lengths"], decoded, strict=True
+        # Reading recovery: decode input_ids through the tokenizer. Skips
+        # the first CLS / SEP specials and whatever context fragment sits
+        # before the reading (shard / jsonl both wrap the reading with
+        # CLS ... SEP reading).
+        input_ids_list = batch["input_ids"].tolist()
+        for row_idx, (target_ids, target_len, pred_ids) in enumerate(
+            zip(batch["target_ids"], batch["target_lengths"], decoded, strict=True)
         ):
             reference = tokenizer.decode(target_ids[: target_len.item()].tolist())
             hypothesis = tokenizer.decode(pred_ids)
@@ -770,7 +775,26 @@ def evaluate_model(
             target_len_sum += len(reference)
             sample_count += 1
             if len(samples) < print_samples:
-                samples.append({"reference": reference, "prediction": hypothesis})
+                reading_ids = input_ids_list[row_idx]
+                # Drop leading CLS / SEP and trailing pad; reading is
+                # the portion after the last SEP (CLS + context + SEP + reading).
+                try:
+                    sep_idx = (
+                        len(reading_ids)
+                        - 1
+                        - reading_ids[::-1].index(2)  # SEP_ID = 2
+                    )
+                    reading_tokens = reading_ids[sep_idx + 1 :]
+                except ValueError:
+                    reading_tokens = reading_ids
+                reading_str = tokenizer.decode(reading_tokens)
+                samples.append(
+                    {
+                        "reading": reading_str,
+                        "reference": reference,
+                        "prediction": hypothesis,
+                    }
+                )
 
     summary = eval_result.summary()
     summary["loss"] = total_loss / max(num_batches, 1)
@@ -966,8 +990,31 @@ def train_local(args: argparse.Namespace) -> None:
             f"best.pt selected by probe EM1)"
         )
 
+    # Compute-side optimisations (Ampere 3060 / 5090). Safe to enable
+    # unconditionally — fp16 AMP + fused AdamW + TF32 matmul + cudnn
+    # benchmark. `torch.compile` is behind --compile because it adds 30-60s
+    # warmup and its graph-rewriter does not always cope with the
+    # refine decoder's dynamic branching.
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae, max_positions=args.max_seq_len).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    adamw_kwargs: dict = dict(lr=args.lr, weight_decay=args.weight_decay)
+    if device.type == "cuda":
+        # `fused=True` activates the cuda fused AdamW kernel (PyTorch ≥2.0),
+        # ~5-10% faster on Ampere+.
+        adamw_kwargs["fused"] = True
+    optimizer = torch.optim.AdamW(model.parameters(), **adamw_kwargs)
+
+    if getattr(args, "compile", False) and device.type == "cuda":
+        try:
+            model = torch.compile(model, mode="reduce-overhead")  # type: ignore[assignment]
+            print("[train] torch.compile enabled (mode=reduce-overhead)", flush=True)
+        except Exception as e:  # pragma: no cover - best-effort
+            print(f"[train] torch.compile failed ({e}); running eager", flush=True)
     # LR schedule: warmup then optional decay. `flat` (default, legacy) holds
     # at peak after warmup (the source of the "LR plateau" seen in earlier 30M
     # runs). `cosine` decays from peak to 0 across remaining steps.
@@ -1523,7 +1570,7 @@ def train_local(args: argparse.Namespace) -> None:
                             f" stop_loss="
                             f"{refine_stats['stop_loss_sum'] / refine_stats['stop_batches']:.4f}"
                         )
-                print(line)
+                print(line, flush=True)
                 kd_stats = {
                     "loss_sum": 0.0,
                     "hard_sum": 0,
@@ -1577,14 +1624,22 @@ def train_local(args: argparse.Namespace) -> None:
                     f"CharAcc={metrics.get('char_acc_top1', 0):.4f} "
                     f"blank={metrics.get('blank_fraction', 0):.3f} "
                     f"pred_len={metrics.get('mean_decoded_chars', 0):.1f}/"
-                    f"{metrics.get('mean_target_chars', 0):.1f}"
+                    f"{metrics.get('mean_target_chars', 0):.1f}",
+                    flush=True,
                 )
 
             if eval_due or probe_due:
                 for idx, sample in enumerate(samples, start=1):
+                    ref = sample["reference"]
+                    pred = sample["prediction"]
+                    reading = sample.get("reading", "")
+                    mark = "OK" if ref == pred else "xx"
                     print(
-                        f"  sample{idx}: ref={sample['reference'][:40]} "
-                        f"pred={sample['prediction'][:40]}"
+                        f"  sample{idx} {mark}\n"
+                        f"    read={reading[:60]}\n"
+                        f"    ref ={ref[:60]}\n"
+                        f"    pred={pred[:60]}",
+                        flush=True,
                     )
 
                 # Probe auto-eval fires on its own cadence (probe_due),
@@ -1691,6 +1746,12 @@ def train_local(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Force line-buffered stdout so `[step N]` / `[eval N]` / sample lines
+    # reach the log file as they are printed, regardless of PYTHONUNBUFFERED.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="CTC-NAT local training scaffold")
     parser.add_argument("--train", default="", help="Training JSONL path")
     parser.add_argument("--dev", default="", help="Dev JSONL path")
@@ -1890,7 +1951,20 @@ def main() -> None:
     )
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--loss-window", type=int, default=100)
-    parser.add_argument("--print-samples", type=int, default=3)
+    parser.add_argument(
+        "--print-samples",
+        type=int,
+        default=5,
+        help="Number of eval samples to print per eval step "
+        "(reading / reference / prediction + OK/xx indicator).",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Wrap the model with torch.compile(mode='reduce-overhead'). Adds "
+        "30-60s warmup; can give 1.3-2x on Ampere/Hopper. Off by default "
+        "because CTC-NAT's refine path has dynamic shapes.",
+    )
     parser.add_argument("--tiny-overfit-eval-train", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--estimate-only", action="store_true")
