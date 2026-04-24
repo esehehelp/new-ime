@@ -647,6 +647,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-synth-goji"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "data-core",
+ "rand 0.8.6",
+ "rand_distr",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "data-synth-homophone"
 version = "0.1.0"
 dependencies = [
