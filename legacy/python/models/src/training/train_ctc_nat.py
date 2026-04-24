@@ -793,17 +793,9 @@ def make_dataloader(
     dataset = KanaKanjiDataset(
         path, max_samples=max_samples, seed=seed, preload=preload
     )
-    if short_sample_max_chars > 0:
-        dataset.data = [
-            sample
-            for sample in dataset.data
-            if len(sample["reading"]) <= short_sample_max_chars
-            and len(sample["surface"]) <= short_sample_max_chars
-        ]
-        if not dataset.data:
-            raise ValueError(
-                f"No samples left after short-sample filter (<= {short_sample_max_chars} chars)."
-            )
+    # CTCCollator below also enforces short_sample_max_chars per-batch; the
+    # dataset-level filter would require materializing .data which the
+    # offset-indexed dataset does not expose, so we rely on the collator.
     collator = CTCCollator(
         tokenizer,
         max_seq_len=max_seq_len,
