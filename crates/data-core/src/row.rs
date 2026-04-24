@@ -15,6 +15,10 @@ pub struct Row {
     #[serde(default)]
     pub context: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
 
@@ -24,6 +28,26 @@ impl Row {
             reading,
             surface,
             context,
+            writer: None,
+            domain: None,
+            source,
+        }
+    }
+
+    pub fn with_labels(
+        reading: String,
+        surface: String,
+        context: String,
+        writer: Option<String>,
+        domain: Option<String>,
+        source: Option<String>,
+    ) -> Self {
+        Self {
+            reading,
+            surface,
+            context,
+            writer,
+            domain,
             source,
         }
     }

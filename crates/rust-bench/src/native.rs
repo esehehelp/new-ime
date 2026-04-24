@@ -5,8 +5,8 @@ mod model;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use rust_tokenizer::SharedCharTokenizer;
 use model::CtcNatModel;
+use rust_tokenizer::SharedCharTokenizer;
 use safetensors::tensor::Dtype;
 use safetensors::SafeTensors;
 use serde::{Deserialize, Serialize};

@@ -35,6 +35,8 @@ pub struct PackedBatch {
     pub target_ids: Vec<u32>,
     pub input_lengths: Vec<u16>,
     pub target_lengths: Vec<u16>,
+    pub writer_ids: Vec<u32>,
+    pub domain_ids: Vec<u32>,
     pub source_ids: Vec<u32>,
     pub batch_size: usize,
     pub max_input_len: usize,
@@ -49,6 +51,8 @@ impl PackedBatch {
             + self.target_ids.len() * std::mem::size_of::<u32>()
             + self.input_lengths.len() * std::mem::size_of::<u16>()
             + self.target_lengths.len() * std::mem::size_of::<u16>()
+            + self.writer_ids.len() * std::mem::size_of::<u32>()
+            + self.domain_ids.len() * std::mem::size_of::<u32>()
             + self.source_ids.len() * std::mem::size_of::<u32>()
     }
 
@@ -66,6 +70,10 @@ pub struct BatchIter {
     config: BatchIterConfig,
     order: Vec<usize>,
     cursor: usize,
+    /// When set, rows whose reading token count exceeds this are skipped.
+    /// Used for the "short-sample warmup" that stabilizes CTC training
+    /// during the first ~1000 steps (legacy Python parity).
+    max_reading_tokens: Option<usize>,
 }
 
 impl BatchIter {
@@ -100,6 +108,7 @@ impl BatchIter {
             config,
             order,
             cursor: cursor.min(rows),
+            max_reading_tokens: None,
         })
     }
 
@@ -107,21 +116,35 @@ impl BatchIter {
         self.cursor
     }
 
+    /// Enable/disable the short-sample filter. `Some(n)` skips rows whose
+    /// `reading` token count exceeds `n`; `None` accepts every row. Safe
+    /// to toggle between batches; the next call to `next_batch` honors
+    /// the current setting.
+    pub fn set_max_reading_tokens(&mut self, max: Option<usize>) {
+        self.max_reading_tokens = max;
+    }
+
     pub fn next_batch(&mut self) -> Result<Option<PackedBatch>> {
         if self.cursor >= self.order.len() {
             return Ok(None);
         }
-        let remaining = self.order.len() - self.cursor;
-        if remaining < self.config.batch_size && self.config.drop_last {
-            self.cursor = self.order.len();
-            return Ok(None);
-        }
-        let take = remaining.min(self.config.batch_size);
-        let mut rows = Vec::with_capacity(take);
+        let batch_size = self.config.batch_size;
+        let mut rows = Vec::with_capacity(batch_size);
         let mut max_input = 0usize;
         let mut max_target = 1usize;
-        for idx in &self.order[self.cursor..self.cursor + take] {
-            let row = self.reader.row(*idx)?;
+        // With the short-sample filter active we advance `cursor` past
+        // rejected rows until we have `batch_size` accepted rows (or the
+        // shard is exhausted). Without it the loop exits after the first
+        // block that fills the batch, matching the legacy behavior.
+        while rows.len() < batch_size && self.cursor < self.order.len() {
+            let idx = self.order[self.cursor];
+            self.cursor += 1;
+            let row = self.reader.row(idx)?;
+            if let Some(max_tok) = self.max_reading_tokens {
+                if row.reading.len() > max_tok {
+                    continue;
+                }
+            }
             let context_budget = self.config.max_input_len.saturating_sub(2);
             let context_take = row.context.len().min(context_budget);
             let reading_take = row
@@ -134,13 +157,21 @@ impl BatchIter {
             max_target = max_target.max(target_len.max(1));
             rows.push((row, context_take, reading_take, target_len));
         }
-        self.cursor += take;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        if rows.len() < batch_size && self.config.drop_last {
+            return Ok(None);
+        }
+        let take = rows.len();
 
         let mut input_ids = vec![0u32; take * max_input];
         let mut attention_mask = vec![0u8; take * max_input];
         let mut target_ids = vec![0u32; take * max_target];
         let mut input_lengths = Vec::with_capacity(take);
         let mut target_lengths = Vec::with_capacity(take);
+        let mut writer_ids = Vec::with_capacity(take);
+        let mut domain_ids = Vec::with_capacity(take);
         let mut source_ids = Vec::with_capacity(take);
 
         for (row_idx, (row, context_take, reading_take, target_len)) in rows.into_iter().enumerate()
@@ -169,6 +200,8 @@ impl BatchIter {
             }
             input_lengths.push(pos as u16);
             target_lengths.push(target_len as u16);
+            writer_ids.push(row.writer_id);
+            domain_ids.push(row.domain_id);
             source_ids.push(row.source_id);
         }
 
@@ -178,6 +211,8 @@ impl BatchIter {
             target_ids,
             input_lengths,
             target_lengths,
+            writer_ids,
+            domain_ids,
             source_ids,
             batch_size: take,
             max_input_len: max_input,

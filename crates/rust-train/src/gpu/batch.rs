@@ -25,6 +25,9 @@ pub struct StagedHostBatch {
     pub target_ids: Vec<i64>,
     pub input_lengths: Vec<i64>,
     pub target_lengths: Vec<i64>,
+    pub writer_ids: Vec<i64>,
+    pub domain_ids: Vec<i64>,
+    pub source_ids: Vec<i64>,
     pub batch_size: usize,
     pub max_input_len: usize,
     pub max_target_len: usize,
@@ -41,12 +44,18 @@ impl StagedHostBatch {
         let target_ids = packed.target_ids.iter().map(|v| *v as i64).collect();
         let input_lengths = packed.input_lengths.iter().map(|v| *v as i64).collect();
         let target_lengths = packed.target_lengths.iter().map(|v| *v as i64).collect();
+        let writer_ids = packed.writer_ids.iter().map(|v| *v as i64).collect();
+        let domain_ids = packed.domain_ids.iter().map(|v| *v as i64).collect();
+        let source_ids = packed.source_ids.iter().map(|v| *v as i64).collect();
         Self {
             input_ids,
             attention_mask,
             target_ids,
             input_lengths,
             target_lengths,
+            writer_ids,
+            domain_ids,
+            source_ids,
             batch_size: packed.batch_size,
             max_input_len: packed.max_input_len,
             max_target_len: packed.max_target_len,
@@ -67,6 +76,9 @@ pub struct GpuBatch {
     pub target_ids: Tensor,
     pub input_lengths: Tensor,
     pub target_lengths: Tensor,
+    pub writer_ids: Tensor,
+    pub domain_ids: Tensor,
+    pub source_ids: Tensor,
     pub batch_size: usize,
     #[allow(dead_code)]
     pub max_input_len: usize,
@@ -80,22 +92,86 @@ pub struct GpuBatch {
 }
 
 impl GpuBatch {
+    /// View into rows `[start, start+len)` of this batch. Returns a
+    /// shallow copy whose tensors are `narrow`-views (no VRAM allocated)
+    /// — use to feed micro-batches into the training forward/backward
+    /// without merging or re-uploading.
+    pub fn narrow_rows(&self, start: i64, len: i64) -> Self {
+        let len_us = len as usize;
+        let denom = self.batch_size.max(1);
+        Self {
+            input_ids: self.input_ids.narrow(0, start, len),
+            attention_mask: self.attention_mask.narrow(0, start, len),
+            target_ids: self.target_ids.narrow(0, start, len),
+            input_lengths: self.input_lengths.narrow(0, start, len),
+            target_lengths: self.target_lengths.narrow(0, start, len),
+            writer_ids: self.writer_ids.narrow(0, start, len),
+            domain_ids: self.domain_ids.narrow(0, start, len),
+            source_ids: self.source_ids.narrow(0, start, len),
+            batch_size: len_us,
+            max_input_len: self.max_input_len,
+            max_target_len: self.max_target_len,
+            order_cursor: self.order_cursor,
+            // Stat-only approximations for per-step logging; the compute
+            // path reads tensors, not these counts.
+            bytes: self.bytes * len_us / denom,
+            non_padding_input_tokens: self.non_padding_input_tokens * len_us / denom,
+            non_padding_target_tokens: self.non_padding_target_tokens * len_us / denom,
+        }
+    }
+
     pub fn upload(staged: StagedHostBatch, device: TchDevice) -> Self {
         let batch = staged.batch_size as i64;
         let in_len = staged.max_input_len as i64;
         let tgt_len = staged.max_target_len as i64;
 
+        // Shrink the T dimension to the actual max across this batch's
+        // rows. Shards are padded to the dataset-wide max (e.g. 128)
+        // but most rows are much shorter; chopping the trailing padding
+        // saves 2-3x on attention/FFN compute.
+        let actual_in = staged
+            .input_lengths
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(in_len)
+            .max(1)
+            .min(in_len);
+        let actual_tgt = staged
+            .target_lengths
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(tgt_len)
+            .max(1)
+            .min(tgt_len);
+        if std::env::var("NEW_IME_DEBUG_SEQ").is_ok() {
+            eprintln!(
+                "[seq-pack] batch={} in_pad={} in_actual={} tgt_pad={} tgt_actual={}",
+                batch, in_len, actual_in, tgt_len, actual_tgt
+            );
+        }
+
         let input_ids = Tensor::from_slice(&staged.input_ids)
             .view([batch, in_len])
+            .narrow(1, 0, actual_in)
+            .contiguous()
             .to_device(device);
         let attention_mask = Tensor::from_slice(&staged.attention_mask)
             .view([batch, in_len])
+            .narrow(1, 0, actual_in)
+            .contiguous()
             .to_device(device);
         let target_ids = Tensor::from_slice(&staged.target_ids)
             .view([batch, tgt_len])
+            .narrow(1, 0, actual_tgt)
+            .contiguous()
             .to_device(device);
         let input_lengths = Tensor::from_slice(&staged.input_lengths).to_device(device);
         let target_lengths = Tensor::from_slice(&staged.target_lengths).to_device(device);
+        let writer_ids = Tensor::from_slice(&staged.writer_ids).to_device(device);
+        let domain_ids = Tensor::from_slice(&staged.domain_ids).to_device(device);
+        let source_ids = Tensor::from_slice(&staged.source_ids).to_device(device);
 
         Self {
             input_ids,
@@ -103,9 +179,12 @@ impl GpuBatch {
             target_ids,
             input_lengths,
             target_lengths,
+            writer_ids,
+            domain_ids,
+            source_ids,
             batch_size: staged.batch_size,
-            max_input_len: staged.max_input_len,
-            max_target_len: staged.max_target_len,
+            max_input_len: actual_in as usize,
+            max_target_len: actual_tgt as usize,
             order_cursor: staged.order_cursor,
             bytes: staged.bytes,
             non_padding_input_tokens: staged.non_padding_input_tokens,
@@ -205,6 +284,8 @@ mod tests {
             target_ids: vec![8, 9, 0, 7],
             input_lengths: vec![2, 3],
             target_lengths: vec![2, 1],
+            writer_ids: vec![10, 11],
+            domain_ids: vec![20, 21],
             source_ids: vec![0, 1],
             batch_size: 2,
             max_input_len: 3,

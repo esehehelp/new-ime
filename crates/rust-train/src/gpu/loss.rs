@@ -96,10 +96,16 @@ pub fn build_target_refinement(
     let needs_force = any.eq(0).logical_and(&target_lengths.unsqueeze(-1).gt(0)); // [B, 1]
 
     // Build forced indices on CPU (tiny, [B]) then move to device.
-    let lens_cpu = target_lengths.to_device(tch::Device::Cpu);
+    // Bulk-copy `target_lengths` into a Vec first — per-row
+    // `int64_value(&[row])` triggers a CUDA sync on every element and
+    // dominated the refine setup cost (B=32 × grad_accum=4 × refine
+    // iters = ~256 syncs per step).
+    let lens_cpu = target_lengths.to_device(tch::Device::Cpu).contiguous();
+    let mut lens_vec = vec![0i64; b as usize];
+    lens_cpu.copy_data::<i64>(&mut lens_vec, b as usize);
     let mut forced_indices = vec![0i64; b as usize];
     for row in 0..b as usize {
-        let len = lens_cpu.int64_value(&[row as i64]).max(1);
+        let len = lens_vec[row].max(1);
         let seed = mix64(step ^ ((row as u64) << 13));
         forced_indices[row] = ((seed as i64).rem_euclid(len)) as i64;
     }

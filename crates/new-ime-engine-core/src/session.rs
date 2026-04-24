@@ -1035,7 +1035,9 @@ mod tests {
 
     #[test]
     fn real_onnx_session_loads_and_runs_refiner_when_artifacts_exist() {
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
         let onnx = repo_root
             .join("models")
             .join("onnx")

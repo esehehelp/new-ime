@@ -68,8 +68,14 @@ fn main() {
     println!("cargo:rustc-link-lib=static=kenlm_util");
 
     println!("cargo:rerun-if-changed={}", shim_src.display());
-    println!("cargo:rerun-if-changed={}", kenlm_src.join("lm/model.hh").display());
-    println!("cargo:rerun-if-changed={}", lib_dir.join("kenlm.lib").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        kenlm_src.join("lm/model.hh").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        lib_dir.join("kenlm.lib").display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         lib_dir.join("kenlm_util.lib").display()

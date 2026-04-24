@@ -52,7 +52,10 @@ struct FieldStats {
     examples: Vec<String>,
 }
 
-fn selected_fields<'a>(pair: &'a Pair, fields: &'a [String]) -> impl Iterator<Item = (&'a str, &'a str)> {
+fn selected_fields<'a>(
+    pair: &'a Pair,
+    fields: &'a [String],
+) -> impl Iterator<Item = (&'a str, &'a str)> {
     fields.iter().filter_map(|field| match field.as_str() {
         "reading" => Some(("reading", pair.reading.as_str())),
         "surface" => Some(("surface", pair.surface.as_str())),

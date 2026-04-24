@@ -30,7 +30,8 @@ mod tests {
     fn fixture_dir() -> PathBuf {
         // CARGO_MANIFEST_DIR is crates/rust-train; repo root is 2 up.
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors().nth(2)
+            .ancestors()
+            .nth(2)
             .expect("repo root")
             .join("parity-fixtures")
     }

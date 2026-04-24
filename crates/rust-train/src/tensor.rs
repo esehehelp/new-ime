@@ -1,10 +1,14 @@
 use rust_data::PackedBatch;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TensorBatch {
     pub input_ids: Vec<u32>,
     pub attention_mask: Vec<f32>,
     pub target_ids: Vec<u32>,
+    pub writer_ids: Vec<u32>,
+    pub domain_ids: Vec<u32>,
+    pub source_ids: Vec<u32>,
     pub batch_size: usize,
     pub max_input_len: usize,
     pub max_target_len: usize,
@@ -16,6 +20,9 @@ impl TensorBatch {
             input_ids: batch.input_ids.clone(),
             attention_mask: batch.attention_mask.iter().map(|v| *v as f32).collect(),
             target_ids: batch.target_ids.clone(),
+            writer_ids: batch.writer_ids.clone(),
+            domain_ids: batch.domain_ids.clone(),
+            source_ids: batch.source_ids.clone(),
             batch_size: batch.batch_size,
             max_input_len: batch.max_input_len,
             max_target_len: batch.max_target_len,
@@ -44,6 +51,8 @@ mod tests {
             target_ids: vec![8, 9, 0, 7],
             input_lengths: vec![2, 3],
             target_lengths: vec![2, 1],
+            writer_ids: vec![10, 11],
+            domain_ids: vec![20, 21],
             source_ids: vec![0, 1],
             batch_size: 2,
             max_input_len: 3,

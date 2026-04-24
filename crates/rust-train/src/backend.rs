@@ -12,6 +12,116 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CvaeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_kl_weight")]
+    pub kl_weight: f64,
+    #[serde(default = "default_latent_size")]
+    pub latent_size: usize,
+    #[serde(default = "default_posterior_hidden_size")]
+    pub posterior_hidden_size: usize,
+    #[serde(default = "default_label_hidden_size")]
+    pub label_hidden_size: usize,
+}
+
+impl Default for CvaeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            kl_weight: default_kl_weight(),
+            latent_size: default_latent_size(),
+            posterior_hidden_size: default_posterior_hidden_size(),
+            label_hidden_size: default_label_hidden_size(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateMode {
+    LowConf,
+    HighConf,
+    All,
+}
+
+impl Default for GateMode {
+    fn default() -> Self {
+        Self::LowConf
+    }
+}
+
+impl GateMode {
+    #[allow(dead_code)]
+    pub fn from_str(value: &str) -> Result<Self> {
+        Ok(match value.to_ascii_lowercase().as_str() {
+            "low_conf" | "low-conf" | "low" => Self::LowConf,
+            "high_conf" | "high-conf" | "high" => Self::HighConf,
+            "all" => Self::All,
+            other => anyhow::bail!("unknown kd gate_mode: {other}"),
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::LowConf => "low_conf",
+            Self::HighConf => "high_conf",
+            Self::All => "all",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KdConfig {
+    #[serde(default)]
+    pub alpha: f64,
+    #[serde(default)]
+    pub alpha_final: Option<f64>,
+    #[serde(default)]
+    pub alpha_decay_start: usize,
+    #[serde(default)]
+    pub alpha_decay_steps: usize,
+    #[serde(default)]
+    pub start_step: usize,
+    #[serde(default)]
+    pub warmup_steps: usize,
+    #[serde(default = "default_kd_every")]
+    pub every: usize,
+    #[serde(default = "default_kd_hard_threshold")]
+    pub hard_threshold: f64,
+    #[serde(default)]
+    pub gate_mode: GateMode,
+    #[serde(default = "default_kd_temperature")]
+    pub temperature: f64,
+    #[serde(default)]
+    pub teacher_run_dir: String,
+    #[serde(default = "default_kd_teacher_checkpoint")]
+    pub teacher_checkpoint: String,
+    #[serde(default = "default_true")]
+    pub fp16: bool,
+}
+
+impl Default for KdConfig {
+    fn default() -> Self {
+        Self {
+            alpha: 0.0,
+            alpha_final: None,
+            alpha_decay_start: 0,
+            alpha_decay_steps: 0,
+            start_step: 0,
+            warmup_steps: 0,
+            every: default_kd_every(),
+            hard_threshold: default_kd_hard_threshold(),
+            gate_mode: GateMode::LowConf,
+            temperature: default_kd_temperature(),
+            teacher_run_dir: String::new(),
+            teacher_checkpoint: default_kd_teacher_checkpoint(),
+            fp16: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendConfig {
     pub kind: String,
     pub optimizer: String,
@@ -67,6 +177,27 @@ pub struct BackendConfig {
     pub use_learned_stop: bool,
     #[serde(default = "default_mask_token_id")]
     pub mask_token_id: usize,
+    /// Cast the VarStore to bfloat16 after model init. Lets Ampere+
+    /// Tensor Cores pick up matmul (fp32 vs bf16 is ~2-4x on an RTX 3060
+    /// for Transformer forward/backward). Optimizer moments stay fp32
+    /// in `TchOptimizer` for Adam numerical stability.
+    #[serde(default)]
+    pub use_bf16: bool,
+    /// Alternate to `use_bf16` — cast the VarStore to fp16 (Half).
+    /// Same Tensor-Core throughput story as bf16 but tighter dynamic
+    /// range, so loss scaling may eventually be required for deeper
+    /// training (bf16 is preferred where the device supports it).
+    #[serde(default)]
+    pub use_fp16: bool,
+    /// L1 penalty on the proposal softmax probability assigned to the CTC
+    /// blank token, averaged over valid time steps. `0.0` disables it.
+    #[serde(default)]
+    pub proposal_blank_penalty_weight: f64,
+    /// Skip the blank penalty until `step >= proposal_blank_penalty_start_step`
+    /// so the CTC head can warm up before being pushed away from the
+    /// easy constant-blank solution.
+    #[serde(default)]
+    pub proposal_blank_penalty_start_step: usize,
     /// Global grad-norm clip. `0.0` disables clipping. Carried on the
     /// config (instead of only the CLI flag) so the resume manifest can
     /// detect silent changes between a run and its restart.
@@ -116,6 +247,10 @@ impl Default for BackendConfig {
             use_learned_remask: true,
             use_learned_stop: true,
             mask_token_id: MASK_ID as usize,
+            use_bf16: false,
+            use_fp16: false,
+            proposal_blank_penalty_weight: 0.0,
+            proposal_blank_penalty_start_step: 0,
             grad_clip: 0.0,
         }
     }
@@ -165,6 +300,38 @@ fn default_mask_token_id() -> usize {
     MASK_ID as usize
 }
 
+fn default_kl_weight() -> f64 {
+    0.05
+}
+
+fn default_latent_size() -> usize {
+    64
+}
+
+fn default_posterior_hidden_size() -> usize {
+    256
+}
+
+fn default_label_hidden_size() -> usize {
+    128
+}
+
+fn default_kd_every() -> usize {
+    1
+}
+
+fn default_kd_hard_threshold() -> f64 {
+    0.6
+}
+
+fn default_kd_temperature() -> f64 {
+    2.0
+}
+
+fn default_kd_teacher_checkpoint() -> String {
+    "best".to_string()
+}
+
 #[derive(Debug, Clone)]
 pub struct EvalBatchOutput {
     pub step: TrainerStep,
@@ -178,6 +345,12 @@ pub trait TrainBackend {
     fn save_checkpoint(&self, path: &Path) -> Result<()>;
     fn load_checkpoint(&mut self, path: &Path) -> Result<()>;
     fn set_debug(&mut self, _enabled: bool) {}
+
+    /// Opt-in hook: tell the backend to accumulate gradients across `n`
+    /// row-micro-batches per logical step. Default: no-op (single pass).
+    /// The GPU backend overrides to split the uploaded batch and call
+    /// the optimizer once per `n` passes.
+    fn set_grad_accum_divisor(&mut self, _n: usize) {}
 
     /// Forward-only evaluation. Must NOT update weights.
     ///
@@ -2276,6 +2449,8 @@ mod tests {
             target_ids: vec![5, 6, 0],
             input_lengths: vec![3],
             target_lengths: vec![2],
+            writer_ids: vec![10],
+            domain_ids: vec![20],
             source_ids: vec![0],
             batch_size: 1,
             max_input_len: 4,

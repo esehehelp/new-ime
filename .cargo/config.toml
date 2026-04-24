@@ -1,2 +1,5 @@
 [build]
 target-dir = "build"
+
+[env]
+LIBTORCH = { value = ".venv/Lib/site-packages/torch", relative = true }
