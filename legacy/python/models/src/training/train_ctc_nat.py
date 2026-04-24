@@ -24,7 +24,11 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from models.src.data.dataset import KanaKanjiDataset
+from models.src.data.dataset import (
+    CTCShardCollator,
+    KanaKanjiDataset,
+    KanaKanjiShardDataset,
+)
 from models.src.data.tokenizer import BLANK_ID, MASK_ID, PAD_ID, SharedCharTokenizer
 from models.src.eval.metrics import EvalResult
 from models.src.model.ctc_nat import CTCAlignmentToken, CTCNAT, PRESETS
@@ -790,18 +794,40 @@ def make_dataloader(
     pin_memory: bool = False,
     preload: bool = False,
 ):
-    dataset = KanaKanjiDataset(
-        path, max_samples=max_samples, seed=seed, preload=preload
-    )
-    # CTCCollator below also enforces short_sample_max_chars per-batch; the
-    # dataset-level filter would require materializing .data which the
-    # offset-indexed dataset does not expose, so we rely on the collator.
-    collator = CTCCollator(
-        tokenizer,
-        max_seq_len=max_seq_len,
-        max_context=max_context,
-        short_sample_max_chars=short_sample_max_chars,
-    )
+    # Path ending in .kkc → rust-data binary shard (tokenize + JSON parse
+    # already done at compile time). Everything else → legacy JSONL path.
+    is_shard = str(path).endswith(".kkc")
+    if is_shard:
+        if max_samples:
+            raise NotImplementedError(
+                "max_samples is not supported in shard mode; "
+                "subset the corpus with `rust-data compile` instead"
+            )
+        if preload:
+            raise NotImplementedError(
+                "preload is not supported in shard mode (mmap is already "
+                "resident in page cache)"
+            )
+        dataset = KanaKanjiShardDataset(
+            path, expected_vocab_size=tokenizer.vocab_size
+        )
+        collator = CTCShardCollator(
+            max_seq_len=max_seq_len,
+            short_sample_max_chars=short_sample_max_chars,
+        )
+    else:
+        dataset = KanaKanjiDataset(
+            path, max_samples=max_samples, seed=seed, preload=preload
+        )
+        # CTCCollator also enforces short_sample_max_chars per-batch; the
+        # dataset-level filter would require materializing .data which the
+        # offset-indexed dataset does not expose, so we rely on the collator.
+        collator = CTCCollator(
+            tokenizer,
+            max_seq_len=max_seq_len,
+            max_context=max_context,
+            short_sample_max_chars=short_sample_max_chars,
+        )
     loader_kwargs = dict(
         dataset=dataset,
         batch_size=batch_size,

@@ -7,13 +7,23 @@ Each sample: (input_ids, target_ids)
 For AR baseline (Phase 2), we concatenate as:
   [CLS] context [SEP] reading [OUT] surface [EOS]
 and train with causal LM loss on the surface portion.
+
+## Shard mode (dev-branch Phase C)
+
+`KanaKanjiShardDataset` + `CTCShardCollator` read pre-tokenized binary
+shards produced by `cargo run -p rust-data -- compile ...`. Tokenize +
+JSON parse run in Rust at compile time, so the dataloader hot path is
+reduced to mmap slicing + numpy → tensor conversion. Format must stay
+in sync with `crates/rust-data/src/shard.rs` (magic `KKCSHRD1`, V2).
 """
 
 from __future__ import annotations
 
 import json
+import mmap
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -198,6 +208,254 @@ class KanaKanjiDataset(Dataset):
         self._fh.seek(int(self.offsets[idx]))
         line = self._fh.readline()
         return json.loads(line)
+
+
+# -----------------------------------------------------------------------------
+# Shard mode: KKCSHRD1 V2 binary layout produced by `rust-data compile`.
+# -----------------------------------------------------------------------------
+# Header (36 bytes, little-endian):
+#   magic[8] = b"KKCSHRD1"
+#   version  u32
+#   row_count u64
+#   payload_offset u64
+#   index_offset u64
+# Payload (V2 per row):
+#   reading_len u32, surface_len u32, context_len u32,
+#   writer_id u32, domain_id u32, source_id u32,
+#   reading[reading_len] u32,
+#   surface[surface_len] u32,
+#   context[context_len] u32
+# Index: row_count × u64 (each = row byte offset within payload region).
+_SHARD_MAGIC = b"KKCSHRD1"
+_SHARD_VERSION_MIN = 1
+_SHARD_VERSION_MAX = 2
+_SHARD_HEADER_LEN = 36
+
+
+class KanaKanjiShardDataset(Dataset):
+    """Map-style Dataset over a `rust-data` compiled shard.
+
+    Zero Python-side tokenize / JSON parse: `__getitem__` returns
+    pre-tokenized u32 arrays sliced from an mmap'd shard. Pair with
+    `CTCShardCollator` to build padded tensor batches.
+
+    Parameters
+    ----------
+    shard_path:
+        Path to a `.kkc` shard written by `rust-data compile`.
+    expected_vocab_size:
+        When set, validates the sidecar `*.meta.json` `vocab_size` matches
+        so a mismatched tokenizer / shard pair fails loudly at startup.
+    """
+
+    def __init__(
+        self,
+        shard_path: str,
+        expected_vocab_size: int | None = None,
+    ):
+        self.path = Path(shard_path)
+        if not self.path.exists():
+            raise FileNotFoundError(f"Shard not found: {self.path}")
+
+        self._fh = None
+        self._mm: mmap.mmap | None = None
+        self._open_mmap()
+
+        magic = self._mm[:8]
+        if bytes(magic) != _SHARD_MAGIC:
+            raise ValueError(f"Not a rust-data shard (bad magic): {self.path}")
+        version, row_count, payload_offset, index_offset = struct.unpack_from(
+            "<IQQQ", self._mm, 8
+        )
+        if not (_SHARD_VERSION_MIN <= version <= _SHARD_VERSION_MAX):
+            raise ValueError(
+                f"Unsupported shard version {version} (supported {_SHARD_VERSION_MIN}..{_SHARD_VERSION_MAX})"
+            )
+        self.version = int(version)
+        self.row_count = int(row_count)
+        self.payload_offset = int(payload_offset)
+        self.index_offset = int(index_offset)
+
+        # Materialize the index table as a numpy u64 view (zero-copy on mmap).
+        index_bytes = self._mm[
+            self.index_offset : self.index_offset + self.row_count * 8
+        ]
+        self.index = np.frombuffer(index_bytes, dtype="<u8")
+        if self.index.shape[0] != self.row_count:
+            raise ValueError(
+                f"Shard index length {self.index.shape[0]} != row_count {self.row_count}"
+            )
+
+        # Optional sidecar validation. Silent if absent (for interop with
+        # shards that predate the sidecar emitter).
+        self.meta: dict | None = None
+        meta_path = Path(str(self.path) + ".meta.json")
+        if meta_path.exists():
+            self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if (
+                expected_vocab_size is not None
+                and self.meta.get("vocab_size") != expected_vocab_size
+            ):
+                raise ValueError(
+                    "Shard / tokenizer vocab mismatch: "
+                    f"shard={self.meta.get('vocab_size')} "
+                    f"tokenizer={expected_vocab_size} "
+                    f"(meta={meta_path})"
+                )
+
+    def _open_mmap(self) -> None:
+        self._fh = open(self.path, "rb")
+        self._mm = mmap.mmap(self._fh.fileno(), 0, access=mmap.ACCESS_READ)
+
+    def __len__(self) -> int:
+        return self.row_count
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_fh"] = None
+        state["_mm"] = None
+        state["index"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._open_mmap()
+        index_bytes = self._mm[
+            self.index_offset : self.index_offset + self.row_count * 8
+        ]
+        self.index = np.frombuffer(index_bytes, dtype="<u8")
+
+    def __getitem__(self, idx: int) -> dict:
+        if idx < 0 or idx >= self.row_count:
+            raise IndexError(idx)
+        base = self.payload_offset + int(self.index[idx])
+        header = self._mm[base : base + 24]
+        reading_len, surface_len, context_len, writer_id, domain_id, source_id = (
+            struct.unpack_from("<IIIIII", header)
+        )
+        cur = base + 24
+        rbytes = reading_len * 4
+        sbytes = surface_len * 4
+        cbytes = context_len * 4
+        reading_ids = np.frombuffer(self._mm[cur : cur + rbytes], dtype="<u4")
+        cur += rbytes
+        surface_ids = np.frombuffer(self._mm[cur : cur + sbytes], dtype="<u4")
+        cur += sbytes
+        context_ids = np.frombuffer(self._mm[cur : cur + cbytes], dtype="<u4")
+        return {
+            "reading_ids": reading_ids,
+            "surface_ids": surface_ids,
+            "context_ids": context_ids,
+            "writer_id": int(writer_id),
+            "domain_id": int(domain_id),
+            "source_id": int(source_id),
+        }
+
+
+class CTCShardCollator:
+    """Batch collator for `KanaKanjiShardDataset`.
+
+    Mirrors `CTCCollator` from `train_ctc_nat.py` but operates on
+    pre-tokenized u32 arrays rather than JSON dicts, so no per-step
+    Python tokenize loop runs on the dataloader hot path.
+
+    Input layout (matches `CTCCollator._encode_input`):
+        [CLS_ID] + context_ids + [SEP_ID] + reading_ids
+      truncated to `max_seq_len`. `context_ids` are already capped at
+      `max_context_chars` during shard compile.
+
+    Target layout (matches `CTCCollator._encode_target`):
+        surface_ids truncated to `max_seq_len`. `BLANK_ID` is stripped
+      during shard compile (see `compile.rs`).
+
+    `short_sample_max_chars > 0` filters rows whose reading_ids or
+    surface_ids length exceeds the cap — semantically equivalent to the
+    character-count filter in `CTCCollator.__call__` for char-level
+    tokenizers. Rows with no byte-fallback will match exactly.
+    """
+
+    # Align with legacy/python/models/src/data/tokenizer.py and
+    # crates/rust-tokenizer/src/lib.rs: PAD=0 UNK=1 SEP=2 CLS=3 BLANK=4 MASK=5.
+    PAD_ID = 0
+    SEP_ID = 2
+    CLS_ID = 3
+
+    def __init__(
+        self,
+        max_seq_len: int = 128,
+        short_sample_max_chars: int = 0,
+    ):
+        self.max_seq_len = max_seq_len
+        self.short_sample_max_chars = short_sample_max_chars
+
+    def _encode_input(
+        self, context_ids: np.ndarray, reading_ids: np.ndarray
+    ) -> list[int]:
+        ids = [self.CLS_ID]
+        ids.extend(int(x) for x in context_ids.tolist())
+        ids.append(self.SEP_ID)
+        ids.extend(int(x) for x in reading_ids.tolist())
+        return ids[: self.max_seq_len]
+
+    def _encode_target(self, surface_ids: np.ndarray) -> list[int]:
+        # BLANK_ID is already stripped at compile time; just truncate.
+        return [int(x) for x in surface_ids[: self.max_seq_len].tolist()]
+
+    def __call__(self, batch: list[dict]) -> dict[str, torch.Tensor]:
+        if self.short_sample_max_chars > 0:
+            cap = self.short_sample_max_chars
+            filtered = [
+                s
+                for s in batch
+                if len(s["reading_ids"]) <= cap and len(s["surface_ids"]) <= cap
+            ]
+            if filtered:
+                batch = filtered
+
+        encoded_inputs: list[list[int]] = []
+        encoded_targets: list[list[int]] = []
+        target_lengths: list[int] = []
+        writer_ids: list[int] = []
+        domain_ids: list[int] = []
+        source_ids: list[int] = []
+
+        for sample in batch:
+            inp = self._encode_input(sample["context_ids"], sample["reading_ids"])
+            tgt = self._encode_target(sample["surface_ids"])
+            encoded_inputs.append(inp)
+            encoded_targets.append(tgt)
+            target_lengths.append(len(tgt))
+            writer_ids.append(sample["writer_id"])
+            domain_ids.append(sample["domain_id"])
+            source_ids.append(sample["source_id"])
+
+        max_input_len = max(len(x) for x in encoded_inputs)
+        max_target_len = max(max(target_lengths), 1)
+
+        input_ids = []
+        attention_mask = []
+        target_ids = []
+        for inp, tgt in zip(encoded_inputs, encoded_targets, strict=True):
+            input_pad = max_input_len - len(inp)
+            target_pad = max_target_len - len(tgt)
+            input_ids.append(inp + [self.PAD_ID] * input_pad)
+            attention_mask.append([1] * len(inp) + [0] * input_pad)
+            target_ids.append(tgt + [self.PAD_ID] * target_pad)
+
+        return {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+            "target_ids": torch.tensor(target_ids, dtype=torch.long),
+            "target_lengths": torch.tensor(target_lengths, dtype=torch.long),
+            "writer_ids": torch.tensor(writer_ids, dtype=torch.long),
+            "domain_ids": torch.tensor(domain_ids, dtype=torch.long),
+            "source_ids": torch.tensor(source_ids, dtype=torch.long),
+            # Raw string fields are not stored in the shard (until Phase E),
+            # so KD teacher round-trips must stay on the JSONL path for now.
+            "_contexts": [""] * len(batch),
+            "_readings": [""] * len(batch),
+            "_surfaces": [""] * len(batch),
+        }
 
 
 class ARCollator:

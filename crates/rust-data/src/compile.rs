@@ -1,7 +1,7 @@
 use crate::shard::{MAGIC, VERSION};
 use anyhow::{Context, Result};
 use data_core::{JsonlLines, Row};
-use rust_tokenizer::SharedCharTokenizer;
+use rust_tokenizer::{SharedCharTokenizer, BLANK_ID};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -326,6 +326,10 @@ fn compile_row_job(
     let mut reading = tokenizer.encode(&job.row.reading);
     let mut surface = tokenizer.encode(&job.row.surface);
     let mut context_ids = tokenizer.encode(&context);
+    // Match `CTCCollator._encode_target` in train_ctc_nat.py: CTC targets
+    // must not contain the blank token. Doing this at compile time keeps
+    // the Python ShardReader collator a pure padding-to-tensor step.
+    surface.retain(|&tid| tid != BLANK_ID);
     reading.truncate(options.max_reading_tokens);
     surface.truncate(options.max_surface_tokens);
     context_ids.truncate(options.max_context_chars.max(1));
