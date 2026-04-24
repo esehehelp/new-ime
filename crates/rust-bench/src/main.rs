@@ -50,5 +50,9 @@ struct Cli {
 #[cfg(not(feature = "native-tch"))]
 fn main() -> Result<()> {
     let _ = Cli::parse();
-    bail!("rust-bench requires --features native-tch in this environment")
+    bail!(
+        "rust-bench was built without the `native-tch` feature — model execution is disabled.\n\
+         Rebuild with:  cargo run -p rust-bench --features native-tch -- <args>\n\
+         Requires LIBTORCH to point at a libtorch install (see docs/benchmark_comparison.md)."
+    )
 }
