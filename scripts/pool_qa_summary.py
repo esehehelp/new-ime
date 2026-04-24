@@ -21,8 +21,9 @@ LATIN = re.compile(r"[A-Za-z]")
 DIGIT = re.compile(r"[0-9０-９]")
 
 # Symbol/punct start (rejected per user: 句読点、記号始まり)
-# Leading punctuation: 、。「」『』（）〔〕【】〈〉《》・ー… and ASCII punct
-PUNCT_START = re.compile(r"^[\s　、。！？,.!?「」『』（）()\[\]【】〔〕〈〉《》・ーー…‥々〇〻※\-_:;'\"”“‘’]")
+# EXCEPTION: 「 / 」 remain allowed — natural for colloquial dialogue.
+# Leading punctuation: 、。 !？ , . ! ? 『』（）〔〕【】〈〉《》・ー… and ASCII punct
+PUNCT_START = re.compile(r"^[\s　、。！？,.!?『』（）()\[\]【】〔〕〈〉《》・ーー…‥々〇〻※\-_:;'\"”“‘’]")
 
 # Reading should be mostly hiragana (+ optional ー and symbols). Katakana in
 # reading signals raw tokenization (should have been katakana->hiragana).
