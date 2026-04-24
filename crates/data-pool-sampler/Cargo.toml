@@ -1,0 +1,17 @@
+[package]
+name = "data-pool-sampler"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-pool-sampler"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+rand.workspace = true
+zstd.workspace = true
+flate2.workspace = true
+xz2.workspace = true
+data-core = { path = "../data-core" }

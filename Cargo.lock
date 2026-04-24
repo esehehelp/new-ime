@@ -616,6 +616,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-pool-sampler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "data-core",
+ "flate2",
+ "rand 0.8.6",
+ "xz2",
+ "zstd 0.13.3",
+]
+
+[[package]]
 name = "data-process-whitepaper"
 version = "0.1.0"
 dependencies = [
