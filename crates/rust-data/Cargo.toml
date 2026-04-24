@@ -3,8 +3,13 @@ name = "rust-data"
 edition.workspace = true
 version.workspace = true
 
+[[bin]]
+name = "rust-data"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
+clap.workspace = true
 memmap2.workspace = true
 rayon.workspace = true
 rand.workspace = true
