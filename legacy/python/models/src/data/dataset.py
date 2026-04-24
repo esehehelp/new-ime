@@ -329,11 +329,19 @@ class KanaKanjiShardDataset(Dataset):
         if idx < 0 or idx >= self.row_count:
             raise IndexError(idx)
         base = self.payload_offset + int(self.index[idx])
-        header = self._mm[base : base + 24]
-        reading_len, surface_len, context_len, writer_id, domain_id, source_id = (
-            struct.unpack_from("<IIIIII", header)
+        reading_len, surface_len, context_len = struct.unpack_from(
+            "<III", self._mm, base
         )
-        cur = base + 24
+        if self.version == 1:
+            # V1 rows omit writer/domain/source. `shard.rs` synthesises zero
+            # IDs in the same case (`VERSION_V1 => (0, 0, 0, base + 12)`).
+            writer_id = domain_id = source_id = 0
+            cur = base + 12
+        else:
+            writer_id, domain_id, source_id = struct.unpack_from(
+                "<III", self._mm, base + 12
+            )
+            cur = base + 24
         rbytes = reading_len * 4
         sbytes = surface_len * 4
         cbytes = context_len * 4
@@ -379,6 +387,7 @@ class CTCShardCollator:
     PAD_ID = 0
     SEP_ID = 2
     CLS_ID = 3
+    BLANK_ID = 4
 
     def __init__(
         self,
@@ -398,8 +407,12 @@ class CTCShardCollator:
         return ids[: self.max_seq_len]
 
     def _encode_target(self, surface_ids: np.ndarray) -> list[int]:
-        # BLANK_ID is already stripped at compile time; just truncate.
-        return [int(x) for x in surface_ids[: self.max_seq_len].tolist()]
+        # CTC targets must not contain BLANK_ID. V2 shards strip this at
+        # compile; V1 shards predate the strip, so we filter defensively
+        # (cost is negligible vs. tokenize in Python).
+        return [
+            int(x) for x in surface_ids[: self.max_seq_len].tolist() if int(x) != self.BLANK_ID
+        ]
 
     def __call__(self, batch: list[dict]) -> dict[str, torch.Tensor]:
         if self.short_sample_max_chars > 0:
