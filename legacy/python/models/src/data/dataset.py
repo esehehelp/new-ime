@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset
 
 
 _OFFSETS_SUFFIX = ".offsets.npy"
@@ -363,6 +363,82 @@ class KanaKanjiShardDataset(Dataset):
             "domain_id": int(domain_id),
             "source_id": int(source_id),
         }
+
+
+class KanaKanjiShardIterable(IterableDataset):
+    """Block-shuffled streaming view over a .kkc shard.
+
+    Rationale: a map-style Dataset + DataLoader(shuffle=True) draws random
+    row indices, which on a mmap'd 83 GB shard touches fresh 4 KB pages for
+    every sample. Windows eagerly caches those pages and pushes PyTorch /
+    CUDA working-set into the pagefile, halving throughput. Iterating by
+    block (shuffled block order, sequential rows inside) keeps page access
+    sequential while preserving enough randomness for SGD.
+
+    Parameters
+    ----------
+    block_size : int
+        Rows per block. 1024 ≈ 230 KiB of payload per block at our row size
+        — big enough to amortize block-to-block seeks, small enough to
+        shuffle finely. Defaults match the collator batch scale.
+    shuffle : bool
+        Shuffle block order each epoch. Within-block order is always
+        sequential (that is the whole point).
+    seed : int
+        Epoch-0 RNG seed; per-epoch seed = seed + epoch.
+    """
+
+    def __init__(
+        self,
+        shard_path: str,
+        *,
+        block_size: int = 1024,
+        shuffle: bool = True,
+        seed: int = 0,
+        expected_vocab_size: int | None = None,
+    ) -> None:
+        super().__init__()
+        self._base = KanaKanjiShardDataset(
+            shard_path, expected_vocab_size=expected_vocab_size
+        )
+        if block_size <= 0:
+            raise ValueError(f"block_size must be > 0, got {block_size}")
+        self.block_size = int(block_size)
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.epoch = 0
+        # Forward metadata so callers introspecting the dataset keep working.
+        self.path = self._base.path
+        self.meta = self._base.meta
+        self.row_count = self._base.row_count
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def __len__(self) -> int:
+        return self._base.row_count
+
+    def __iter__(self):
+        total = self._base.row_count
+        n_blocks = (total + self.block_size - 1) // self.block_size
+
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            wid, nw = 0, 1
+        else:
+            wid, nw = worker_info.id, worker_info.num_workers
+
+        rng = np.random.default_rng(self.seed + self.epoch)
+        order = np.arange(n_blocks, dtype=np.int64)
+        if self.shuffle:
+            rng.shuffle(order)
+        my_blocks = order[wid::nw]
+
+        for b in my_blocks:
+            start = int(b) * self.block_size
+            stop = min(start + self.block_size, total)
+            for idx in range(start, stop):
+                yield self._base[idx]
 
 
 class CTCShardCollator:

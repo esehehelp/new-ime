@@ -28,7 +28,9 @@ from models.src.data.dataset import (
     CTCShardCollator,
     KanaKanjiDataset,
     KanaKanjiShardDataset,
+    KanaKanjiShardIterable,
 )
+from torch.utils.data import IterableDataset
 from models.src.data.tokenizer import BLANK_ID, MASK_ID, PAD_ID, SharedCharTokenizer
 from models.src.eval.metrics import EvalResult
 from models.src.model.ctc_nat import CTCAlignmentToken, CTCNAT, PRESETS
@@ -832,9 +834,23 @@ def make_dataloader(
                 "preload is not supported in shard mode (mmap is already "
                 "resident in page cache)"
             )
-        dataset = KanaKanjiShardDataset(
-            path, expected_vocab_size=tokenizer.vocab_size
-        )
+        # For training (shuffle=True) use block-shuffled IterableDataset to
+        # keep mmap access sequential within blocks — on Windows the
+        # alternative (map-style + RandomSampler) lets the 83 GB shard's
+        # page cache evict PyTorch working-set to the pagefile.
+        if shuffle:
+            block_size = int(os.environ.get("NEWIME_SHARD_BLOCK_SIZE", "1024"))
+            dataset = KanaKanjiShardIterable(
+                path,
+                block_size=block_size,
+                shuffle=True,
+                seed=seed,
+                expected_vocab_size=tokenizer.vocab_size,
+            )
+        else:
+            dataset = KanaKanjiShardDataset(
+                path, expected_vocab_size=tokenizer.vocab_size
+            )
         collator = CTCShardCollator(
             max_seq_len=max_seq_len,
             short_sample_max_chars=short_sample_max_chars,
@@ -852,10 +868,13 @@ def make_dataloader(
             max_context=max_context,
             short_sample_max_chars=short_sample_max_chars,
         )
+    # IterableDataset does block-shuffling itself; DataLoader.shuffle must be
+    # False for iterable datasets (PyTorch rejects shuffle=True otherwise).
+    is_iterable = isinstance(dataset, IterableDataset)
     loader_kwargs = dict(
         dataset=dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=False if is_iterable else shuffle,
         collate_fn=collator,
         num_workers=num_workers,
         pin_memory=pin_memory,
@@ -1011,8 +1030,8 @@ def train_local(args: argparse.Namespace) -> None:
 
     if getattr(args, "compile", False) and device.type == "cuda":
         try:
-            model = torch.compile(model, mode="reduce-overhead")  # type: ignore[assignment]
-            print("[train] torch.compile enabled (mode=reduce-overhead)", flush=True)
+            model = torch.compile(model, mode="default")  # type: ignore[assignment]
+            print("[train] torch.compile enabled (mode=default)", flush=True)
         except Exception as e:  # pragma: no cover - best-effort
             print(f"[train] torch.compile failed ({e}); running eager", flush=True)
     # LR schedule: warmup then optional decay. `flat` (default, legacy) holds
@@ -1199,6 +1218,8 @@ def train_local(args: argparse.Namespace) -> None:
     def run_microbatch(batch, batch_idx: int, epoch_idx: int) -> None:
         nonlocal step, last_log, kd_stats, refine_stats, best_metric
 
+        if not model.training:
+            model.train()
         contexts = batch.get("_contexts", [])
         readings = batch.get("_readings", [])
         batch = move_batch_to_device(batch, device)
@@ -1709,6 +1730,9 @@ def train_local(args: argparse.Namespace) -> None:
         for epoch in range(start_epoch, args.epochs):
             model.train()
             optimizer.zero_grad(set_to_none=True)
+            ds = getattr(train_loader, "dataset", None)
+            if ds is not None and hasattr(ds, "set_epoch"):
+                ds.set_epoch(epoch)
 
             for batch_idx, batch in enumerate(train_loader):
                 if args.max_steps and step >= args.max_steps:

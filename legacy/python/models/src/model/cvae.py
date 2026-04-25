@@ -31,6 +31,7 @@ class PosteriorEncoder(nn.Module):
         self.to_mean = nn.Linear(gru_hidden_size * 2, latent_size)
         self.to_logvar = nn.Linear(gru_hidden_size * 2, latent_size)
 
+    @torch._dynamo.disable
     def forward(
         self,
         target_embeddings: torch.Tensor,
@@ -54,7 +55,7 @@ class LabelPriorEncoder(nn.Module):
         self,
         num_writer_labels: int = 2048,
         num_domain_labels: int = 64,
-        num_source_labels: int = 16,
+        num_source_labels: int = 64,
         label_hidden_size: int = 128,
         latent_size: int = 64,
     ) -> None:
