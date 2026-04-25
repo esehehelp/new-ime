@@ -15,6 +15,7 @@ PORT="${PORT:?Set PORT=<ssh port>}"
 KEY="${KEY:-$HOME/.ssh/id_ed25519}"
 USER="${USER:-root}"
 REMOTE="${REMOTE:-/workspace/new-ime}"
+BRANCH="${BRANCH:-dev}"
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -i "$KEY" -p "$PORT")
 SCP_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -i "$KEY" -P "$PORT" -q)
@@ -26,9 +27,9 @@ ssh "${SSH_OPTS[@]}" "$USER@$HOST" "
     mkdir -p $REMOTE
     cd $REMOTE
     if [ ! -d .git ]; then
-        git clone -b experimental https://github.com/esehehelp/new-ime.git .
+        git clone -b $BRANCH https://github.com/esehehelp/new-ime.git .
     else
-        git fetch origin experimental && git checkout experimental && git pull --ff-only
+        git fetch origin $BRANCH && git checkout $BRANCH && git pull --ff-only
     fi
     mkdir -p transfer/_split datasets/mixes datasets/tokenizers datasets/eval/general models/checkpoints/ctc-nat-41m-maskctc-student-wp
 " 2>&1 | tail -20
