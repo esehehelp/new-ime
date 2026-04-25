@@ -1,0 +1,21 @@
+[package]
+name = "data-pool-filter"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-pool-filter"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+regex = "1"
+once_cell = "1"
+zstd.workspace = true
+flate2.workspace = true
+xz2.workspace = true
+data-core = { path = "../data-core" }

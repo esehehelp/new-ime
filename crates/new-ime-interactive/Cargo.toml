@@ -1,0 +1,9 @@
+[package]
+name = "new-ime-interactive"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+libloading.workspace = true
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }

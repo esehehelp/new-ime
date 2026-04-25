@@ -1,9 +1,0 @@
-[package]
-name = "kkc-tokenizer"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true

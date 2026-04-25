@@ -97,3 +97,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Large transfer bundles (local only)
+/transfer/

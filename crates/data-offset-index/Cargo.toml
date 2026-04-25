@@ -1,0 +1,12 @@
+[package]
+name = "data-offset-index"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-offset-index"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+anyhow.workspace = true
