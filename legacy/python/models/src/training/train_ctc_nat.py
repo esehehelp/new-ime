@@ -992,6 +992,17 @@ def build_kd(
 
 
 def train_local(args: argparse.Namespace) -> None:
+    # Kill switch sentinel. `touch <output>/STOP` from any shell asks the
+    # train loop to save and exit cleanly via the existing KeyboardInterrupt
+    # path. Robust to native-Windows python.exe that cygwin `kill` cannot
+    # reach.
+    _stop_path = os.path.join(args.output, "STOP")
+    if os.path.exists(_stop_path):
+        try:
+            os.remove(_stop_path)
+        except OSError:
+            pass
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_workers = resolve_num_workers(args.num_workers, device)
     pin_memory = device.type == "cuda"
@@ -1217,6 +1228,19 @@ def train_local(args: argparse.Namespace) -> None:
 
     def run_microbatch(batch, batch_idx: int, epoch_idx: int) -> None:
         nonlocal step, last_log, kd_stats, refine_stats, best_metric
+
+        # In-process kill switch: a sibling process can `touch
+        # <output>/STOP` to request a clean shutdown. We piggyback on the
+        # existing KeyboardInterrupt handler so the run still saves an
+        # `interrupted_step_<N>.pt` and the optimizer state.
+        if os.path.exists(_stop_path):
+            print(f"[stop] STOP file detected at {_stop_path}, raising "
+                  f"KeyboardInterrupt", flush=True)
+            try:
+                os.remove(_stop_path)
+            except OSError:
+                pass
+            raise KeyboardInterrupt("STOP file detected")
 
         if not model.training:
             model.train()
@@ -2081,6 +2105,17 @@ def main() -> None:
     args = parser.parse_args()
     if args.small_vocab_max_kanji > 0:
         args.max_kanji = args.small_vocab_max_kanji
+
+    # Kill switch: write our (Windows-native) PID so a sibling shell can
+    # `kill -9 $(cat <output>/train.pid)` even though uv-spawned python.exe
+    # is invisible to cygwin /proc. Cleaned up on normal exit.
+    if args.output:
+        os.makedirs(args.output, exist_ok=True)
+        _pid_path = os.path.join(args.output, "train.pid")
+        with open(_pid_path, "w", encoding="utf-8") as _f:
+            _f.write(str(os.getpid()))
+        import atexit
+        atexit.register(lambda p=_pid_path: os.path.exists(p) and os.remove(p))
 
     tokenizer = build_tokenizer(args)
     model = build_model(args.preset, vocab_size=tokenizer.vocab_size, use_cvae=args.use_cvae, max_positions=args.max_seq_len)
