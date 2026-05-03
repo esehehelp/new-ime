@@ -13,6 +13,7 @@ name = "suiko-v1-small-kenlm"
 out_dir = "results/bench/suiko-v1-small-kenlm"
 
 [model]
+type = "ctc-nat"
 checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
 tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
 preset = "phase3_30m"
