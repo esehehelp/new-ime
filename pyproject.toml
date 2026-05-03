@@ -9,6 +9,7 @@ dependencies = [
     "tokenizers>=0.19",
     "numpy>=1.26",
     "tqdm>=4.66",
+    "jaconv>=0.3",
     "tomli>=2.0;python_version<'3.11'",
 ]
 
