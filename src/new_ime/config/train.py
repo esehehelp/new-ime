@@ -22,7 +22,8 @@ class RunSection(_Strict):
 
 
 class ModelSection(_Strict):
-    preset: Literal["ctc-nat-30m", "ctc-nat-41m", "ctc-nat-90m"]
+    # Preset names match the legacy phase3_* labels stored in checkpoints.
+    preset: Literal["phase3_20m", "phase3_30m", "phase3_90m"]
     max_seq_len: int = 128
     max_context: int = 32
 

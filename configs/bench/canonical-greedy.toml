@@ -12,7 +12,7 @@ out_dir = "results/bench/suiko-v1-small-greedy"
 [model]
 checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
 tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
-preset = "ctc-nat-41m"
+preset = "phase3_30m"
 
 [decode]
 mode = "greedy"

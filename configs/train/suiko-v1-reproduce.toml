@@ -10,7 +10,7 @@ seed = 52
 out_dir = "checkpoints/suiko-v1-reproduce"
 
 [model]
-preset = "ctc-nat-41m"
+preset = "phase3_30m"
 max_seq_len = 128
 max_context = 32
 

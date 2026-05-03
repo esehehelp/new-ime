@@ -19,7 +19,10 @@ class RunSection(_Strict):
 class ModelSection(_Strict):
     checkpoint: Path
     tokenizer: Path
-    preset: Literal["ctc-nat-30m", "ctc-nat-41m", "ctc-nat-90m"]
+    # Preset names match the value stored in the checkpoint's `preset`
+    # field. phase3_30m (= ~46M with refine head, marketed as 41M) is
+    # what Suiko-v1-small uses.
+    preset: Literal["phase3_20m", "phase3_30m", "phase3_90m"]
 
 
 class DecodeSection(_Strict):
