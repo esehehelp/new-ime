@@ -1,0 +1,28 @@
+# Canonical beam-5 bench for Suiko-v1-small.
+# Same checkpoint as canonical-greedy.toml, different decode mode.
+# Filter via:
+#   ime-bench -m suiko-v1-small-beam5
+# or to compare both:
+#   ime-bench -m suiko-v1-small-greedy suiko-v1-small-beam5
+
+[run]
+name = "suiko-v1-small-beam5"
+out_dir = "results/bench/suiko-v1-small-beam5"
+
+[model]
+checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
+tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
+preset = "ctc-nat-41m"
+
+[decode]
+mode = "beam"
+num_beams = 5
+num_return = 5
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"

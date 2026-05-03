@@ -16,10 +16,25 @@ from new_ime.config.bench import BenchConfig
 from new_ime.eval.runner import run_bench_suite
 
 
-def run(cfg: BenchConfig, config_path: Path, verbose: bool = False) -> int:
+def run(
+    cfg: BenchConfig,
+    config_path: Path,
+    verbose: bool = False,
+    test_filter: set[str] | None = None,
+) -> int:
     # Backend factory is imported lazily so loaders/metrics testing does
     # not pull torch into process memory.
     from new_ime.eval.backend import build_backend
+
+    benches = {k: Path(v) for k, v in cfg.benches.items()}
+    if test_filter is not None:
+        benches = {k: v for k, v in benches.items() if k in test_filter}
+        if not benches:
+            print(
+                f"[bench] {cfg.run.name}: no benches match -t filter, skipping",
+                file=__import__("sys").stderr,
+            )
+            return 0
 
     backend = build_backend(cfg)
     out_dir = cfg.run.out_dir
@@ -31,12 +46,15 @@ def run(cfg: BenchConfig, config_path: Path, verbose: bool = False) -> int:
 
     rows = run_bench_suite(
         backend=backend,
-        benches={k: Path(v) for k, v in cfg.benches.items()},
+        benches=benches,
         out_dir=out_dir,
         decode_mode=cfg.decode.mode,
         top_k=cfg.decode.top_k,
         verbose=verbose,
     )
 
-    print(f"\n[bench] wrote {out_dir / 'summary.json'} ({len(rows)} rows)")
+    print(
+        f"[bench] {cfg.run.name}: wrote {out_dir / 'summary.json'} ({len(rows)} rows)",
+        file=__import__("sys").stderr,
+    )
     return 0

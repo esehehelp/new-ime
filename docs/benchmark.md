@@ -51,16 +51,41 @@ ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
 backend = "cpu"
 ```
 
-実行:
+## 実行
 
 ```bash
-ime-bench configs/bench/canonical-greedy.toml
-# または
-python -m new_ime.cli.bench configs/bench/canonical-greedy.toml
+# configs/bench/*.toml を全部走らせる (default)
+ime-bench
+
+# 特定モデルのみ ([run] name でフィルタ、複数指定可)
+ime-bench -m suiko-v1-small-greedy
+ime-bench -m suiko-v1-small-greedy ctc-nat-30m-greedy
+
+# 特定テストのみ ([benches] キーでフィルタ、複数指定可)
+ime-bench -t probe_v3
+ime-bench -t probe_v3 ajimee_jwtd
+
+# 組合せ
+ime-bench -m suiko-v1-small-greedy -t probe_v3
 
 # 詳細 log 付き (全 LLM 出力を残し検証可能にする)
-ime-bench -v configs/bench/canonical-greedy.toml
+ime-bench -v -m suiko-v1-small-greedy
+
+# config dir を上書き
+ime-bench -c path/to/other-bench-configs/
+
+# 全部
+python -m new_ime.cli.bench [-v] [-m M ...] [-t T ...] [-c DIR]
 ```
+
+CLI 引数は以下のみ (実験定義は TOML が真):
+
+| flag | 役割 |
+|---|---|
+| `-c / --config-dir DIR` | bench TOML の置き場 (default `configs/bench/`) |
+| `-m / --models NAME ...` | `[run] name` whitelist |
+| `-t / --tests NAME ...` | `[benches]` キー whitelist |
+| `-v / --verbose` | 全候補 NDJSON log を有効化 |
 
 `-v` を付けると、各 bench につき `<out_dir>/<bench>__<mode>.full.jsonl`
 が追加で書かれる。1 行 1 item の NDJSON で、backend が返した全候補
