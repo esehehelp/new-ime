@@ -1,94 +1,46 @@
 # new-ime
 
-Rust-only 方針で再編した実験用ブランチです。active tree には Cargo
-workspace の crates、Rust 向け設定、データ置き場、ドキュメント、shell
-script だけを残し、Python / C++ / 過去資料は `legacy/` に隔離しています。
+mozc 置き換えを目標にした Japanese kana → kanji IME の研究プロトタイプ。
+比較対象は `zenz-v2.5-small` (~91M) phrase-level、出口は
+`crates/new-ime-interactive` の CLI。
 
-## アクティブスコープ
+## 現状
 
-- `crates/*` だけを active なコード配置先とします。
-- package prefix は `rust-*`、`data-*`、`new-ime-*` の 3 系統に固定します。
-- IME crates は workspace に残しますが、この pass で保証するのは構造整理と
-  buildability までで、機能完成は対象外です。
-- benchmark の過去結果は active docs に持ち込まず、benchmark contract のみを
-  現行文書として扱います。
+- 訓練済みベースライン: **Suiko-v1-small** (CTC-NAT 41M, MaskCTC refine,
+  step 100k) — `checkpoints/suiko-v1-small/`
+- それ以外の v1.x lineage は退行のため破棄済 (`archive/pre-v2` 参照)
+- v2 は本ブランチで再構成中。LLM 訓練・bench は **TOML 駆動**で書き直す
 
 ## レイアウト
 
-```text
+```
 new-ime/
-├── Cargo.toml
-├── Cargo.lock
-├── README.md
-├── configs/
-├── crates/
-│   ├── rust-tokenizer/
-│   ├── rust-data/
-│   ├── rust-model/
-│   ├── rust-train/
-│   ├── rust-bench/
-│   ├── rust-build-vocab/
-│   ├── rust-audit-tokenizer/
-│   ├── rust-postprocess/
-│   ├── data-core/
-│   ├── data-mix/
-│   ├── data-offset-index/
-│   ├── data-audit/
-│   ├── data-bench-onnx/
-│   ├── data-extract-domain/
-│   ├── data-extract-short/
-│   ├── data-process-zenz/
-│   ├── data-process-whitepaper/
-│   ├── data-synth-homophone/
-│   ├── data-synth-name/
-│   ├── data-synth-numeric-units/
-│   ├── data-chunk-generator/
-│   ├── new-ime-engine-core/
-│   ├── new-ime-tsf/
-│   └── new-ime-interactive/
-├── datasets/
-│   ├── raw/
-│   ├── corpus/
-│   ├── mixes/
-│   ├── eval/
-│   ├── tokenizers/
-│   └── audits/
-├── docs/
-│   ├── vision.md
-│   ├── repo_layout.md
-│   ├── development.md
-│   └── benchmark_comparison.md
-├── scripts/
-│   ├── check-hygiene.sh
-│   └── check-docs.sh
-└── legacy/
-    ├── docs/
-    ├── python/
-    └── tools/
+├── crates/         Rust workspace (data pipeline, tokenizer, IME, bench)
+├── src/            Python LLM stack (train, eval, model) ※ v2 で構築
+├── configs/        実験 TOML (train / bench / data) ※ v2 で構築
+├── datasets/       corpus / mixes / eval / tokenizers
+├── checkpoints/    学習済モデル (gitignored)
+├── assets/         dicts (mozc) / kenlm 言語モデル
+├── references/     外部 repo の clone (gitignored, 参照のみ)
+├── results/        bench 結果 (一部 tracked)
+├── scripts/        補助 shell / data QA
+└── docs/
+    └── benchmark.md   ← 仕様の真は **コード**。文書は bench protocol だけ
 ```
 
-## クイックスタート
+## 契約
 
+- **設定は TOML、CLI 引数は非推奨**: `<tool> <config.toml>` の 1 引数のみ
+- **実験 = config 1 ファイル**: ファイル名 = 実験名 = 出力ディレクトリ名
+- **再現性**: ckpt と並べて使用 TOML を保存。比較は TOML diff
+- **ドキュメントは benchmark protocol のみ**。それ以外はコードを読む
+
+## 走らせ方
+
+ベンチ:
 ```bash
-cargo metadata --format-version 1 --no-deps
-cargo check --workspace
-cargo run -p rust-train -- --help
-cargo run -p rust-bench -- --help
-cargo run -p new-ime-interactive -- --help
+cargo build -p rust-bench --release --features native-tch
+# (v2 の TOML 駆動 bench は src/eval/ に実装予定)
 ```
 
-Windows 向け TSF の検証は別 target の check として扱います。
-
-```bash
-cargo check -p new-ime-tsf --target x86_64-pc-windows-msvc
-```
-
-## ルール
-
-- Rust code は `crates/` 配下のみに置きます。
-- `datasets/` はデータ置き場専用にします。
-- `scripts/` は shell script のみを置きます。
-- 廃止した Python / C++ / 過去 workflow は `legacy/` に退避します。
-
-現行ポリシーは `docs/vision.md`、`docs/repo_layout.md`、
-`docs/development.md` を参照してください。
+詳細仕様は [`docs/benchmark.md`](docs/benchmark.md) を参照。

@@ -21,8 +21,8 @@ thiserror = "1"
 memmap2 = "0.9"
 rayon = "1"
 rand = "0.8"
-# Optional CUDA backend. Consumers opt in via the `cuda` feature of
-# `rust-train`.
+# Optional libtorch binding. Used by `rust-bench` under the `native-tch`
+# feature for loading Python-pickled checkpoints.
 tch = { version = "0.18", default-features = false }
 safetensors = "0.4"
 

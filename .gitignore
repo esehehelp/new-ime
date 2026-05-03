@@ -22,12 +22,6 @@ venv/
 /build_test/
 cmake-build-*/
 compile_commands.json
-engine/win32/*.obj
-engine/win32/*.exe
-engine/win32/*.dll
-engine/win32/*.exp
-engine/win32/*.lib
-engine/win32/*.pdb
 
 # Local Claude state.
 .claude/scheduled_tasks.lock
@@ -43,12 +37,9 @@ target/
 *.pth
 *.safetensors
 /checkpoints/
+/assets/
 /wandb/
 /parity-fixtures/
-/models/checkpoints/
-/models/dicts/
-/models/kenlm/
-/models/onnx/
 
 # Local datasets and corpora.
 /datasets/audits/
@@ -84,11 +75,7 @@ target/
 *.bz2
 *.gz
 *.zip
-/tools/onnxruntime-win-x64-*/
-/engine/server/third_party/kenlm/
-/tools/mozc_import/
-/tools/merge-ut-dictionaries/
-/tools/mozc_ut_import/
+/tools/
 
 # OS and editor files.
 .DS_Store
