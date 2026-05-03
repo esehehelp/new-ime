@@ -1,0 +1,39 @@
+# Suiko-v1-small + beam5 + KenLM MoE (mixture of domain LMs).
+# Canonical decode condition (num_beams=5, num_return=5).
+#
+# Past benchmark_comparison.md anchor:
+#   probe_v3:    EM1=0.672 EM5=0.784 CharAcc=0.949 p50=22ms (n=348)
+#   ajimee_jwtd: EM1=0.670 EM5=0.820 CharAcc=0.959 p50=28ms (n=200)
+#
+# Requires kenlm Python binding -> WSL only.
+
+[run]
+name = "suiko-v1-small-kenlm-moe"
+out_dir = "results/bench/suiko-v1-small-kenlm-moe"
+
+[model]
+checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
+tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
+preset = "phase3_30m"
+
+[decode]
+mode = "beam"
+num_beams = 5
+num_return = 5
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"
+
+[lm]
+mode = "moe"
+alpha = 0.2
+beta = 0.6
+[lm.paths_by_domain]
+general = "assets/kenlm/kenlm_general_train_4gram_probing.bin"
+tech    = "assets/kenlm/kenlm_tech_4gram.bin"
+entity  = "assets/kenlm/kenlm_entity_4gram.bin"
