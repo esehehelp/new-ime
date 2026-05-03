@@ -1,0 +1,26 @@
+# jinen-v1-small (110M)。canonical 比較対象。
+# anchor (benchmark_comparison.md 2026-04-22):
+#   probe_v3:    EM1=0.672 EM5=0.776 CharAcc=0.944 p50=278ms (n=348)
+#   ajimee_jwtd: EM1=0.655 EM5=0.835 CharAcc=0.952 p50=309ms (n=200)
+# path は HF Hub ID。初回は download される。
+
+[run]
+name = "jinen-v1-small"
+out_dir = "results/bench/jinen-v1-small"
+
+[model]
+type = "jinen-v1"
+path = "togatogah/jinen-v1-small"
+
+[decode]
+mode = "beam"
+num_beams = 5
+num_return = 5
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"

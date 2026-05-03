@@ -1,0 +1,25 @@
+# zenz-v2.5-medium (310M, GPT2)。canonical 比較対象 (最大、最高精度)。
+# anchor (benchmark_comparison.md 2026-04-22):
+#   probe_v3:    EM1=0.747 EM5=0.876 CharAcc=0.966 p50=1173ms (n=348)
+#   ajimee_jwtd: EM1=0.875 EM5=0.970 CharAcc=0.982 p50=1361ms (n=200)
+
+[run]
+name = "zenz-v2.5-medium"
+out_dir = "results/bench/zenz-v2.5-medium"
+
+[model]
+type = "zenz-v2.5"
+path = "references/zenz-v2.5-medium"
+
+[decode]
+mode = "beam"
+num_beams = 5
+num_return = 5
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"

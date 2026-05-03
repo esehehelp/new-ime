@@ -1,10 +1,17 @@
-"""Benchmark config schema. See `docs/benchmark.md` for the protocol."""
+"""Benchmark の TOML schema。protocol は docs/benchmark.md。
+
+Backend 種別は `[model] type` で分岐:
+    type = "ctc-nat"   : Suiko 系 (ckpt + tokenizer + preset)
+    type = "zenz-v2.5" : zenz GPT2 ファミリ (HF directory or Hub ID)
+    type = "zenz-v3.1" : 同上 (異なる weight、backend 同じ)
+    type = "jinen-v1"  : jinen Causal LM (HF AutoModel)
+"""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Literal, Optional
+from typing import Annotated, Dict, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _Strict(BaseModel):
@@ -16,13 +23,33 @@ class RunSection(_Strict):
     out_dir: Path
 
 
-class ModelSection(_Strict):
+class CtcNatModelSection(_Strict):
+    """CTC-NAT (Suiko 系) モデル設定。preset は ckpt の preset field と合わせる。"""
+
+    type: Literal["ctc-nat"] = "ctc-nat"
     checkpoint: Path
     tokenizer: Path
-    # Preset names match the value stored in the checkpoint's `preset`
-    # field. phase3_30m (= ~46M with refine head, marketed as 41M) is
-    # what Suiko-v1-small uses.
     preset: Literal["phase3_20m", "phase3_30m", "phase3_90m"]
+
+
+class HfModelSection(_Strict):
+    """HuggingFace transformers backend (zenz / jinen)。
+
+    `path` はローカル dir か HF Hub ID (例: "togatogah/jinen-v1-xsmall")。
+    transformers の `from_pretrained` がそのまま解決する。
+    """
+
+    type: Literal["zenz-v2.5", "zenz-v3.1", "jinen-v1"]
+    path: str
+    max_new_tokens: int = 80
+    max_context_chars: int = 40
+
+
+# 識別 field 'type' で discriminated union。`type` 省略時は 'ctc-nat' に解決。
+ModelSection = Annotated[
+    Union[CtcNatModelSection, HfModelSection],
+    Field(discriminator="type"),
+]
 
 
 class DecodeSection(_Strict):
@@ -37,13 +64,12 @@ class DeviceSection(_Strict):
 
 
 class LmSection(_Strict):
-    """KenLM shallow fusion (single LM or domain MoE).
+    """KenLM shallow fusion (single LM or MoE)。CTC-NAT backend のみ有効。
 
-    Two modes (mutually exclusive):
-        mode="single"  + path                       single 4-gram KenLM
-        mode="moe"     + paths_by_domain (>=2)      domain mixture estimator
+    mode="single" + path                 : 単一 4-gram KenLM
+    mode="moe"    + paths_by_domain (>=2): domain 別混合 (general / tech / entity 等)
 
-    `alpha`/`beta` are the standard CTC-LM fusion weights:
+    α/β は CTC-LM 融合の標準重み:
         score = ctc_logp + alpha * lm_logp + beta * len(prefix)
     """
 
@@ -52,22 +78,22 @@ class LmSection(_Strict):
     beta: float
     path: Optional[Path] = None
     paths_by_domain: Optional[Dict[str, Path]] = None
-    gate_min_conf: float = 0.0  # negative → conditional fusion
+    gate_min_conf: float = 0.0  # 負値で条件付き融合
 
     @model_validator(mode="after")
     def _check_mode(self) -> "LmSection":
         if self.mode == "single":
             if self.path is None:
-                raise ValueError("[lm] mode='single' requires `path`")
+                raise ValueError("[lm] mode='single' は path 必須")
             if self.paths_by_domain:
-                raise ValueError("[lm] mode='single' must not set paths_by_domain")
+                raise ValueError("[lm] mode='single' は paths_by_domain 不可")
         else:  # moe
             if not self.paths_by_domain or len(self.paths_by_domain) < 2:
                 raise ValueError(
-                    "[lm] mode='moe' requires `paths_by_domain` with >=2 entries"
+                    "[lm] mode='moe' は paths_by_domain (>=2 entries) が必須"
                 )
             if self.path is not None:
-                raise ValueError("[lm] mode='moe' must not set `path`")
+                raise ValueError("[lm] mode='moe' は path 指定不可")
         return self
 
 
@@ -75,6 +101,6 @@ class BenchConfig(_Strict):
     run: RunSection
     model: ModelSection
     decode: DecodeSection
-    benches: Dict[str, Path]  # bench_name -> dataset path
+    benches: Dict[str, Path]  # bench name -> dataset path
     device: DeviceSection = DeviceSection()
     lm: Optional[LmSection] = None
