@@ -1,0 +1,28 @@
+# Canonical greedy bench for Suiko-v1-small (the surviving baseline).
+# Anchor numbers (from archive/pre-v2 results/bench_v1_vs_v1_2/summary.json):
+#   probe_v3:    EM1=0.6006  CharAcc=0.944  p50=16.4ms (n=348)
+#   ajimee_jwtd: EM1=0.58    CharAcc=0.9509 p50=18.7ms (n=200)
+#
+# Per docs/benchmark.md: greedy is canonical; beam5 is a comparison mode.
+
+[run]
+name = "suiko-v1-small-greedy"
+out_dir = "results/bench/suiko-v1-small-greedy"
+
+[model]
+checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
+tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
+preset = "ctc-nat-41m"
+
+[decode]
+mode = "greedy"
+num_beams = 1
+num_return = 1
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"
