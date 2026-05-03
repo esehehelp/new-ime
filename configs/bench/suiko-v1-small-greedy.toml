@@ -1,9 +1,12 @@
-# Canonical greedy bench for Suiko-v1-small (the surviving baseline).
-# Anchor numbers (from archive/pre-v2 results/bench_v1_vs_v1_2/summary.json):
-#   probe_v3:    EM1=0.6006  CharAcc=0.944  p50=16.4ms (n=348)
-#   ajimee_jwtd: EM1=0.58    CharAcc=0.9509 p50=18.7ms (n=200)
+# Suiko-v1-small + greedy decode (beam_width=1, num_return=1).
 #
-# Per docs/benchmark.md: greedy is canonical; beam5 is a comparison mode.
+# Past benchmark_comparison.md anchor (Suiko-v1-small greedy):
+#   probe_v3:    EM1=0.6006 EM5=0.6006 CharAcc=0.944  p50=16.4ms (n=348)
+#   ajimee_jwtd: EM1=0.5800 EM5=0.5800 CharAcc=0.9509 p50=18.7ms (n=200)
+#
+# Note: with greedy decode the model returns 1 candidate so EM5 == EM1
+# is degenerate. Meaningful EM5 requires the kenlm / kenlm-moe variants
+# (separate TOMLs, beam_width=5 + KenLM rescore).
 
 [run]
 name = "suiko-v1-small-greedy"
