@@ -4,13 +4,26 @@ version = "0.2.0"
 description = "Japanese kana-kanji IME research prototype (v2 restructure)"
 requires-python = ">=3.11"
 dependencies = [
-    "torch>=2.5",
-    "pydantic>=2.6",
-    "tokenizers>=0.19",
-    "numpy>=1.26",
+    # Latest stable torch wheel pinned to CUDA 12.6 build (cu126).
+    # The CUDA libs are bundled in the wheel; the host only needs an
+    # NVIDIA driver new enough for forward-compat (>= 525 covers cu126).
+    # On Linux this also runs as the WSL bench env (driver bridged
+    # from Windows). The `[tool.uv.sources]` block below points uv at
+    # the PyTorch CUDA index for both win32 and linux.
+    "torch>=2.11",
+    "pydantic>=2.10",
+    "tokenizers>=0.20",
+    "transformers>=4.46",
+    "numpy>=2.0",
     "tqdm>=4.66",
     "jaconv>=0.3",
-    "tomli>=2.0;python_version<'3.11'",
+    "huggingface-hub>=0.26",
+    # KenLM Python binding is built from source against system libstdc++
+    # (Linux only — Windows native build is broken in setuptools as of
+    # kenlm 0.3.0). Bench in WSL when KenLM fusion is needed.
+    "kenlm>=0.3 ; sys_platform == 'linux'",
+    # Python 3.10 fallback for tomllib; 3.11+ has it builtin.
+    "tomli>=2.0 ; python_version<'3.11'",
 ]
 
 [project.scripts]
@@ -26,3 +39,23 @@ packages = ["src/new_ime"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+# ------------------------------------------------------------
+# uv: PyTorch CUDA wheels live on a separate index. Use cu126 on
+# both Windows native and WSL Linux (CUDA 12.6 → driver >=525 OK,
+# the user's 591.86 covers it). CPU wheels would also work for
+# bench-only setups; switch the index to `pytorch-cpu` if running
+# on a host without an NVIDIA GPU.
+# ------------------------------------------------------------
+[tool.uv]
+# Override the default resolver behavior so torch picks the cu126
+# wheel from PyTorch's index (matching cuda runtime in the wheel),
+# not the CPU-only wheel that PyPI publishes under the same name.
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }

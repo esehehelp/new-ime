@@ -16,6 +16,8 @@ htmlcov/
 dist/
 venv/
 .venv/
+.venv-windows/
+.venv-linux/
 
 # Native build outputs.
 /build/

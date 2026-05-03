@@ -3,17 +3,20 @@
 # Each scenario's output is moved to results/test_scenarios/sN_*/ so
 # subsequent scenarios don't overwrite.
 #
-# -m target = suiko-v1-small-greedy (CTC, fast)
+# -m target = suiko-v1-small-greedy
 # -t target = probe_v3
 #
 # Compares the greedy outputs against archive/pre-v2 anchors at
 # results/bench_v1_vs_v1_2/Suiko-v1-small__greedy__*.json.
+#
+# Picks .venv-windows or .venv-linux automatically; canonical bench
+# environment is WSL (Linux) per project policy.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-PY=".venv/Scripts/python.exe"
-PYRUN="PYTHONPATH=src $PY -m new_ime.cli.bench"
+source "$(dirname "$0")/_uv_env.sh"
+echo "[env] UV_PROJECT_ENVIRONMENT=$UV_PROJECT_ENVIRONMENT"
 
 OUT="results/test_scenarios"
 rm -rf "$OUT"
@@ -27,7 +30,7 @@ run_scenario() {
     echo "===== [$(date +%T)] $label ====="
     echo "[cmd] ime-bench $*"
     rm -rf results/bench
-    PYTHONPATH=src "$PY" -m new_ime.cli.bench "$@"
+    PYTHONPATH=src uv run python -m new_ime.cli.bench "$@"
     if [[ -d results/bench ]]; then
         mv results/bench "$OUT/$out_subdir"
         echo "[done] -> $OUT/$out_subdir"
