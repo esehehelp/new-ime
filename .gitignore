@@ -63,20 +63,15 @@ target/
 /results/kenlm_moe_bench/
 /results/onnx_*/
 /results/probe_v*/
-/results/sweep_*/alpha*.json
-/results/sweep_*/report.md
-/results/sweep_*/summary.json
-!/results/sweep_20260418_170409/summary.json
-!/results/sweep_nodict/summary.json
-!/results/sweep_user_only/summary.json
+/results/sweep_*/
 /results/test_*.txt
-/results/corpus_v2_clean_sample/*.sample.txt
-/results/corpus_v2_sample/*.sample.txt
+/results/corpus_v2_*/
 
 # External data, archives, and vendored dependencies.
 *.bz2
 *.gz
 *.zip
+*.old
 /tools/
 
 # OS and editor files.
