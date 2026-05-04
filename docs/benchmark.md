@@ -9,6 +9,8 @@
 - metrics: EM1, EM5, CharAcc, latency p50/p95/mean (ms)
 - input: 片仮名は `jaconv.kata2hira` で hiragana に正規化
 
+主判断は `probe_v3`。`ajimee_jwtd` は n=200 と小さいため補助指標として見る。
+
 ## 比較対象
 
 | name | type | source |
@@ -16,6 +18,8 @@
 | `suiko-v1-small-greedy` | ctc-nat | `checkpoints/suiko-v1-small/checkpoint_step_100000.pt` (greedy) |
 | `suiko-v1-small-kenlm` | ctc-nat + KenLM single | 同 + `assets/kenlm/kenlm_general_train_4gram_probing.bin` (α=0.2 β=0.6) |
 | `suiko-v1-small-kenlm-moe` | ctc-nat + KenLM MoE | 同 + `general / tech / entity` 4-gram (α=0.2 β=0.6) |
+| `suiko-v1-small-kenlm-6gram-q8` | ctc-nat + KenLM single | 同 + `assets/kenlm/kenlm_general_6gram_q8.bin` (α=0.2 β=0.6) |
+| `suiko-v1-small-kenlm-6gram-q8-moe` | ctc-nat + KenLM MoE | 同 + general/tech 6-gram q8 + entity 4-gram (α=0.2 β=0.6) |
 | `zenz-v2.5-xsmall` | zenz-v2.5 | `references/zenz-v2.5-xsmall/` |
 | `zenz-v2.5-small` | zenz-v2.5 | `references/zenz-v2.5-small/` |
 | `zenz-v2.5-medium` | zenz-v2.5 | `references/zenz-v2.5-medium/` |
@@ -137,6 +141,30 @@ max_context_chars = 40
   "p50_ms": 9.3, "p95_ms": 18.0, "wall_s": 4.0}]
 ```
 
+## 現環境結果 (WSL CPU, torch 2.11.0+cpu, 2026-05-04)
+
+`probe_v3` を主指標にすると、現行 Suiko runtime の推奨は
+`suiko-v1-small-kenlm-6gram-q8-moe`。4-gram MoE 比で probe EM1 が
+0.6695 → 0.6782 に上がり、p50 も 15.1ms → 14.0ms。
+
+probe_v3:
+
+| config | EM1 | EM5 | CharAcc | p50 ms |
+|---|---:|---:|---:|---:|
+| suiko-v1-small-kenlm-6gram-q8-moe | 0.6782 | 0.7874 | 0.9495 | 14.0 |
+| suiko-v1-small-kenlm-moe | 0.6695 | 0.7845 | 0.9484 | 15.1 |
+| suiko-v1-small-kenlm-6gram-q8 | 0.6667 | 0.7874 | 0.9487 | 11.9 |
+| suiko-v1-small-kenlm | 0.6580 | 0.7759 | 0.9468 | 13.5 |
+
+ajimee_jwtd (補助, n=200):
+
+| config | EM1 | EM5 | CharAcc | p50 ms |
+|---|---:|---:|---:|---:|
+| suiko-v1-small-kenlm-6gram-q8-moe | 0.6800 | 0.8150 | 0.9563 | 17.7 |
+| suiko-v1-small-kenlm-moe | 0.6700 | 0.8200 | 0.9592 | 19.0 |
+| suiko-v1-small-kenlm-6gram-q8 | 0.6700 | 0.8100 | 0.9558 | 14.5 |
+| suiko-v1-small-kenlm | 0.6700 | 0.8300 | 0.9591 | 19.4 |
+
 ## アンカー (`legacy/docs/benchmark_comparison.md` 2026-04-22)
 
 probe_v3:
@@ -166,26 +194,3 @@ ajimee_jwtd:
 | jinen-v1-small | 0.655 | 0.835 | 0.952 | 309 |
 | suiko-v1-small-greedy | 0.580 | 0.580 | 0.951 | 10 |
 | jinen-v1-xsmall | 0.395 | 0.525 | 0.917 | 124 |
-
-## 現環境結果 (WSL CPU, torch 2.11.0+cpu, 2026-05-03)
-
-| config | bench | EM1 | ΔEM1 | EM5 | ΔEM5 | CharAcc | ΔCharAcc | p50 | Δp50 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| suiko-v1-small-greedy    | probe_v3    | 0.6006 | -0.0004 | 0.6006 | -0.0004 | 0.9440 | +0.0000 |   9.3 |    +0.3 |
-| suiko-v1-small-greedy    | ajimee_jwtd | 0.5800 | +0.0000 | 0.5800 | +0.0000 | 0.9509 | -0.0001 |  11.2 |    +1.2 |
-| suiko-v1-small-kenlm     | probe_v3    | 0.6580 | -0.0060 | 0.7759 | -0.0001 | 0.9468 | -0.0002 |  12.2 |    -4.8 |
-| suiko-v1-small-kenlm     | ajimee_jwtd | 0.6700 | +0.0000 | 0.8300 | +0.0000 | 0.9591 | +0.0001 |  14.3 |    -6.7 |
-| suiko-v1-small-kenlm-moe | probe_v3    | 0.6695 | -0.0025 | 0.7845 | +0.0005 | 0.9484 | -0.0006 |  13.9 |    -8.1 |
-| suiko-v1-small-kenlm-moe | ajimee_jwtd | 0.6700 | +0.0000 | 0.8200 | +0.0000 | 0.9592 | +0.0002 |  15.5 |   -12.5 |
-| zenz-v2.5-xsmall         | probe_v3    | 0.6954 | +0.0004 | 0.8132 | +0.0002 | 0.9527 | -0.0003 | 124.9 |    +6.9 |
-| zenz-v2.5-xsmall         | ajimee_jwtd | 0.6950 | +0.0000 | 0.8450 | +0.0000 | 0.9530 | +0.0000 | 133.1 |    -5.9 |
-| zenz-v2.5-small          | probe_v3    | 0.7126 | -0.0004 | 0.8477 | -0.0003 | 0.9585 | -0.0005 | 361.3 |   -14.7 |
-| zenz-v2.5-small          | ajimee_jwtd | 0.8400 | +0.0000 | 0.9550 | +0.0000 | 0.9767 | -0.0003 | 424.8 |    +6.8 |
-| zenz-v2.5-medium         | probe_v3    | 0.7471 | +0.0001 | 0.8764 | +0.0004 | 0.9655 | -0.0005 | 1123.9 |  -49.1 |
-| zenz-v2.5-medium         | ajimee_jwtd | 0.8750 | +0.0000 | 0.9700 | +0.0000 | 0.9819 | -0.0001 | 1205.1 | -155.9 |
-| zenz-v3.1-small          | probe_v3    | 0.7184 | +0.0004 | 0.8563 | +0.0003 | 0.9594 | +0.0004 | 378.5 |   -38.5 |
-| zenz-v3.1-small          | ajimee_jwtd | 0.8600 | +0.0000 | 0.9300 | +0.0000 | 0.9833 | +0.0003 | 433.5 |   -36.5 |
-| jinen-v1-xsmall          | probe_v3    | 0.6092 | +0.0002 | 0.7471 | +0.0001 | 0.9286 | -0.0004 |  81.8 |   -33.2 |
-| jinen-v1-xsmall          | ajimee_jwtd | 0.3950 | +0.0000 | 0.5250 | +0.0000 | 0.9172 | +0.0002 |  85.7 |   -38.3 |
-| jinen-v1-small           | probe_v3    | 0.6724 | +0.0004 | 0.7759 | -0.0001 | 0.9437 | -0.0003 | 216.2 |   -61.8 |
-| jinen-v1-small           | ajimee_jwtd | 0.6550 | +0.0000 | 0.8350 | +0.0000 | 0.9524 | +0.0004 | 246.9 |   -62.1 |
