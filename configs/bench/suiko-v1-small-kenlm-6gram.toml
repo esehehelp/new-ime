@@ -1,0 +1,34 @@
+# Suiko-v1-small + beam5 + single-LM KenLM 6-gram (probing).
+# Variant of suiko-v1-small-kenlm: KenLM order 4 -> 6, corpus refreshed
+# from datasets/corpus/short/combined.jsonl (20M lines, char-separated).
+#
+# Requires kenlm Python binding -> WSL only.
+
+[run]
+name = "suiko-v1-small-kenlm-6gram"
+out_dir = "results/bench/suiko-v1-small-kenlm-6gram"
+
+[model]
+type = "ctc-nat"
+checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
+tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
+preset = "phase3_30m"
+
+[decode]
+mode = "beam"
+num_beams = 5
+num_return = 5
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"
+
+[lm]
+mode = "single"
+path = "assets/kenlm/kenlm_general_6gram.bin"
+alpha = 0.2
+beta = 0.6

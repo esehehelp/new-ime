@@ -1,8 +1,9 @@
 # new-ime
 
 mozc 置き換えを目標にした Japanese kana → kanji IME の研究プロトタイプ。
-比較対象は `zenz-v2.5-small` (~91M) phrase-level、出口は
-`crates/new-ime-interactive` の CLI。
+比較対象は `zenz-v2.5-small` (~91M) phrase-level、評価出口は
+`docs/benchmark.md` 仕様の TOML 駆動 bench、ランタイム動作確認は
+`crates/new-ime-tsf` (TSF DLL) を `regsvr32` 登録。
 
 ## 現状
 
