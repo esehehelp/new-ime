@@ -34,9 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[train] preset  = {cfg.model.preset}")
     print(f"[train] out_dir = {cfg.run.out_dir}")
 
-    # NOTE: training loop not yet ported. Implementation lands in
-    # new_ime.train.run(cfg). For now we validate + echo and exit.
-    from new_ime.train import run as train_run
+    from new_ime.training.run import run as train_run
 
     return train_run(cfg, config_path)
 

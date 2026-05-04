@@ -154,6 +154,46 @@ class CTCNAT(nn.Module):
             if use_cvae
             else None
         )
+        # Optional preset tag set by from_preset(); used by checkpoint_metadata.
+        self._preset_name: str | None = None
+        self._max_seq_len: int = max_positions
+
+    def checkpoint_metadata(self) -> dict:
+        """Arch-specific metadata embedded in checkpoints by training/checkpoint.py.
+
+        Loop / checkpoint.save() are arch-agnostic and merge this dict into the
+        saved blob. Future AR/DAT model classes implement the same method.
+        """
+        return {
+            "arch_tag": "ctc-nat",
+            "preset": self._preset_name,
+            "vocab_size": self.output_vocab_size,
+            "use_cvae": self.cvae is not None,
+            "max_seq_len": self._max_seq_len,
+        }
+
+    def compute_aux_losses(
+        self,
+        batch: dict,
+        outputs: dict,
+    ) -> dict[str, torch.Tensor]:
+        """Arch-internal aux losses returned by the model itself.
+
+        CTC-NAT contributes the CVAE KL term when CVAE is enabled. Mask-CTC
+        refinement loss is *not* computed here — it depends on training-time
+        config (mask ratio, weight warmup, refine source) which is owned by
+        `training/loss/refine.py:build_refine_loss_fn` and plumbed through
+        the loop's aux_loss_fns list.
+        """
+        aux: dict[str, torch.Tensor] = {}
+        if self.cvae is not None and "kl" in outputs:
+            weight = float(getattr(self, "_cvae_kl_weight", 0.1))
+            aux["cvae_kl"] = weight * outputs["kl"]
+        return aux
+
+    def set_cvae_kl_weight(self, weight: float) -> None:
+        """Set the multiplier applied to the CVAE KL term in compute_aux_losses."""
+        self._cvae_kl_weight = float(weight)
 
     @staticmethod
     def collapse_predictions(
@@ -418,7 +458,7 @@ class CTCNAT(nn.Module):
             max_positions=pos,
             dropout=dropout,
         )
-        return cls(
+        model = cls(
             encoder=encoder,
             output_vocab_size=vocab_size,
             decoder_layers=preset.decoder_layers,
@@ -429,6 +469,9 @@ class CTCNAT(nn.Module):
             max_positions=pos,
             use_cvae=use_cvae,
         )
+        model._preset_name = preset_name
+        model._max_seq_len = pos
+        return model
 
     def _build_cvae_output(
         self,

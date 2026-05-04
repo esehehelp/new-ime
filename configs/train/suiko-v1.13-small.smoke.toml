@@ -1,0 +1,50 @@
+# suiko-v1.13-small の CPU smoke (char-jis-24k tokenizer + smoke shard)。
+# 新 vocab 24224 で wiring が通ること、loss が出ることを確認するだけ。
+# 本走は GPU host で suiko-v1.13-small.toml 経由。
+
+[run]
+name = "suiko-v1.13-small.smoke"
+seed = 52
+out_dir = "checkpoints/suiko-v1.13-small.smoke"
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 64
+max_context = 16
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 32
+
+[optim]
+lr = 4e-4
+warmup_steps = 5
+schedule = "constant"
+lr_min_ratio = 1.0
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 8
+eval_batch_size = 8
+grad_accum = 1
+max_steps = 20
+fp16 = false
+bf16 = false
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 5
+eval_every = 10
+checkpoint_every = 20
+keep_last_k = 1
+print_samples = 0
