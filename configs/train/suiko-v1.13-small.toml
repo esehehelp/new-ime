@@ -2,15 +2,23 @@
 # v2 training loop 再実装後の最初の本走 target。
 # ハイパラは suiko-v1-reproduce.toml をベースに、v2 の追加項目
 # (refine_iterations / remask_loss_weight / stop_loss_weight 等) を
-# 明示。compile は v1.0 では no-op (config 残置)。
+# 明示。compile は torch.compile 経由で有効化する。
 #
 # 本走は GPU host (vast.ai 5090 等) を想定。local CPU では smoke 用
 # の suiko-v1.13-small.smoke.toml で動作確認のみ。
+# 中断再開する場合は下の [resume] をコメント解除し、checkpoint を
+# 直近の checkpoint_step_*.pt に向ける。max_steps は「最終到達 step」。
 
 [run]
 name = "suiko-v1.13-small"
 seed = 52
 out_dir = "checkpoints/suiko-v1.13-small"
+
+# [resume]
+# checkpoint = "checkpoints/suiko-v1.13-small/checkpoint_step_10000.pt"
+# reset_optimizer = false
+# reset_scheduler = false
+# reset_best_metric = false
 
 [model]
 preset = "phase3_30m"
@@ -39,9 +47,9 @@ batch_size = 64
 eval_batch_size = 64
 grad_accum = 2
 max_steps = 100000
-fp16 = true
-bf16 = false
-compile = false
+fp16 = false
+bf16 = true
+compile = true
 num_workers = 0
 warmup_short_sample_steps = 0
 short_sample_max_chars = 16

@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from new_ime.config.train import TrainConfig
 from new_ime.data.jsonl import KanaKanjiJsonlDataset
@@ -32,7 +32,12 @@ from new_ime.data.shards import (
 )
 from new_ime.data.tokenizer import SharedCharTokenizer
 from new_ime.model.ctc_nat import CTCNAT
-from new_ime.training.checkpoint import rolling_keep, save
+from new_ime.training.checkpoint import (
+    load,
+    rolling_keep,
+    save,
+    validate_resume_compatibility,
+)
 from new_ime.training.curriculum import apply_short_sample_warmup
 from new_ime.training.evaluate import evaluate_model, evaluate_probe_em1
 from new_ime.training.loop import StepRecord, run_loop
@@ -94,7 +99,42 @@ def _build_train_loader(
     train_path = Path(cfg.data.train)
     collator = CTCShardCollator(max_seq_len=cfg.model.max_seq_len)
     pin = torch.cuda.is_available()
+    if cfg.loop.tiny_overfit_samples > 0:
+        if train_path.suffix == ".kkc":
+            ds = KanaKanjiShardDataset(
+                train_path, expected_vocab_size=tokenizer.vocab_size
+            )
+        else:
+            ds = KanaKanjiJsonlDataset(
+                train_path,
+                tokenizer=tokenizer,
+                max_context_chars=cfg.model.max_context,
+            )
+        n = min(int(cfg.loop.tiny_overfit_samples), len(ds))
+        ds = Subset(ds, range(n))
+        return DataLoader(
+            ds,
+            batch_size=cfg.loop.batch_size,
+            shuffle=True,
+            num_workers=cfg.loop.num_workers,
+            collate_fn=collator,
+            pin_memory=pin,
+        )
     if train_path.suffix == ".kkc":
+        if cfg.data.max_train_samples > 0:
+            ds = KanaKanjiShardDataset(
+                train_path, expected_vocab_size=tokenizer.vocab_size
+            )
+            n = min(int(cfg.data.max_train_samples), len(ds))
+            ds = Subset(ds, range(n))
+            return DataLoader(
+                ds,
+                batch_size=cfg.loop.batch_size,
+                shuffle=True,
+                num_workers=cfg.loop.num_workers,
+                collate_fn=collator,
+                pin_memory=pin,
+            )
         ds = KanaKanjiShardIterable(
             train_path,
             block_size=1024,
@@ -114,6 +154,9 @@ def _build_train_loader(
         tokenizer=tokenizer,
         max_context_chars=cfg.model.max_context,
     )
+    if cfg.data.max_train_samples > 0:
+        n = min(int(cfg.data.max_train_samples), len(ds))
+        ds = Subset(ds, range(n))
     return DataLoader(
         ds,
         batch_size=cfg.loop.batch_size,
@@ -122,6 +165,69 @@ def _build_train_loader(
         collate_fn=collator,
         pin_memory=pin,
     )
+
+
+def _compile_model_if_requested(
+    model: torch.nn.Module,
+    cfg: TrainConfig,
+) -> torch.nn.Module:
+    if not cfg.loop.compile:
+        return model
+    if not hasattr(torch, "compile"):
+        print(
+            "[train] WARNING: torch.compile unavailable; running eager",
+            file=sys.stderr,
+        )
+        return model
+    try:
+        compiled = torch.compile(model)
+    except Exception as e:
+        print(
+            f"[train] WARNING: torch.compile failed at setup: {e}; running eager",
+            file=sys.stderr,
+        )
+        return model
+    print("[train] torch.compile enabled", file=sys.stderr)
+    return compiled
+
+
+def _print_eval_samples(
+    *,
+    model: torch.nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    tokenizer: SharedCharTokenizer,
+    limit: int,
+) -> None:
+    if limit <= 0 or not hasattr(model, "greedy_decode"):
+        return
+    was_training = model.training
+    model.eval()
+    printed = 0
+    try:
+        batch = next(iter(loader))
+    except StopIteration:
+        return
+    batch = {
+        k: (v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v)
+        for k, v in batch.items()
+    }
+    with torch.no_grad():
+        decoded = model.greedy_decode(batch["input_ids"], batch["attention_mask"])
+    for b, ids in enumerate(decoded):
+        if printed >= limit:
+            break
+        tlen = int(batch["target_lengths"][b].item())
+        ref_ids = batch["target_ids"][b, :tlen].tolist()
+        pred = tokenizer.decode(ids)
+        ref = tokenizer.decode(ref_ids)
+        print(
+            f"[sample] pred={pred!r} ref={ref!r}",
+            file=sys.stderr,
+        )
+        printed += 1
+    if was_training:
+        model.train()
 
 
 def _build_dev_loader(
@@ -158,12 +264,38 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
     device = _resolve_device(cfg)
     amp_dtype = _resolve_amp_dtype(cfg, device)
     tokenizer = SharedCharTokenizer.load(cfg.data.tokenizer)
-    model = _build_model(cfg, vocab_size=tokenizer.vocab_size).to(device)
-    if cfg.model.use_cvae and hasattr(model, "set_cvae_kl_weight"):
-        model.set_cvae_kl_weight(cfg.model.cvae_kl_weight)
+    raw_model = _build_model(cfg, vocab_size=tokenizer.vocab_size).to(device)
+    if cfg.model.use_cvae and hasattr(raw_model, "set_cvae_kl_weight"):
+        raw_model.set_cvae_kl_weight(cfg.model.cvae_kl_weight)
 
-    optimizer = build_optimizer(model, cfg.optim)
+    optimizer = build_optimizer(raw_model, cfg.optim)
     scheduler = build_scheduler(optimizer, cfg.optim, cfg.loop.max_steps)
+    start_step = 0
+    best_metric = float("-inf")
+
+    if cfg.resume is not None:
+        resume_path = Path(cfg.resume.checkpoint)
+        blob = load(
+            resume_path,
+            model=raw_model,
+            optimizer=None if cfg.resume.reset_optimizer else optimizer,
+            scheduler=None if cfg.resume.reset_scheduler else scheduler,
+            reset_scheduler=cfg.resume.reset_scheduler,
+            map_location=device,
+        )
+        validate_resume_compatibility(blob, raw_model)
+        start_step = int(blob.get("step", 0))
+        if not cfg.resume.reset_best_metric:
+            best_metric = float(blob.get("best_metric", best_metric))
+        print(
+            f"[train] resumed: checkpoint={resume_path} "
+            f"step={start_step} best_metric={best_metric:.4f} "
+            f"reset_optimizer={cfg.resume.reset_optimizer} "
+            f"reset_scheduler={cfg.resume.reset_scheduler}",
+            file=sys.stderr,
+        )
+
+    model = _compile_model_if_requested(raw_model, cfg)
 
     train_loader = _build_train_loader(cfg, tokenizer)
     dev_loader = _build_dev_loader(cfg, tokenizer)
@@ -191,13 +323,13 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
 
     # Memory estimate (and actual peak VRAM on CUDA).
     estimate = estimate_training_memory(
-        model,
+        raw_model,
         batch_size=cfg.loop.batch_size,
         seq_len=cfg.model.max_seq_len,
         bytes_per_param=2 if amp_dtype is not None else 4,
     )
     peak = measure_peak_vram(
-        model,
+        raw_model,
         batch_size=cfg.loop.batch_size,
         seq_len=cfg.model.max_seq_len,
         vocab_size=tokenizer.vocab_size,
@@ -225,9 +357,12 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         file=sys.stderr,
     )
 
-    best_metric = float("-inf")
     eval_max_batches = (
-        cfg.data.max_dev_samples // max(cfg.loop.eval_batch_size, 1)
+        max(
+            1,
+            (cfg.data.max_dev_samples + max(cfg.loop.eval_batch_size, 1) - 1)
+            // max(cfg.loop.eval_batch_size, 1),
+        )
         if cfg.data.max_dev_samples
         else 0
     )
@@ -280,6 +415,13 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
             f"blank={m['blank_fraction']:.3f} n={m['num_samples']}",
             file=sys.stderr,
         )
+        _print_eval_samples(
+            model=model,
+            loader=dev_loader,
+            device=device,
+            tokenizer=tokenizer,
+            limit=cfg.logging.print_samples,
+        )
         return m
 
     def _on_checkpoint(step: int, metrics: dict | None) -> None:
@@ -287,7 +429,7 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         ckpt_path = out_dir / f"checkpoint_step_{step}.pt"
         save(
             ckpt_path,
-            model=model,
+            model=raw_model,
             optimizer=optimizer,
             scheduler=scheduler,
             step=step,
@@ -302,7 +444,7 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
                 best_metric = cur
                 save(
                     out_dir / "best.pt",
-                    model=model,
+                    model=raw_model,
                     optimizer=optimizer,
                     scheduler=scheduler,
                     step=step,
@@ -327,6 +469,7 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         loader=train_loader,
         device=device,
         max_steps=cfg.loop.max_steps,
+        start_step=start_step,
         grad_accum=cfg.loop.grad_accum,
         grad_clip=cfg.optim.grad_clip,
         log_every=cfg.logging.log_every,

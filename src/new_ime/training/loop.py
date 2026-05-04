@@ -80,6 +80,7 @@ def run_loop(
     loader: Iterable[dict],
     device: torch.device,
     max_steps: int,
+    start_step: int = 0,
     grad_accum: int = 1,
     grad_clip: float = 1.0,
     log_every: int = 100,
@@ -93,7 +94,7 @@ def run_loop(
     on_log: Callable[[StepRecord], None] | None = None,
     on_step_start: Callable[[int], None] | None = None,
 ) -> LoopResult:
-    """Run up to `max_steps` optimizer steps over `loader` (which may be infinite)."""
+    """Run until optimizer step `max_steps` over `loader` (which may be infinite)."""
     use_amp = amp_dtype is not None and device.type == "cuda"
     needs_scaler = use_amp and amp_dtype == torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=needs_scaler)
@@ -101,7 +102,7 @@ def run_loop(
     model.train()
     history: list[StepRecord] = []
     last_eval: dict | None = None
-    step = 0
+    step = int(start_step)
     accum_loss = 0.0
     optimizer.zero_grad(set_to_none=True)
 

@@ -81,3 +81,26 @@ def test_loop_runs_on_stub_model():
     )
     assert result.final_step == 8
     assert len(result.history) == 8
+
+
+def test_loop_resumes_from_start_step():
+    """Resume path treats max_steps as the absolute target optimizer step."""
+    model = _StubModel()
+    cfg = _OptimCfg()
+    optimizer = build_optimizer(model, cfg)
+    scheduler = build_scheduler(optimizer, cfg, max_steps=8)
+
+    result = run_loop(
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        loader=_toy_loader(),
+        device=torch.device("cpu"),
+        max_steps=8,
+        start_step=5,
+        grad_accum=1,
+        grad_clip=1.0,
+        log_every=1,
+    )
+    assert result.final_step == 8
+    assert [r.step for r in result.history] == [6, 7, 8]
