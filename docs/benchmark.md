@@ -141,11 +141,7 @@ max_context_chars = 40
   "p50_ms": 9.3, "p95_ms": 18.0, "wall_s": 4.0}]
 ```
 
-## 現環境結果 (WSL CPU, torch 2.11.0+cpu, 2026-05-04)
-
-`probe_v3` を主指標にすると、現行 Suiko runtime の推奨は
-`suiko-v1-small-kenlm-6gram-q8-moe`。4-gram MoE 比で probe EM1 が
-0.6695 → 0.6782 に上がり、p50 も 15.1ms → 14.0ms。
+## 結果
 
 probe_v3:
 
@@ -164,33 +160,3 @@ ajimee_jwtd (補助, n=200):
 | suiko-v1-small-kenlm-moe | 0.6700 | 0.8200 | 0.9592 | 19.0 |
 | suiko-v1-small-kenlm-6gram-q8 | 0.6700 | 0.8100 | 0.9558 | 14.5 |
 | suiko-v1-small-kenlm | 0.6700 | 0.8300 | 0.9591 | 19.4 |
-
-## アンカー (`legacy/docs/benchmark_comparison.md` 2026-04-22)
-
-probe_v3:
-
-| model | params | EM1 | EM5 | CharAcc | p50 ms |
-|---|---:|---:|---:|---:|---:|
-| zenz-v2.5-medium | 310M | 0.747 | 0.876 | 0.966 | 1173 |
-| zenz-v3.1-small | 91M | 0.718 | 0.856 | 0.959 | 417 |
-| zenz-v2.5-small | 91M | 0.713 | 0.848 | 0.959 | 376 |
-| zenz-v2.5-xsmall | 30M | 0.695 | 0.813 | 0.953 | 118 |
-| suiko-v1-small-kenlm-moe | 41M | 0.672 | 0.784 | 0.949 | 22 |
-| jinen-v1-small | 110M | 0.672 | 0.776 | 0.944 | 278 |
-| suiko-v1-small-kenlm | 41M | 0.664 | 0.776 | 0.947 | 17 |
-| jinen-v1-xsmall | 35.8M | 0.609 | 0.747 | 0.929 | 115 |
-| suiko-v1-small-greedy | 41M | 0.601 | 0.601 | 0.944 | 9 |
-
-ajimee_jwtd:
-
-| model | EM1 | EM5 | CharAcc | p50 ms |
-|---|---:|---:|---:|---:|
-| zenz-v2.5-medium | 0.875 | 0.970 | 0.982 | 1361 |
-| zenz-v3.1-small | 0.860 | 0.930 | 0.983 | 470 |
-| zenz-v2.5-small | 0.840 | 0.955 | 0.977 | 418 |
-| zenz-v2.5-xsmall | 0.695 | 0.845 | 0.953 | 139 |
-| suiko-v1-small-kenlm | 0.670 | 0.830 | 0.959 | 21 |
-| suiko-v1-small-kenlm-moe | 0.670 | 0.820 | 0.959 | 28 |
-| jinen-v1-small | 0.655 | 0.835 | 0.952 | 309 |
-| suiko-v1-small-greedy | 0.580 | 0.580 | 0.951 | 10 |
-| jinen-v1-xsmall | 0.395 | 0.525 | 0.917 | 124 |
