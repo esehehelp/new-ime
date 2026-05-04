@@ -4,10 +4,6 @@ version = "0.2.0"
 description = "Japanese kana-kanji IME research prototype (v2 restructure)"
 requires-python = ">=3.11"
 dependencies = [
-    # CPU 専用 torch wheel。docs/benchmark.md の canonical 環境は
-    # "WSL CPU only"、訓練は vast.ai 等のレンタル GPU で行うので
-    # local には CUDA は要らない。CUDA wheel (cu126 等) を入れると
-    # 2GB+ の runtime が増えるだけ。過去 anchor の計測環境とも揃う。
     "torch>=2.11",
     "pydantic>=2.10",
     "tokenizers>=0.20",
@@ -16,9 +12,12 @@ dependencies = [
     "tqdm>=4.66",
     "jaconv>=0.3",
     "huggingface-hub>=0.26",
+    # Windows の torch.compile / Inductor は PyPI の triton ではなく
+    # triton-windows が必要。Linux CUDA wheel は通常の triton を引く。
+    "triton-windows<3.7 ; sys_platform == 'win32'",
     # KenLM Python binding は system libstdc++ を要求するソース
     # ビルドで、kenlm 0.3.0 sdist + Windows MSVC は setuptools 側の
-    # 既知問題で詰まる。Linux (= WSL) でだけ入れる。
+    # 既知問題で詰まる。Linux (= WSL / GPU host) でだけ入れる。
     "kenlm>=0.3 ; sys_platform == 'linux'",
     # Python 3.10 以下のフォールバック。3.11+ は tomllib が同梱。
     "tomli>=2.0 ; python_version<'3.11'",
@@ -39,17 +38,20 @@ packages = ["src/new_ime"]
 allow-direct-references = true
 
 # ------------------------------------------------------------
-# uv: PyPI の torch (CPU wheel と表記なし) ではなく、PyTorch 公式
-# index の CPU 専用 wheel を確実に取りに行く。バージョン番号は
-# 同じ (2.11.0) でも +cpu サフィックスで wheel の中身が違う。
+# uv: torch wheel source.
+#
+# Python torch は training 用なので CUDA wheel だけを使う。
+# CPU 実行系は Rust/ONNX 側が担うため、CPU torch fallback は置かない。
+# `tool.uv.sources` の index source はその package を指定 index に
+# pin するため、単一 CPU source にすると GPU host でも +cpu になる。
 # ------------------------------------------------------------
 [[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cpu" }
+torch = { index = "pytorch-cu130" }
 
 [dependency-groups]
 dev = [

@@ -87,6 +87,13 @@ class LoggingSection(_Strict):
     print_samples: int = 5
 
 
+class ResumeSection(_Strict):
+    checkpoint: Path
+    reset_optimizer: bool = False
+    reset_scheduler: bool = False
+    reset_best_metric: bool = False
+
+
 class ProbeSection(_Strict):
     path: Path
     every: int = 10000
@@ -137,6 +144,7 @@ class TrainConfig(_Strict):
     optim: OptimSection
     loop: LoopSection
     logging: LoggingSection = LoggingSection()
+    resume: Optional[ResumeSection] = None
     probe: Optional[ProbeSection] = None
     refine: Optional[RefineSection] = None
     kd: Optional[KdSection] = None
