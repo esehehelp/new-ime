@@ -1,0 +1,92 @@
+# Suiko-v1.15-small: v1.14 から refine_iterations のみロールバック (2 → 1)。
+#
+# v1.14 観察 (~23k step):
+#   - dev EM1 13.3% / charAcc 84.1% / probe EM1 38.2% — 質は v1.13 並み or やや上
+#   - rate 1.18 step/s (v1.13 ~2.x の半分)
+#   - 速度 2x コスト の主因 = refine_iterations=2 の forward/backward 倍化
+#   - probe 質 (38% @ 20k) は v1.13 同 step 帯と互角、refine 2 反復の質寄与は小
+#
+# v1.15 = v1.14 ハイパラ維持 + refine_iterations を 1 に戻す。
+# v1.14 を kill switch で step 23783 graceful 停止、その ckpt から resume
+# (optimizer/scheduler 継続) し、残 ~76k step を v1.13 と同等の throughput
+# で走らせる。
+#
+# v1.14 → v1.15 差分:
+#   - refine_iterations 2 → 1     (速度回復)
+#   - resume from v1.14 step 23783 (Adam moments / cosine 状態 引継ぎ)
+#   - out_dir 別名 (v1.14 ckpts は保全)
+#
+# v1.13 → v1.14 で入れた他のハイパラ (lr 3e-4 / warmup 4000 / lr_min_ratio 0.05
+# / probe every 2000 / refine warmup 3000) はそのまま維持。
+#
+# 中断再開する場合は [resume].checkpoint を最新 v1.15 ckpt に張り替える。
+
+[run]
+name = "suiko-v1.15-small"
+seed = 54
+out_dir = "checkpoints/suiko-v1.15-small"
+
+[resume]
+# v1.14 は kill switch で step 23783 で graceful 停止、その ckpt から続行。
+checkpoint = "checkpoints/suiko-v1.14-small/checkpoint_step_23783.pt"
+reset_optimizer = false
+reset_scheduler = false
+reset_best_metric = false
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 2000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 100000
+fp16 = false
+bf16 = true
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 500
+eval_every = 2000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 5
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 2000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+loss_weight = 0.7
+warmup_steps = 3000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+refine_iterations = 1
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1

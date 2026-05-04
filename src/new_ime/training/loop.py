@@ -14,11 +14,18 @@ Stage 2 surface area:
       so the caller can use it for `best.pt` selection.
     - checkpoint rhythm: `checkpoint_every` + `on_checkpoint(step, eval_metrics)`.
     - STOP file: when `out_dir/STOP` appears, the loop exits cleanly at
-      the next microbatch boundary.
+      the next microbatch boundary and the final step is checkpointed.
+    - SIGINT / SIGTERM: first signal sets a flag and exits at the next
+      step boundary, calling `on_checkpoint` so the run is resumable.
+      A second signal restores the default handler and re-raises so the
+      user can force-quit if the graceful path stalls.
 """
 
 from __future__ import annotations
 
+import signal
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -31,6 +38,7 @@ class StepRecord:
     step: int
     loss: float
     lr: float
+    steps_per_sec: float = 0.0
 
 
 @dataclass
@@ -38,6 +46,56 @@ class LoopResult:
     final_step: int
     history: list[StepRecord]
     last_eval: dict | None
+    interrupted: bool = False
+    stopped_via_file: bool = False
+
+
+class _SignalCatcher:
+    """Catch SIGINT / SIGTERM so the loop can save before exiting.
+
+    First signal flips `flag`; the loop notices at the next step boundary
+    and breaks. A second signal restores the previous handler and re-raises
+    so the user can force-quit when graceful shutdown stalls (e.g. a
+    teacher forward hangs on a long batch).
+
+    Best-effort: signals can only be installed on the main thread, and not
+    every signal exists on every platform. Failures are swallowed so the
+    training still runs (just without the kill switch).
+    """
+
+    def __init__(self) -> None:
+        self.flag = False
+        self._prev: dict[int, object] = {}
+
+    def __enter__(self) -> "_SignalCatcher":
+        def handler(signum, frame):  # noqa: ANN001
+            if self.flag:
+                signal.signal(signum, self._prev.get(signum, signal.SIG_DFL))  # type: ignore[arg-type]
+                raise KeyboardInterrupt
+            self.flag = True
+            print(
+                f"[train] signal {signum} received; saving checkpoint at next step "
+                "boundary (send signal again to force-quit)",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        for sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+            sig = getattr(signal, sig_name, None)
+            if sig is None:
+                continue
+            try:
+                self._prev[int(sig)] = signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        for sig, prev in self._prev.items():
+            try:
+                signal.signal(sig, prev)  # type: ignore[arg-type]
+            except (ValueError, OSError):
+                pass
 
 
 def _move_to_device(batch: dict, device: torch.device) -> dict:
@@ -105,77 +163,114 @@ def run_loop(
     step = int(start_step)
     accum_loss = 0.0
     optimizer.zero_grad(set_to_none=True)
+    last_checkpointed_step = step
+    interrupted = False
+    stopped_via_file = False
 
-    iterator = iter(loader)
-    micro_idx = 0
-    while step < max_steps:
-        if stop_file is not None and stop_file.exists():
-            break
-        if on_step_start is not None and micro_idx % grad_accum == 0:
-            on_step_start(step)
+    with _SignalCatcher() as catcher:
+        iterator = iter(loader)
+        micro_idx = 0
+        last_log_time = time.monotonic()
+        last_log_step = step
+        while step < max_steps:
+            if catcher.flag:
+                interrupted = True
+                break
+            if stop_file is not None and stop_file.exists():
+                stopped_via_file = True
+                break
+            if on_step_start is not None and micro_idx % grad_accum == 0:
+                on_step_start(step)
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                iterator = iter(loader)
+                batch = next(iterator)
+
+            batch = _move_to_device(batch, device)
+
+            autocast_ctx = (
+                torch.amp.autocast(device.type, dtype=amp_dtype)
+                if use_amp
+                else _NullCtx()
+            )
+            with autocast_ctx:
+                outputs = model(**_forward_tensor_kwargs(batch))
+                loss = outputs["loss"]
+                for v in _compute_aux(model, batch, outputs, aux_loss_fns, step).values():
+                    loss = loss + v
+
+            scaled = loss / grad_accum
+            if needs_scaler:
+                scaler.scale(scaled).backward()
+            else:
+                scaled.backward()
+            accum_loss += float(loss.detach().item())
+            micro_idx += 1
+
+            if micro_idx % grad_accum != 0:
+                continue
+
+            if needs_scaler:
+                scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            if needs_scaler:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            step += 1
+
+            if step % log_every == 0 or step == max_steps:
+                avg = accum_loss / grad_accum
+                lr = scheduler.get_last_lr()[0]
+                now = time.monotonic()
+                elapsed = now - last_log_time
+                steps_done = step - last_log_step
+                sps = (steps_done / elapsed) if elapsed > 0 and steps_done > 0 else 0.0
+                last_log_time = now
+                last_log_step = step
+                rec = StepRecord(step=step, loss=avg, lr=lr, steps_per_sec=sps)
+                history.append(rec)
+                if on_log is not None:
+                    on_log(rec)
+            accum_loss = 0.0
+
+            eval_due = eval_every > 0 and on_eval is not None and step % eval_every == 0
+            if eval_due:
+                last_eval = on_eval(step)
+
+            if (
+                checkpoint_every > 0
+                and on_checkpoint is not None
+                and step % checkpoint_every == 0
+            ):
+                on_checkpoint(step, last_eval)
+                last_checkpointed_step = step
+
+    if (
+        (interrupted or stopped_via_file)
+        and on_checkpoint is not None
+        and step > int(start_step)
+        and step != last_checkpointed_step
+    ):
         try:
-            batch = next(iterator)
-        except StopIteration:
-            iterator = iter(loader)
-            batch = next(iterator)
-
-        batch = _move_to_device(batch, device)
-
-        autocast_ctx = (
-            torch.amp.autocast(device.type, dtype=amp_dtype)
-            if use_amp
-            else _NullCtx()
-        )
-        with autocast_ctx:
-            outputs = model(**_forward_tensor_kwargs(batch))
-            loss = outputs["loss"]
-            for v in _compute_aux(model, batch, outputs, aux_loss_fns, step).values():
-                loss = loss + v
-
-        scaled = loss / grad_accum
-        if needs_scaler:
-            scaler.scale(scaled).backward()
-        else:
-            scaled.backward()
-        accum_loss += float(loss.detach().item())
-        micro_idx += 1
-
-        if micro_idx % grad_accum != 0:
-            continue
-
-        if needs_scaler:
-            scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        if needs_scaler:
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad(set_to_none=True)
-        step += 1
-
-        if step % log_every == 0 or step == max_steps:
-            avg = accum_loss / grad_accum
-            lr = scheduler.get_last_lr()[0]
-            rec = StepRecord(step=step, loss=avg, lr=lr)
-            history.append(rec)
-            if on_log is not None:
-                on_log(rec)
-        accum_loss = 0.0
-
-        eval_due = eval_every > 0 and on_eval is not None and step % eval_every == 0
-        if eval_due:
-            last_eval = on_eval(step)
-
-        if (
-            checkpoint_every > 0
-            and on_checkpoint is not None
-            and step % checkpoint_every == 0
-        ):
             on_checkpoint(step, last_eval)
+        except Exception as e:
+            print(
+                f"[train] WARNING: final checkpoint save failed: {e}",
+                file=sys.stderr,
+            )
 
-    return LoopResult(final_step=step, history=history, last_eval=last_eval)
+    return LoopResult(
+        final_step=step,
+        history=history,
+        last_eval=last_eval,
+        interrupted=interrupted,
+        stopped_via_file=stopped_via_file,
+    )
 
 
 class _NullCtx:

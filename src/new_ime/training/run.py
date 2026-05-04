@@ -356,6 +356,11 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         f"vocab={tokenizer.vocab_size} device={device} amp={amp_dtype}",
         file=sys.stderr,
     )
+    print(
+        f"[train] kill switch: touch {out_dir / 'STOP'} or send SIGINT/SIGTERM "
+        "(Ctrl-C); final checkpoint is written before exit",
+        file=sys.stderr,
+    )
 
     eval_max_batches = (
         max(
@@ -368,8 +373,13 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
     )
 
     def _log(rec: StepRecord) -> None:
+        rate_str = (
+            f"rate={rec.steps_per_sec:.2f}step/s"
+            if rec.steps_per_sec > 0
+            else "rate=-"
+        )
         print(
-            f"[train] step={rec.step} loss={rec.loss:.4f} lr={rec.lr:.2e}",
+            f"[train] step={rec.step} loss={rec.loss:.4f} lr={rec.lr:.2e} {rate_str}",
             file=sys.stderr,
         )
 
@@ -484,9 +494,26 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         on_step_start=_on_step_start,
     )
 
-    print(
-        f"[train] done: final_step={result.final_step} "
-        f"best_metric={best_metric:.4f}",
-        file=sys.stderr,
-    )
+    if result.interrupted:
+        print(
+            f"[train] interrupted: final_step={result.final_step} "
+            f"best_metric={best_metric:.4f} (final checkpoint written)",
+            file=sys.stderr,
+        )
+    elif result.stopped_via_file:
+        print(
+            f"[train] STOP file detected: final_step={result.final_step} "
+            f"best_metric={best_metric:.4f} (final checkpoint written)",
+            file=sys.stderr,
+        )
+        try:
+            (out_dir / "STOP").unlink()
+        except OSError:
+            pass
+    else:
+        print(
+            f"[train] done: final_step={result.final_step} "
+            f"best_metric={best_metric:.4f}",
+            file=sys.stderr,
+        )
     return 0

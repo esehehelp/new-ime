@@ -49,7 +49,10 @@ grad_accum = 2
 max_steps = 100000
 fp16 = false
 bf16 = true
-compile = true
+# torch.compile/Inductor can consume a lot of host RAM during graph compile
+# and autotune, especially on Windows. Enable only after eager memory/throughput
+# is acceptable.
+compile = false
 num_workers = 0
 warmup_short_sample_steps = 0
 short_sample_max_chars = 16

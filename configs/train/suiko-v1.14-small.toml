@@ -1,0 +1,97 @@
+# Suiko-v1.14-small: v1.13 と同 mix・同 arch、ハイパラ refinement 版。
+#
+# v1.13 観察 (10k → 14k step):
+#   - EM1 +0.030 / 4k step (0.080 → 0.110), charAcc +2pt
+#   - loss 揺れ 0.92-1.38 で peak lr 4e-4 過大気味、sample noise (お父さん→おじさん 揺り戻し)
+#   - blank 0.49-0.51 安定 → CTC 健全
+#   - 弱点: rare kanji 列挙 (金/石/銅/ダイヤモンド) と homophone (以下/いか, 事/こと)
+#   - probe every=10000 が dev 改善ペース (+0.5pt/1k step) に対し粗すぎ → best.pt 選択ノイズ
+#
+# v1.14 変更 (ハイパラのみ、データ・arch・tokenizer は v1.13 と同一):
+#   1. lr peak 4e-4 → 3e-4         (loss 揺れ抑制)
+#   2. warmup 2000 → 4000          (序盤安定)
+#   3. lr_min_ratio 0.10 → 0.05    (末端 fine-tune を効かせる)
+#   4. probe every 10000 → 2000    (best.pt 選択精度向上)
+#   5. eval_every 1000 → 2000      (probe と同期、eval cost 削減)
+#   6. refine_iterations 1 → 2     (rare-kanji / homophone を refine で多反復修正)
+#   7. refine warmup 5000 → 3000   (refine 早期投入で proposal 学習と並行)
+#
+# OUT (v1.15 以降):
+#   - データ recipe 変更 (zenz 比率 up 等) ← v1.14 では「ハイパラだけ動かす」
+#   - KD 投入 ← teacher checkpoint 確定後に v1.15
+#
+# 中断再開する場合は下の [resume] をコメント解除し、checkpoint を直近の
+# checkpoint_step_*.pt に向ける。max_steps は「最終到達 step」。
+# v1.13 の checkpoint からの暖機開始は warmup/lr が変わるので非推奨 (scratch 推奨)。
+
+[run]
+name = "suiko-v1.14-small"
+seed = 53
+out_dir = "checkpoints/suiko-v1.14-small"
+
+# [resume]
+# checkpoint = "checkpoints/suiko-v1.14-small/checkpoint_step_20000.pt"
+# reset_optimizer = false
+# reset_scheduler = false
+# reset_best_metric = false
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 2000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 100000
+fp16 = false
+bf16 = true
+# torch.compile/Inductor can consume a lot of host RAM during graph compile
+# and autotune, especially on Windows. Enable only after eager memory/throughput
+# is acceptable.
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 500
+eval_every = 2000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 5
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 2000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+loss_weight = 0.7
+warmup_steps = 3000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+refine_iterations = 2
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1
