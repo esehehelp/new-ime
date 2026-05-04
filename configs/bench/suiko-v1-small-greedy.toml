@@ -1,0 +1,32 @@
+# Suiko-v1-small + greedy decode (beam_width=1, num_return=1).
+#
+# Past benchmark_comparison.md anchor (Suiko-v1-small greedy):
+#   probe_v3:    EM1=0.6006 EM5=0.6006 CharAcc=0.944  p50=16.4ms (n=348)
+#   ajimee_jwtd: EM1=0.5800 EM5=0.5800 CharAcc=0.9509 p50=18.7ms (n=200)
+#
+# Note: with greedy decode the model returns 1 candidate so EM5 == EM1
+# is degenerate. Meaningful EM5 requires the kenlm / kenlm-moe variants
+# (separate TOMLs, beam_width=5 + KenLM rescore).
+
+[run]
+name = "suiko-v1-small-greedy"
+out_dir = "results/bench/suiko-v1-small-greedy"
+
+[model]
+type = "ctc-nat"
+checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
+tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
+preset = "phase3_30m"
+
+[decode]
+mode = "greedy"
+num_beams = 1
+num_return = 1
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"

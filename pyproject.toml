@@ -1,47 +1,61 @@
 [project]
 name = "new-ime"
-version = "0.1.0"
-description = "CTC-NAT based Japanese kana-kanji conversion engine"
+version = "0.2.0"
+description = "Japanese kana-kanji IME research prototype (v2 restructure)"
 requires-python = ">=3.11"
-license = "MIT"
 dependencies = [
-    "torch>=2.2",
-    "transformers>=4.40",
-    "tokenizers",
-    "sentencepiece",
-    "mecab-python3",
-    "unidic-lite",
-    "jaconv",
-    "wandb",
-    "accelerate",
-    "onnxruntime",
-    "protobuf>=4.0",
-    "zstandard>=0.25.0",
-    "ja-ginza>=5.2.0",
-    "ginza>=5.2.0",
+    # CPU 専用 torch wheel。docs/benchmark.md の canonical 環境は
+    # "WSL CPU only"、訓練は vast.ai 等のレンタル GPU で行うので
+    # local には CUDA は要らない。CUDA wheel (cu126 等) を入れると
+    # 2GB+ の runtime が増えるだけ。過去 anchor の計測環境とも揃う。
+    "torch>=2.11",
+    "pydantic>=2.10",
+    "tokenizers>=0.20",
+    "transformers>=4.46",
+    "numpy>=2.0",
+    "tqdm>=4.66",
+    "jaconv>=0.3",
+    "huggingface-hub>=0.26",
+    # KenLM Python binding は system libstdc++ を要求するソース
+    # ビルドで、kenlm 0.3.0 sdist + Windows MSVC は setuptools 側の
+    # 既知問題で詰まる。Linux (= WSL) でだけ入れる。
+    "kenlm>=0.3 ; sys_platform == 'linux'",
+    # Python 3.10 以下のフォールバック。3.11+ は tomllib が同梱。
+    "tomli>=2.0 ; python_version<'3.11'",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest",
-    "pytest-cov",
-    "ruff",
-]
+[project.scripts]
+ime-train = "new_ime.cli.train:main"
+ime-bench = "new_ime.cli.bench:main"
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/new_ime"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+# ------------------------------------------------------------
+# uv: PyPI の torch (CPU wheel と表記なし) ではなく、PyTorch 公式
+# index の CPU 専用 wheel を確実に取りに行く。バージョン番号は
+# 同じ (2.11.0) でも +cpu サフィックスで wheel の中身が違う。
+# ------------------------------------------------------------
 [[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu124" }
+torch = { index = "pytorch-cpu" }
 
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--ignore=references"

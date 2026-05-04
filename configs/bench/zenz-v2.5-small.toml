@@ -1,0 +1,25 @@
+# zenz-v2.5-small (91M, GPT2)。canonical 比較対象。
+# anchor (benchmark_comparison.md 2026-04-22):
+#   probe_v3:    EM1=0.713 EM5=0.848 CharAcc=0.959 p50=376ms (n=348)
+#   ajimee_jwtd: EM1=0.840 EM5=0.955 CharAcc=0.977 p50=418ms (n=200)
+
+[run]
+name = "zenz-v2.5-small"
+out_dir = "results/bench/zenz-v2.5-small"
+
+[model]
+type = "zenz-v2.5"
+path = "references/zenz-v2.5-small"
+
+[decode]
+mode = "beam"
+num_beams = 5
+num_return = 5
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"

@@ -1,0 +1,17 @@
+[package]
+name = "data-mix"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-mix"
+path = "src/main.rs"
+
+[dependencies]
+data-core = { path = "../data-core" }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+rand = "0.8"
+ahash.workspace = true

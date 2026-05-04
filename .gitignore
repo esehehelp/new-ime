@@ -16,18 +16,14 @@ htmlcov/
 dist/
 venv/
 .venv/
+.venv-windows/
+.venv-linux/
 
 # Native build outputs.
 /build/
 /build_test/
 cmake-build-*/
 compile_commands.json
-engine/win32/*.obj
-engine/win32/*.exe
-engine/win32/*.dll
-engine/win32/*.exp
-engine/win32/*.lib
-engine/win32/*.pdb
 
 # Local Claude state.
 .claude/scheduled_tasks.lock
@@ -39,16 +35,15 @@ target/
 # Large model artifacts and local training outputs.
 *.gguf
 *.onnx
+*.bin
 *.pt
 *.pth
 *.safetensors
 /checkpoints/
+/assets/
+/models/
 /wandb/
 /parity-fixtures/
-/models/checkpoints/
-/models/dicts/
-/models/kenlm/
-/models/onnx/
 
 # Local datasets and corpora.
 /datasets/audits/
@@ -61,6 +56,7 @@ target/
 
 # Experiment logs and generated result trees.
 /logs/
+/results/bench/
 /results/ablate_diversity*/
 /results/ajimee_*/
 /results/bench_*/
@@ -70,25 +66,19 @@ target/
 /results/kenlm_moe_bench/
 /results/onnx_*/
 /results/probe_v*/
-/results/sweep_*/alpha*.json
-/results/sweep_*/report.md
-/results/sweep_*/summary.json
-!/results/sweep_20260418_170409/summary.json
-!/results/sweep_nodict/summary.json
-!/results/sweep_user_only/summary.json
+/results/sweep_*/
 /results/test_*.txt
-/results/corpus_v2_clean_sample/*.sample.txt
-/results/corpus_v2_sample/*.sample.txt
+/results/corpus_v2_*/
+
+# Scratch configs and generated sweep files.
+/.tmp/
 
 # External data, archives, and vendored dependencies.
 *.bz2
 *.gz
 *.zip
-/tools/onnxruntime-win-x64-*/
-/engine/server/third_party/kenlm/
-/tools/mozc_import/
-/tools/merge-ut-dictionaries/
-/tools/mozc_ut_import/
+*.old
+/tools/
 
 # OS and editor files.
 .DS_Store
@@ -97,3 +87,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Large transfer bundles (local only)
+/transfer/

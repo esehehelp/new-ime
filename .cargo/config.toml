@@ -2,5 +2,4 @@
 target-dir = "build"
 
 [env]
-LIBTORCH = { value = "D:/Dev/new-ime/.venv/Lib/site-packages/torch", force = false }
-LIBTORCH_BYPASS_VERSION_CHECK = { value = "1", force = false }
+LIBTORCH = { value = ".venv/Lib/site-packages/torch", relative = true }

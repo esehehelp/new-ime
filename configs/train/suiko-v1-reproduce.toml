@@ -1,0 +1,60 @@
+# Smoke target for the v2 restructure: re-train a 41M ctc-nat model with
+# the same hyperparameters as Suiko-v1-small (the surviving baseline).
+# Success = probe_v3 EM1 >= 0.59 (anchor: 0.6006).
+#
+# This file is the canonical "did the rebuild break anything" test.
+
+[run]
+name = "suiko-v1-reproduce"
+seed = 52
+out_dir = "checkpoints/suiko-v1-reproduce"
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+
+[data]
+train     = "datasets/mixes/student-v1_7-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-5k.json"
+max_train_samples = 0
+max_dev_samples   = 2000
+
+[optim]
+lr = 4e-4
+warmup_steps = 2000
+schedule = "cosine"
+lr_min_ratio = 0.10
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 100000
+fp16 = true
+compile = true
+num_workers = 0
+
+[logging]
+log_every = 500
+eval_every = 1000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 5
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 10000
+limit = 0
+
+[refine]
+loss_weight = 0.7
+warmup_steps = 5000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+
+# No KD section: this config trains from scratch (matches v1-small lineage,
+# which was no-KD per memory:feedback_suiko_v1_baseline_critique).
