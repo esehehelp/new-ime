@@ -178,7 +178,7 @@ impl EngineSession {
             beam_width: env_usize("NEWIME_BEAM_WIDTH", 50),
             top_k_per_step: env_usize("NEWIME_TOP_K", 64),
             lm_alpha: env_f32("NEWIME_LM_ALPHA", 0.3),
-            lm_beta: env_f32("NEWIME_LM_BETA", 0.7),
+            lm_beta: env_f32("NEWIME_LM_BETA", 0.6),
             lm: None,
             lm_moe: None,
             category_estimator: None,
@@ -835,7 +835,14 @@ fn normalize_candidate(s: &str) -> String {
         .map(|c| match c {
             ',' | '\u{FF0C}' => '\u{3001}',
             '.' | '\u{FF0E}' => '\u{3002}',
-            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            // `？` and `！` are Japanese sentence punctuation and stay
+            // full-width. The half-width ASCII originals get promoted so
+            // the IME emits canonical full-width forms regardless of what
+            // the model produced, matching the input path which already
+            // inserts `？`/`！` directly into the composition.
+            '?' | '\u{FF1F}' => '\u{FF1F}',
+            '!' | '\u{FF01}' => '\u{FF01}',
+            '\u{FF02}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
             other => other,
         })
         .collect();
@@ -874,6 +881,22 @@ mod tests {
         assert_eq!(normalize_candidate("a,b.c"), "a、b。c");
         assert_eq!(normalize_candidate("あ，い．う"), "あ、い。う");
         assert_eq!(normalize_candidate("今日は、"), "今日は、");
+    }
+
+    #[test]
+    fn question_and_exclamation_stay_fullwidth() {
+        // ？ ! は日本語句読点 → full-width 維持。half-width 入力も full に promote。
+        assert_eq!(normalize_candidate("そうですか？"), "そうですか？");
+        assert_eq!(normalize_candidate("そうですか?"), "そうですか？");
+        assert_eq!(normalize_candidate("すごい！"), "すごい！");
+        assert_eq!(normalize_candidate("すごい!"), "すごい！");
+    }
+
+    #[test]
+    fn other_fullwidth_ascii_still_normalizes() {
+        // ？！ 例外化が他の full-width ASCII 範囲を壊さないか確認。
+        assert_eq!(normalize_candidate("ＡＢＣ"), "ABC");
+        assert_eq!(normalize_candidate("１２３"), "123");
     }
 
     #[test]
@@ -1041,7 +1064,7 @@ mod tests {
         let onnx = repo_root
             .join("models")
             .join("onnx")
-            .join("ctc-nat-30m-student-step160000.fp32.onnx");
+            .join("suiko-v1-small-step100000.fp32.onnx");
         let refiner = derive_refiner_onnx_path(&onnx);
         if !onnx.exists() || !refiner.exists() {
             return;

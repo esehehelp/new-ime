@@ -1,10 +1,18 @@
 //! Build script for `new-ime-engine-core`.
 //!
-//! The active repository no longer carries the old C++ build tree, so the
-//! KenLM shim is opt-in. On Windows/MSVC builds, set both
-//! `NEW_IME_KENLM_SOURCE` and `NEW_IME_KENLM_LIB_DIR` to enable the shim.
-//! All other hosts and target combinations skip the native step so
-//! `cargo check` stays usable in the Rust-only workspace.
+//! On Windows/MSVC, compiles the KenLM C shim (`csrc/kenlm_shim.cpp`) and
+//! links it against `kenlm.lib` / `kenlm_util.lib`. Two ways to point at
+//! them, in priority order:
+//!
+//!   1. `NEW_IME_KENLM_SOURCE` + `NEW_IME_KENLM_LIB_DIR` env vars (any
+//!      layout the user prefers).
+//!   2. Repo-relative auto-detect: source at `references/kenlm/`, libs at
+//!      `build/kenlm_win/lib/Release/`. Produced by `scripts/setup_kenlm_win.sh`
+//!      followed by a `cmake --build` in `build/kenlm_win/`.
+//!
+//! If neither yields a usable layout, the shim build is skipped — the
+//! workspace then doesn't link KenLM and TSF runs CTC-only. Other host /
+//! target combinations always skip so `cargo check` stays usable.
 
 use std::env;
 use std::path::PathBuf;
@@ -19,37 +27,35 @@ fn main() {
         return;
     }
 
-    let Some(kenlm_src) = env::var_os("NEW_IME_KENLM_SOURCE").map(PathBuf::from) else {
-        println!(
-            "cargo:warning=skipping KenLM shim build; set NEW_IME_KENLM_SOURCE and NEW_IME_KENLM_LIB_DIR to enable it"
-        );
-        return;
-    };
-    let Some(lib_dir) = env::var_os("NEW_IME_KENLM_LIB_DIR").map(PathBuf::from) else {
-        println!(
-            "cargo:warning=skipping KenLM shim build; set NEW_IME_KENLM_SOURCE and NEW_IME_KENLM_LIB_DIR to enable it"
-        );
-        return;
-    };
-
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let shim_src = manifest_dir.join("csrc/kenlm_shim.cpp");
+    let repo_root = manifest_dir
+        .ancestors()
+        .nth(2)
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| manifest_dir.clone());
 
-    assert!(
-        kenlm_src.join("lm/model.hh").exists(),
-        "KenLM source missing at {}",
-        kenlm_src.display()
-    );
-    assert!(
-        lib_dir.join("kenlm.lib").exists(),
-        "kenlm.lib not found at {}",
-        lib_dir.display()
-    );
-    assert!(
-        lib_dir.join("kenlm_util.lib").exists(),
-        "kenlm_util.lib not found at {}",
-        lib_dir.display()
-    );
+    let kenlm_src = match env::var_os("NEW_IME_KENLM_SOURCE") {
+        Some(v) => PathBuf::from(v),
+        None => repo_root.join("references").join("kenlm"),
+    };
+    let lib_dir = match env::var_os("NEW_IME_KENLM_LIB_DIR") {
+        Some(v) => PathBuf::from(v),
+        None => repo_root.join("build").join("kenlm_win").join("lib").join("Release"),
+    };
+
+    if !kenlm_src.join("lm/model.hh").exists()
+        || !lib_dir.join("kenlm.lib").exists()
+        || !lib_dir.join("kenlm_util.lib").exists()
+    {
+        println!(
+            "cargo:warning=KenLM artifacts missing (src={}, libs={}); skipping shim, TSF will link without shallow fusion. Run scripts/setup_kenlm_win.sh + cmake build to enable.",
+            kenlm_src.display(),
+            lib_dir.display()
+        );
+        return;
+    }
+
+    let shim_src = manifest_dir.join("csrc/kenlm_shim.cpp");
 
     cc::Build::new()
         .cpp(true)

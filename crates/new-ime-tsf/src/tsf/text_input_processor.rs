@@ -113,9 +113,12 @@ fn find_model_paths() -> Option<ModelPaths> {
         v.push(PathBuf::from("D:\\Dev\\new-ime\\models"));
         v
     };
-    let onnx_name = "onnx/ctc-nat-30m-student-step160000.int8.onnx";
-    let lm_general = "kenlm/kenlm_general_train_4gram.bin";
-    let lm_tech = "kenlm/kenlm_tech_4gram.bin";
+    let onnx_name = "onnx/suiko-v1-small-step100000.int8.onnx";
+    // general/tech は 6-gram q8 (容量 1.1G/2.1G、bench EM1 ~67%)。entity は
+    // 6-gram 未生成なので 4-gram のまま。kenlm.lib は KENLM_MAX_ORDER=6 で
+    // ビルド済 → 4-gram も 6-gram も同じ session が読める。
+    let lm_general = "kenlm/kenlm_general_6gram_q8.bin";
+    let lm_tech = "kenlm/kenlm_tech_6gram_q8.bin";
     let lm_entity = "kenlm/kenlm_entity_4gram.bin";
     for base in &candidates {
         let onnx = base.join(onnx_name);
