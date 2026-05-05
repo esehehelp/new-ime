@@ -1,0 +1,118 @@
+# Suiko-v2.0-small: Phase 1 decoder enhancements 全部入り。
+#
+# v1.16 (config-only quick wins) + Phase 1 code 変更全 levers:
+#   - α: refine.loss_weight 0.0 → 0.3 (同 v1.16)
+#   - β: deep_supervision (decoder layer 2, 4 に aux CTC head, weight 0.3/0.5)
+#        — ctc_head 重み tied、新 param 無、~30% training cost 増
+#   - γ: glat_p="0.3:0.1@40k" で refine 学習に GLAT-style oracle leak
+#   - ε: NATDecoderLayer attn output dropout (commit 583bbe7、無条件)
+#   - ζ: stop_head per-position 化 + scalar fallback (refine_from_proposal)
+#   - η: stop/remask に learnable temperature τ (log L2 reg、weight 1e-3)
+#   - 1: KD self-distill (teacher=v1.13 best.pt、α 0.3→0.1 cosine decay)
+#   - 2/θ: refine.refine_iterations 3 (Mask-CTC 標準)
+#   - 3: cosine_warm_restarts (period 60k decay 0.85) で 80k step
+#   ・δ (refine→proposal self-distill) は alignment 問題で deferred
+#
+# v1.15c step 44171 から resume: 既存 ~44k step の収束を活用、checkpoint.py
+# strict=False で stop/remask の τ params 欠落 → default 初期化 (τ=1.0)。
+#
+# Bench gate (緩い): 80k step 完走後、probe NFKC EM1 が v1.15c (= 0.595)
+# 以上を必須。期待値 EM1 ≥ 0.62-0.66 (config-only v1.16 = +1-3pt 期待 +
+# 各 lever ~+0.5-1pt 累積)。
+
+[run]
+name = "suiko-v2.0-small"
+seed = 60
+out_dir = "checkpoints/suiko-v2.0-small"
+
+[resume]
+checkpoint = "checkpoints/suiko-v1.15c-small/checkpoint_step_44171.pt"
+reset_optimizer = false
+reset_scheduler = true
+reset_best_metric = true
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 2000
+schedule = "cosine_warm_restarts"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+lr_restart_period = 60000
+lr_restart_decay = 0.85
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+# Phase 1 levers 全入りで refine_iter=3 + GLAT 1st pass + deep_sup 中間
+# CTC × 2 で training cost ~50% 増。grad_accum=2 維持 (effective batch 128)。
+# VRAM 余裕は v1.16 と同等想定 (deep_sup は activation 共有、GLAT first
+# pass は no-grad で memory 軽い)。
+grad_accum = 2
+max_steps = 80000
+fp16 = true
+bf16 = false
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 500
+eval_every = 4000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 3
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+loss_weight = 0.3
+warmup_steps = 3000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+refine_iterations = 3
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1
+# γ: GLAT schedule。step 0 で leak ratio 0.3、40k step で 0.1 まで anneal。
+glat_p = "0.3:0.1@40k"
+glance_strategy = "number-random"
+
+[deep_supervision]
+# β: NATDecoder の中間 layer (0-indexed: layer 2, 4 = 6 layer の 3, 5 番目)
+# に shared ctc_head を再適用、CTC loss を重み 0.3 / 0.5 で aux に追加。
+# warmup 3k step で gradual ramp (refine と同 schedule で安定化)。
+layers = [2, 4]
+weights = [0.3, 0.5]
+warmup_steps = 3000
+
+[kd]
+teacher_type = "ctc"
+teacher_path = "checkpoints/suiko-v1.13-small/best.pt"
+alpha = 0.3
+alpha_final = 0.1
+warmup_steps = 3000
+alpha_decay_start = 30000
+alpha_decay_steps = 30000
+gate_mode = "all"
+temperature = 1.5
