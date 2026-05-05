@@ -1,10 +1,15 @@
 """Dynamic programming primitives for the DAT (DA-Transformer) loss.
 
-All functions are pure PyTorch and operate on full-square `links`
-(`[B, prelen, prelen]`) — the compressed `[B, prelen, translen]` form
-used by the CUDA kernel of the reference implementation is intentionally
-not supported in v1.0. `max_transition_length=-1` in `DatSection` keeps
-us in the full-square regime.
+The pure-PyTorch implementations live in `_pytorch_*` private functions
+and operate on full-square `links` (`[B, prelen, prelen]`). The public
+`torch_dag_loss` / `torch_dag_best_alignment` / `torch_dag_logsoftmax_gather`
+are *dispatchers* that route to the CUDA kernel
+(`new_ime.training.loss.dat_cuda`) when it builds successfully and the
+inputs are on a CUDA device, falling back to the PyTorch path otherwise.
+
+Set `NEW_IME_DAT_FORCE_PYTORCH=1` to disable the CUDA path explicitly
+(useful for parity testing and on environments where the kernel build
+breaks). See `dat_cuda/loader.py` for build-time semantics.
 
 The forward DP follows
     f[i, j] = log P(emit y[0..i], path ends at vertex j)
@@ -28,6 +33,14 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
+
+
+def _should_use_cuda(*tensors: Tensor) -> bool:
+    """True iff every tensor is on CUDA AND the CUDA kernel built OK."""
+    if not all(t.is_cuda for t in tensors):
+        return False
+    from new_ime.training.loss.dat_cuda.loader import load_dat_kernel
+    return load_dat_kernel() is not None
 
 
 def _logsumexp_keepdim(x: Tensor, dim: int) -> Tensor:
@@ -70,7 +83,7 @@ def _step_max(last_f: Tensor, links: Tensor, match: Tensor) -> Tensor:
     return f_next.unsqueeze(-1) + match  # (B, prelen, 1)
 
 
-def torch_dag_logsoftmax_gather(
+def _pytorch_dag_logsoftmax_gather(
     word_ins_out: Tensor,
     select_idx: Tensor,
 ) -> tuple[Tensor, Tensor]:
@@ -96,7 +109,18 @@ def torch_dag_logsoftmax_gather(
     return word_ins_out, match
 
 
-def torch_dag_loss(
+def torch_dag_logsoftmax_gather(
+    word_ins_out: Tensor,
+    select_idx: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Dispatcher: CUDA kernel path when available, else pure-PyTorch."""
+    if _should_use_cuda(word_ins_out, select_idx):
+        from new_ime.training.loss.dat_cuda.ops import cuda_dag_logsoftmax_gather
+        return cuda_dag_logsoftmax_gather(word_ins_out, select_idx)
+    return _pytorch_dag_logsoftmax_gather(word_ins_out, select_idx)
+
+
+def _pytorch_dag_loss(
     match_all: Tensor,
     links: Tensor,
     output_length: Tensor,
@@ -177,7 +201,7 @@ def _torch_dag_max_loss(
     ]
 
 
-def torch_dag_best_alignment(
+def _pytorch_dag_best_alignment(
     match_all: Tensor,
     links: Tensor,
     output_length: Tensor,
@@ -203,3 +227,29 @@ def torch_dag_best_alignment(
     path_value, path = match_grad.max(dim=1)  # (B, prelen) each
     path = path.masked_fill(path_value < 0.5, -1)
     return path
+
+
+def torch_dag_loss(
+    match_all: Tensor,
+    links: Tensor,
+    output_length: Tensor,
+    target_length: Tensor,
+) -> Tensor:
+    """Dispatcher: CUDA kernel path when available, else pure-PyTorch."""
+    if _should_use_cuda(match_all, links):
+        from new_ime.training.loss.dat_cuda.ops import cuda_dag_loss
+        return cuda_dag_loss(match_all, links, output_length, target_length)
+    return _pytorch_dag_loss(match_all, links, output_length, target_length)
+
+
+def torch_dag_best_alignment(
+    match_all: Tensor,
+    links: Tensor,
+    output_length: Tensor,
+    target_length: Tensor,
+) -> Tensor:
+    """Dispatcher: CUDA kernel path when available, else pure-PyTorch."""
+    if _should_use_cuda(match_all, links):
+        from new_ime.training.loss.dat_cuda.ops import cuda_dag_best_alignment
+        return cuda_dag_best_alignment(match_all, links, output_length, target_length)
+    return _pytorch_dag_best_alignment(match_all, links, output_length, target_length)

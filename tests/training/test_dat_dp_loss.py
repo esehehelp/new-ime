@@ -19,6 +19,9 @@ import pytest
 import torch
 
 from new_ime.training.loss.dat_dp import (
+    _pytorch_dag_best_alignment,
+    _pytorch_dag_logsoftmax_gather,
+    _pytorch_dag_loss,
     torch_dag_best_alignment,
     torch_dag_logsoftmax_gather,
     torch_dag_loss,
@@ -228,4 +231,175 @@ def test_torch_dag_loss_gradient_finite():
     )
     assert torch.isfinite(links.grad).all(), (
         f"links.grad has NaN/Inf: {links.grad}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CUDA backend parity (skipped if CUDA / kernel build unavailable)
+# ---------------------------------------------------------------------------
+
+
+def _cuda_kernel_or_skip():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    from new_ime.training.loss.dat_cuda.loader import load_dat_kernel
+
+    if load_dat_kernel() is None:
+        pytest.skip("DAT CUDA kernel did not build (toolchain missing or mismatch)")
+
+
+def _make_links_strict_terminal(
+    batch: int,
+    prelen: int,
+    output_length: torch.Tensor,
+    *,
+    dtype: torch.dtype = torch.float32,
+    seed: int | None = None,
+) -> torch.Tensor:
+    """Like `_make_left_to_right_links` but with rows past each sample's terminal
+    vertex set to *strict* `-inf`.
+
+    Why this matters for CUDA parity: the pytorch DP visits all `prelen` rows
+    regardless of `output_length`, so any spurious finite mass on rows
+    `>= output_length-1` (created by `log_softmax` over an all-`LINK_MASK_VALUE`
+    row → `log(1/prelen)`) leaks into the answer. The CUDA kernel correctly
+    skips transitions from the terminal vertex onward, so the two diverge.
+    Setting those rows to strict `-inf` makes both impls agree.
+
+    Real `link_extractor` outputs are normalized over a `valid_mask` so this
+    artifact doesn't arise in production.
+    """
+    links = _make_left_to_right_links(batch, prelen, dtype=dtype, seed=seed)
+    for b in range(batch):
+        ol = int(output_length[b].item())
+        if ol > 0 and ol - 1 < prelen:
+            links[b, ol - 1:, :] = float("-inf")
+    return links
+
+
+def test_cuda_dag_loss_matches_pytorch_random():
+    """Dispatcher-on-CUDA should agree with the pure-PyTorch DP within fp32 tol.
+
+    Note: `output_length < prelen` for every sample. With output_length == prelen,
+    the pytorch DP reads `links[prelen-1, j]` (the all-masked last row), which
+    has spurious finite values from `log_softmax`-over-all-`LINK_MASK_VALUE`.
+    The CUDA kernel correctly ignores transitions from the terminal vertex
+    (there are none), so the two diverge at exactly that corner case. Real
+    training never hits this — `output_length` is always the actual sequence
+    length, and the DAG decoder pads beyond it — so we test in the regime
+    that matches production.
+    """
+    _cuda_kernel_or_skip()
+
+    torch.manual_seed(123)
+    B, prelen, T_tgt = 3, 16, 8
+    match_all_cpu = torch.randn(B, T_tgt, prelen, dtype=torch.float32)
+    output_length = torch.tensor([prelen - 1, prelen - 2, prelen - 4], dtype=torch.long)
+    target_length = torch.tensor([T_tgt, T_tgt - 1, T_tgt - 2], dtype=torch.long)
+    links_cpu = _make_links_strict_terminal(B, prelen, output_length, dtype=torch.float32, seed=124)
+
+    ref = _pytorch_dag_loss(match_all_cpu, links_cpu, output_length, target_length)
+    cuda_out = torch_dag_loss(
+        match_all_cpu.cuda(), links_cpu.cuda(), output_length.cuda(), target_length.cuda(),
+    )
+    assert torch.allclose(cuda_out.cpu(), ref, rtol=1e-3, atol=1e-4), (
+        f"CUDA mismatch: cuda={cuda_out.cpu().tolist()} ref={ref.tolist()}"
+    )
+
+
+def test_cuda_dag_best_alignment_matches_pytorch_random():
+    """Same `output_length < prelen` caveat as the loss test above."""
+    _cuda_kernel_or_skip()
+
+    torch.manual_seed(7)
+    B, prelen, T_tgt = 2, 12, 5
+    match_all_cpu = torch.randn(B, T_tgt, prelen, dtype=torch.float32)
+    output_length = torch.full((B,), prelen - 1, dtype=torch.long)
+    target_length = torch.full((B,), T_tgt, dtype=torch.long)
+    links_cpu = _make_links_strict_terminal(B, prelen, output_length, dtype=torch.float32, seed=8)
+
+    ref = _pytorch_dag_best_alignment(match_all_cpu, links_cpu, output_length, target_length)
+    cuda_out = torch_dag_best_alignment(
+        match_all_cpu.cuda(), links_cpu.cuda(), output_length.cuda(), target_length.cuda(),
+    )
+    # Best-alignment paths can have ties; CUDA and the autograd-trick PyTorch
+    # impl may pick different tie-breakers. For non-degenerate random seeds
+    # the paths typically match exactly.
+    assert torch.equal(cuda_out.cpu(), ref), (
+        f"path mismatch: cuda={cuda_out.cpu().tolist()} ref={ref.tolist()}"
+    )
+
+
+def test_cuda_dag_loss_gradient_finite():
+    _cuda_kernel_or_skip()
+
+    torch.manual_seed(1)
+    B, prelen, T_tgt = 2, 8, 4
+    match_all = torch.randn(B, T_tgt, prelen, dtype=torch.float32, device="cuda", requires_grad=True)
+    output_length = torch.full((B,), prelen - 1, dtype=torch.long, device="cuda")
+    target_length = torch.full((B,), T_tgt, dtype=torch.long, device="cuda")
+    links = _make_links_strict_terminal(
+        B, prelen, output_length.cpu(), dtype=torch.float32, seed=2,
+    ).cuda().requires_grad_()
+
+    out = torch_dag_loss(match_all, links, output_length, target_length)
+    loss = -out.mean()
+    loss.backward()
+
+    assert torch.isfinite(match_all.grad).all(), "match_all.grad has NaN/Inf on CUDA"
+    assert torch.isfinite(links.grad).all(), "links.grad has NaN/Inf on CUDA"
+
+
+def test_cuda_dag_loss_accepts_bfloat16():
+    """bf16 inputs (autocast on Ampere+) must not crash; kernel only
+    dispatches fp32/fp16 so the wrapper promotes silently."""
+    _cuda_kernel_or_skip()
+
+    torch.manual_seed(11)
+    B, prelen, T_tgt = 2, 8, 4
+    output_length = torch.full((B,), prelen - 1, dtype=torch.long, device="cuda")
+    target_length = torch.full((B,), T_tgt, dtype=torch.long, device="cuda")
+    match_all = torch.randn(B, T_tgt, prelen, dtype=torch.float32, device="cuda").bfloat16()
+    links = (
+        _make_links_strict_terminal(B, prelen, output_length.cpu(), dtype=torch.float32, seed=12)
+        .cuda()
+        .bfloat16()
+    )
+
+    # Should run without RuntimeError and produce finite per-sample log P.
+    out = torch_dag_loss(match_all, links, output_length, target_length)
+    assert out.shape == (B,)
+    assert torch.isfinite(out).all(), f"non-finite loss: {out}"
+
+
+def test_cuda_dag_logsoftmax_gather_accepts_bfloat16():
+    _cuda_kernel_or_skip()
+
+    torch.manual_seed(13)
+    B, prelen, V, T_tgt = 2, 6, 16, 4
+    logits = torch.randn(B, prelen, V, dtype=torch.bfloat16, device="cuda")
+    target = torch.randint(0, V, (B, T_tgt), device="cuda")
+    select = target.unsqueeze(1).expand(B, prelen, T_tgt)
+
+    # Must not raise; match is fp32 by spec regardless of input dtype.
+    _, match = torch_dag_logsoftmax_gather(logits, select)
+    assert match.dtype == torch.float32
+    assert torch.isfinite(match).all()
+
+
+def test_cuda_dag_logsoftmax_gather_matches_pytorch():
+    _cuda_kernel_or_skip()
+
+    torch.manual_seed(0)
+    B, prelen, V, T_tgt = 2, 8, 16, 5
+    logits = torch.randn(B, prelen, V, dtype=torch.float32)
+    target = torch.randint(0, V, (B, T_tgt))
+    select = target.unsqueeze(1).expand(B, prelen, T_tgt)
+
+    _, ref = _pytorch_dag_logsoftmax_gather(logits, select)
+    _, cuda_match = torch_dag_logsoftmax_gather(logits.cuda(), select.cuda())
+
+    assert torch.allclose(cuda_match.cpu(), ref, rtol=1e-3, atol=1e-4), (
+        f"logsoftmax_gather CUDA mismatch (max diff: "
+        f"{(cuda_match.cpu() - ref).abs().max().item()})"
     )
