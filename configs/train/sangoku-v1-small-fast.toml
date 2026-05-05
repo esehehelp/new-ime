@@ -1,0 +1,90 @@
+# Sangoku-v1-small-fast: sangoku-v1-small の DP 高速化検証 side config。
+#
+# baseline (sangoku-v1-small.toml) が 17.8 sec/step で実用不可だったため、
+# CUDA kernel 移植までの中間策として pure-PyTorch でできる速度向上を測る。
+# baseline と並列に走らせて step rate と品質 (em1) を比較する。
+#
+# 設計判断:
+#   - upsample_scale=2 (baseline 4): prelen 半減 → DP cost 1/4。kana→kanji の
+#     target/source ≈ 1.0-1.2 なら DAG vertex は target の 2 倍で十分。
+#   - compile=true: torch.compile を有効化。dat_dp.py の Python loop は
+#     graph break しやすいが、model 全体の forward は compile 効果あり。
+#   - run.name / out_dir / probe checkpoint dir は別系統に分離 (baseline と
+#     resume 競合させない)。
+#
+# 中断再開: kill switch (touch STOP) で安全停止。 [resume] をコメント解除。
+
+[run]
+name = "sangoku-v1-small-fast"
+seed = 60
+out_dir = "checkpoints/sangoku-v1-small-fast"
+
+# [resume]
+# checkpoint = "checkpoints/sangoku-v1-small-fast/checkpoint_step_20000.pt"
+# reset_optimizer = false
+# reset_scheduler = false
+# reset_best_metric = false
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "dat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 32
+eval_batch_size = 32
+# upsample_scale=2 で T_up が baseline 比半分 → batch 32 + grad_accum 4 で
+# baseline と同 effective 128 を維持しつつ VRAM 更に余裕。
+grad_accum = 4
+max_steps = 100000
+fp16 = false
+bf16 = true
+compile = true
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 50
+eval_every = 4000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 3
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[dat]
+upsample_scale = 2
+glat_p = "0.3:0.1@40k"
+glance_strategy = "number-random"
+max_transition_length = -1
+links_feature = "feature:position"
+num_link_heads = 4
+loss_factor = 1.0
+label_smoothing = 0.0
+decode_strategy = "lookahead"
+decode_beta = 1.0
+decode_viterbibeta = 1.0
+decode_upsample_scale = 2.0

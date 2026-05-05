@@ -70,7 +70,7 @@ short_sample_max_chars = 16
 tiny_overfit_samples = 0
 
 [logging]
-log_every = 500
+log_every = 50
 eval_every = 4000
 checkpoint_every = 10000
 keep_last_k = 5
@@ -84,7 +84,7 @@ metric_priority = "probe_em1"
 
 [dat]
 upsample_scale = 4
-glat_p = "0.5:0.1@40k"
+glat_p = "0.3:0.1@40k"
 glance_strategy = "number-random"
 max_transition_length = -1
 links_feature = "feature:position"
