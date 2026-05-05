@@ -173,10 +173,24 @@ impl KenLMMixture {
         }
         let mut domains: Vec<String> = paths.keys().cloned().collect();
         domains.sort();
+        // Parallel load: each KenLM `.bin` is 1-3 GB and load is dominated
+        // by mmap + initial page-in. Sequential load took 2-5s on cold
+        // cache for the typical general+tech+entity set; spawning one
+        // thread per file overlaps the page faults and brings wall time
+        // close to the largest single file.
+        let handles: Vec<_> = domains
+            .iter()
+            .map(|d| {
+                let p = paths[d].clone();
+                std::thread::spawn(move || KenLM::load(&p))
+            })
+            .collect();
         let mut models: Vec<KenLM> = Vec::with_capacity(domains.len());
-        for d in &domains {
-            let p = &paths[d];
-            models.push(KenLM::load(p)?);
+        for h in handles {
+            let model = h
+                .join()
+                .map_err(|_| anyhow!("kenlm load thread panicked"))??;
+            models.push(model);
         }
         let n = domains.len();
         let uniform = vec![1.0 / n as f32; n];
