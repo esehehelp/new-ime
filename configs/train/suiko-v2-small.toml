@@ -1,0 +1,133 @@
+# Suiko-v2-small: vast.ai RTX 5080 想定の Phase 1 全機能 ON 本走 config。
+#
+# 3060 (12GB / fp16) で blowup した refine_iter=3 + KD + deep_supervision の
+# 組合せを 5080 (16GB / bf16) で本来の設計通り走らせる。Phase 1 の全 levers
+# (α / β / γ / ε / ζ / η + KD self-distill + cosine restarts) 全部入り。
+#
+# 想定環境:
+#   - vast.ai RTX 5080 (16GB GDDR7、Blackwell sm_120)
+#   - Linux (num_workers > 0 可、Windows pickle 制約なし)
+#   - bf16 native 対応 (Blackwell)、fp16 比で gradient 安定性向上
+#   - vast.ai cost ~$0.30-0.40/h 想定 (5090 より安い)
+#
+# 期待 step rate: 5080 は 3060 比 2.5-3x compute、bf16 + Phase 1 全部 ON で
+# 1.5-2.5 step/s 想定 (3060 baseline 2.0 step/s 相当を超える)。100k step
+# ETA 11-18h。
+#
+# 起動順序:
+#   1. local で v1.13 best.pt + tokenizer + dataset を pre-compress + scp
+#   2. vast.ai で uv sync + uv run -m new_ime.cli.train this config
+#   3. local 側で rsync loop で best.pt + 最新 checkpoint を 5min 粒度 pull
+#      (memory: vast.ai は予告なく死ぬので頻繁同期)
+#
+# resume vs fresh:
+#   - 当 config は fresh init (no [resume])。3060 の v1.17-small が走り切る
+#     のを待たず independent run として開始可能。
+#   - もし v1.17-small (3060) の best.pt を seed にしたい場合は [resume] を
+#     コメント解除して checkpoint パス指定。
+
+[run]
+name = "suiko-v2-small"
+seed = 80
+out_dir = "checkpoints/suiko-v2-small"
+
+# [resume]
+# checkpoint = "checkpoints/suiko-v1.17-small/best.pt"
+# reset_optimizer = false
+# reset_scheduler = true
+# reset_best_metric = false
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine_warm_restarts"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+lr_restart_period = 60000
+lr_restart_decay = 0.85
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+# eff_batch=128 維持、grad_accum=2 で refine_iter=3 + KD + deep_sup の
+# microbatch コストを 1 度で吸収。5080 16GB なら refine_iter=3 + KD でも
+# peak ~12-13GB 想定で余裕。
+grad_accum = 2
+max_steps = 100000
+fp16 = false
+bf16 = true
+compile = true
+# Linux なので num_workers > 0 OK (memory: Windows pickle 制約は Linux 無関係)。
+# data shard は memory-mapped、worker 2-4 で I/O オーバーラップが効く。
+num_workers = 4
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 100
+early_log_every = 10
+early_log_steps = 300
+eval_every = 4000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 3
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+# α: refine head を training-aux 復活 (loss_weight 0.3)、推論側は引き続き
+#    refiner=false の前提で latency 影響なし。
+loss_weight = 0.3
+warmup_steps = 3000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+# 2/θ: Mask-CTC 論文標準の 3 反復。3060 では blowup したが 5080 16GB なら
+#      VRAM 余裕あり。
+refine_iterations = 3
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1
+# γ: GLAT-style oracle leak。step 0 で 30% leak、40k で 10% に anneal。
+glat_p = "0.3:0.1@40k"
+glance_strategy = "number-random"
+
+[deep_supervision]
+# β: 中間 layer (0-indexed: 2, 4) に shared ctc_head 再適用、aux CTC loss を
+#    weight 0.3 / 0.5 で追加。新 param 無 (head tied to embedding)。
+layers = [2, 4]
+weights = [0.3, 0.5]
+warmup_steps = 3000
+
+[kd]
+# 1: KD self-distill。teacher = v1.13-small/best.pt (CTC、同 vocab、
+#    同 preset)。alpha 0.3 → 0.1 を 30k step で cosine decay。
+#    vast.ai upload 前に local の v1.13 best.pt を rsync で配置すること。
+teacher_type = "ctc"
+teacher_path = "checkpoints/suiko-v1.13-small/best.pt"
+alpha = 0.3
+alpha_final = 0.1
+warmup_steps = 3000
+alpha_decay_start = 30000
+alpha_decay_steps = 30000
+gate_mode = "all"
+temperature = 1.5
