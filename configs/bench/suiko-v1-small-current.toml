@@ -1,0 +1,40 @@
+# 現行 TSF (Windows IME) と同じ構成での bench。
+#
+#   * model: Suiko-v1-small (CTC-NAT 41M, MaskCTC refine, step 100k)
+#   * LM:    KenLM-MoE (general 6gram-q8 + tech 6gram-q8 + entity 4gram)
+#   * α=0.3 β=0.6 (TSF 既定)
+#   * beam=10, top-10 表示 (`-v` で全 candidate を確認するため)
+#
+# WSL only (kenlm Python binding が Linux 限定)。
+
+[run]
+name = "suiko-v1-small-current"
+out_dir = "results/bench/suiko-v1-small-current"
+
+[model]
+type = "ctc-nat"
+onnx = "models/onnx/suiko-v1-small-step100000.int8.onnx"
+
+[decode]
+mode = "beam"
+num_beams = 10
+num_return = 10
+top_k = 10
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"
+
+[lm]
+mode = "moe"
+alpha = 0.3
+beta = 0.6
+gate_min_conf = 0.0
+
+[lm.paths_by_domain]
+general = "assets/kenlm/kenlm_general_6gram_q8.bin"
+tech    = "assets/kenlm/kenlm_tech_6gram_q8.bin"
+entity  = "assets/kenlm/kenlm_entity_4gram.bin"

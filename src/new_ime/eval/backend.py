@@ -1,76 +1,61 @@
 """Backend factory。
 
 cfg.model.type で dispatch する:
-  ctc-nat   -> CTCNATBackend (Suiko-v1-small 系、ckpt + tokenizer)
+  ctc-nat   -> RustEngineBackend (Suiko: ONNX artifact + Rust daemon)
   zenz-v2.5 -> ZenzV2Backend (HF GPT2)
   zenz-v3.1 -> ZenzV2Backend (同 backend、異なる weight)
   jinen-v1  -> JinenV1Backend (HF AutoModelForCausalLM)
 
-具体的な model / tokenizer / decode は archive/pre-v2 から verbatim
-port した module を呼び出す。
+Suiko 推論は Rust runtime (new-ime-engine-cli) に閉じる。Python 側に
+推論ロジックは持たない。外部 baseline は HF Transformers のまま。
 """
 from __future__ import annotations
 
 from typing import List
 
 from new_ime.config.bench import BenchConfig
-from new_ime.eval._ctc_nat_backend_legacy import CTCNATBackend as _LegacyCTCNATBackend
+from new_ime.eval.rust_engine_backend import RustEngineBackend
 
 
 class CTCNATBackend:
-    """BenchConfig -> 既存 CTCNATBackend のアダプタ。
+    """BenchConfig -> RustEngineBackend の薄いアダプタ。
 
-    decode mode マッピング:
-        greedy -> beam_width=1
-        beam   -> beam_width=cfg.decode.num_beams
-    KenLM 設定は cfg.lm から渡す (single / MoE)。
+    runtime / artifact_format は RustEngineBackend から伝播。
     """
+
+    runtime: str = "rust-engine-daemon"
 
     def __init__(self, cfg: BenchConfig) -> None:
         assert cfg.model.type == "ctc-nat"
         self.name = cfg.run.name
-        beam_width = (
-            1 if cfg.decode.mode == "greedy" else int(cfg.decode.num_beams)
-        )
-
-        # KenLM shallow fusion を legacy backend の lm_* kwargs に流し込む
-        lm_kwargs: dict = {}
-        if cfg.lm is not None:
-            if cfg.lm.mode == "single":
-                lm_kwargs.update(
-                    lm_path=str(cfg.lm.path),
-                    lm_alpha=float(cfg.lm.alpha),
-                    lm_beta=float(cfg.lm.beta),
-                    lm_gate_min_conf=float(cfg.lm.gate_min_conf),
-                )
-            else:  # moe
-                lm_kwargs.update(
-                    lm_paths_by_domain={
-                        k: str(v) for k, v in (cfg.lm.paths_by_domain or {}).items()
-                    },
-                    lm_alpha=float(cfg.lm.alpha),
-                    lm_beta=float(cfg.lm.beta),
-                    lm_gate_min_conf=float(cfg.lm.gate_min_conf),
-                )
-
-        self._inner = _LegacyCTCNATBackend(
-            checkpoint_path=str(cfg.model.checkpoint),
-            device=cfg.device.backend,
-            beam_width=beam_width,
-            beam_top_k=int(cfg.decode.top_k),
-            name=cfg.run.name,
-            **lm_kwargs,
-        )
+        self._inner = RustEngineBackend(cfg)
+        self.artifact_format: str = self._inner.artifact_format
 
     def convert(self, reading: str, context: str) -> List[str]:
         return self._inner.convert(reading, context)
 
+    @property
+    def last_engine_ms(self) -> float:
+        return self._inner.last_engine_ms
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def __enter__(self) -> "CTCNATBackend":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
 
 class _HfBackendAdapter:
     """HF backend (zenz / jinen) のアダプタ。BenchConfig 経由で生成し、
-    cfg.run.name を ConversionBackend.name にする。convert() は legacy
-    実装 (verbatim port) にそのまま委譲。
+    cfg.run.name を ConversionBackend.name にする。convert() は
+    legacy 実装 (verbatim port) にそのまま委譲。
     """
+
+    runtime: str = "python-hf"
+    artifact_format: str = "hf-pytorch"
 
     def __init__(self, inner, name: str) -> None:
         self._inner = inner

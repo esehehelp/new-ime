@@ -38,7 +38,7 @@ def estimate_training_memory(
     seq_len: int,
     bytes_per_param: int = 4,
     optimizer_factor: int = 2,
-    activation_factor: float = 16.0,
+    activation_factor: float = 2.5,
 ) -> MemoryEstimate:
     """Coarse breakdown for AdamW + fp32 transformer training.
 
@@ -46,9 +46,10 @@ def estimate_training_memory(
         params + optimizer states).
     optimizer_factor: AdamW keeps 2 moments per param (m, v). 2 means
         each is the same dtype as params.
-    activation_factor: heuristic GiB per (M params * batch * seq /
-        1e6) — calibrated against pre-v2 measurements for transformer
-        training at fp32.
+    activation_factor: heuristic GiB per (B params * batch * seq / 128).
+        The default is calibrated against the one-step measured peak path
+        for the current CTC-NAT stack under mixed precision. It is still a
+        coarse warning signal, not a capacity planner.
     """
     n_params = _param_count(model)
     params_gb = n_params * bytes_per_param / _BYTES_PER_GB

@@ -149,9 +149,10 @@ impl EngineSession {
         let tokenizer = SharedCharTokenizer::load_vocab_hex_tsv(&tsv_path)
             .with_context(|| format!("load tokenizer vocab {}", tsv_path.display()))?;
 
+        let intra_threads = env_usize("NEWIME_ORT_INTRA_THREADS", 4);
         let proposal_session = Session::builder()
             .map_err(ort_err)?
-            .with_intra_threads(4)
+            .with_intra_threads(intra_threads)
             .map_err(ort_err)?
             .commit_from_file(onnx_path)
             .map_err(ort_err)?;
@@ -287,8 +288,9 @@ impl EngineSession {
         );
 
         // Dedup decoded strings (beam can end with the same text via
-        // different token paths) and cap at `max_candidates` — the wider
-        // internal beam is for recall; the UI still wants a compact list.
+        // different token paths), filter out candidates whose kana
+        // structure can't be aligned to the input reading (see
+        // `validate::validate_candidate`), and cap at `max_candidates`.
         let mut out: Vec<String> = Vec::with_capacity(self.max_candidates);
         let mut seen = std::collections::HashSet::new();
         for h in hyps {
@@ -296,17 +298,41 @@ impl EngineSession {
                 break;
             }
             let text = normalize_candidate(&self.tokenizer.decode(&h.tokens));
-            if !text.is_empty() && seen.insert(text.clone()) {
+            if text.is_empty() {
+                continue;
+            }
+            if !crate::validate::validate_candidate(reading, &text) {
+                continue;
+            }
+            if seen.insert(text.clone()) {
                 out.push(text);
+            }
+        }
+        // Fallback: if every beam candidate failed validation, surface the
+        // raw reading as both hiragana and katakana so the user still has
+        // something to pick from instead of a blank candidate list.
+        if out.is_empty() {
+            out.push(reading.to_string());
+            let kata = crate::validate::hira_to_kata(reading);
+            if kata != reading {
+                out.push(kata);
             }
         }
         Ok(out)
     }
 
     pub fn run_proposal(&mut self, context: &str, reading: &str) -> Result<ProposalOutput> {
-        let (ids, mask, actual) = self.encode(context, reading);
-        let ids_arr = Array2::<i64>::from_shape_vec((1, self.seq_len), ids)?;
-        let mask_arr = Array2::<i64>::from_shape_vec((1, self.seq_len), mask)?;
+        let (mut ids, mut mask, actual) = self.encode(context, reading);
+        // Proposal ONNX is exported with a dynamic seq dim; trim padding
+        // before the forward pass so ORT only computes the actual T
+        // tokens. Feeding the full self.seq_len padded tensor would force
+        // 128-token compute on every short prompt (~3-5x slower for the
+        // typical IME input length). Refiner ONNX is fixed-shape and
+        // padded by run_refiner separately.
+        ids.truncate(actual);
+        mask.truncate(actual);
+        let ids_arr = Array2::<i64>::from_shape_vec((1, actual), ids)?;
+        let mask_arr = Array2::<i64>::from_shape_vec((1, actual), mask)?;
 
         let ids_tensor = Tensor::from_array(ids_arr).map_err(ort_err)?;
         let mask_tensor = Tensor::from_array(mask_arr).map_err(ort_err)?;

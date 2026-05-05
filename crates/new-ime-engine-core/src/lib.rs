@@ -14,6 +14,7 @@ pub mod beam;
 pub mod kenlm;
 pub mod session;
 pub mod tokenizer;
+pub mod validate;
 
 pub use beam::{prefix_beam_search, BeamHypothesis};
 pub use kenlm::{KenLM, KenLMCharScorer};

@@ -17,10 +17,31 @@ use std::sync::Mutex;
 
 use anyhow::{anyhow, Result};
 
+// The KenLM C shim is built and linked when build.rs finds the static
+// libraries (Windows MSVC: kenlm.lib + kenlm_util.lib, Linux gnu:
+// libkenlm.a + libkenlm_util.a). On platforms / configurations where the
+// libs are missing, build.rs skips the shim build and `has_kenlm` is not
+// set; the stub variants below take over so the engine still compiles
+// and runs CTC-only. Bench configs that depend on KenLM are silently
+// downgraded (KenLM::load returns an error) in that case.
+#[cfg(has_kenlm)]
 unsafe extern "C" {
     fn kenlm_shim_load(path: *const c_char) -> *mut c_void;
     fn kenlm_shim_free(handle: *mut c_void);
     fn kenlm_shim_score(handle: *mut c_void, utf8: *const c_char, len: usize) -> f32;
+}
+
+#[cfg(not(has_kenlm))]
+unsafe fn kenlm_shim_load(_path: *const c_char) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+#[cfg(not(has_kenlm))]
+unsafe fn kenlm_shim_free(_handle: *mut c_void) {}
+
+#[cfg(not(has_kenlm))]
+unsafe fn kenlm_shim_score(_handle: *mut c_void, _utf8: *const c_char, _len: usize) -> f32 {
+    0.0
 }
 
 /// Trait shared by the single-model scorer and the MoE mixture so the beam

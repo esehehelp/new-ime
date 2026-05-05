@@ -10,9 +10,7 @@ out_dir = "results/bench/suiko-v1-small-kenlm-6gram-q8-moe"
 
 [model]
 type = "ctc-nat"
-checkpoint = "checkpoints/suiko-v1-small/checkpoint_step_100000.pt"
-tokenizer  = "checkpoints/suiko-v1-small/checkpoint_step_100000_tokenizer.json"
-preset = "phase3_30m"
+onnx = "models/onnx/suiko-v1-small-step100000.int8.onnx"
 
 [decode]
 mode = "beam"

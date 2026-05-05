@@ -1,0 +1,15 @@
+[package]
+name = "new-ime-engine-cli"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "new-ime-engine-cli"
+path = "src/main.rs"
+
+[dependencies]
+new-ime-engine-core = { path = "../new-ime-engine-core" }
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true

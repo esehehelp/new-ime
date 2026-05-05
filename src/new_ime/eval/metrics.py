@@ -3,10 +3,22 @@
 Compatible with the pre-v2 implementation in
 `legacy/python/models/src/eval/metrics.py` (see archive/pre-v2). Output
 field names are preserved so downstream JSON consumers do not break.
+
+NFKC variant: AJIMEE-Bench's "実運用上の値" (Acc@1 NFKC) compares NFKC-
+normalised candidate against NFKC-normalised reference. Half-width vs
+full-width digits / katakana are unified, which catches ~5pt of EM that
+the raw match misses for typical IME outputs. `nfkc_normalize` is the
+single normalisation used; runner.py computes both raw and NFKC numbers
+in one pass.
 """
 from __future__ import annotations
 
+import unicodedata
 from typing import Dict, List
+
+
+def nfkc_normalize(s: str) -> str:
+    return unicodedata.normalize("NFKC", s)
 
 
 def edit_distance(a: str, b: str) -> int:

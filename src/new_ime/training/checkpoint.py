@@ -5,7 +5,7 @@ vocab_size, use_cvae, arch_tag) are pulled from `model.checkpoint_metadata()`
 so adding new architectures (AR / DAT) requires no change here.
 
 A tokenizer sidecar `<ckpt_stem>_tokenizer.json` is written next to the
-.pt blob. CTCNATBackend in eval/_ctc_nat_backend_legacy.py and the resume
+.pt blob. The export pipeline (scripts/export_onnx.py) and the resume
 path both rely on this exact naming.
 
 `rolling_keep(out_dir, keep_last_k)` deletes old `checkpoint_step_<N>.pt`

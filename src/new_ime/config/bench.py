@@ -1,10 +1,13 @@
 """Benchmark の TOML schema。protocol は docs/benchmark.md。
 
 Backend 種別は `[model] type` で分岐:
-    type = "ctc-nat"   : Suiko 系 (ckpt + tokenizer + preset)
+    type = "ctc-nat"   : Suiko 系 (ONNX artifact + vocab.hex.tsv、Rust engine 経由)
     type = "zenz-v2.5" : zenz GPT2 ファミリ (HF directory or Hub ID)
     type = "zenz-v3.1" : 同上 (異なる weight、backend 同じ)
     type = "jinen-v1"  : jinen Causal LM (HF AutoModel)
+
+ctc-nat は Rust runtime (new-ime-engine-cli daemon) を subprocess で
+叩く。Python 側に推論ロジックは持たない。
 """
 from __future__ import annotations
 
@@ -24,12 +27,15 @@ class RunSection(_Strict):
 
 
 class CtcNatModelSection(_Strict):
-    """CTC-NAT (Suiko 系) モデル設定。preset は ckpt の preset field と合わせる。"""
+    """CTC-NAT (Suiko 系) モデル設定。
+
+    artifact は scripts/export_onnx.py が出力する ONNX + vocab.hex.tsv を
+    指す。Rust engine (new-ime-engine-cli) がそのまま読む形式。
+    """
 
     type: Literal["ctc-nat"] = "ctc-nat"
-    checkpoint: Path
-    tokenizer: Path
-    preset: Literal["phase3_20m", "phase3_30m", "phase3_90m"]
+    onnx: Path
+    vocab: Optional[Path] = None  # None = engine が onnx 隣の sidecar を自動解決
 
 
 class HfModelSection(_Strict):
@@ -97,6 +103,19 @@ class LmSection(_Strict):
         return self
 
 
+class EngineSection(_Strict):
+    """Rust engine binary の上書き設定 (ctc-nat 専用、任意)。
+
+    binary 未指定時は `NEW_IME_ENGINE_BIN` env、続いて
+    `build/{release,debug}/new-ime-engine-cli` を順に解決する。
+    artifact_format は filename からの自動判定 (".int8" 含むかどうか) を
+    上書きしたい時のみ指定。
+    """
+
+    binary: Optional[Path] = None
+    artifact_format: Optional[Literal["fp32", "int8"]] = None
+
+
 class BenchConfig(_Strict):
     run: RunSection
     model: ModelSection
@@ -104,3 +123,4 @@ class BenchConfig(_Strict):
     benches: Dict[str, Path]  # bench name -> dataset path
     device: DeviceSection = DeviceSection()
     lm: Optional[LmSection] = None
+    engine: Optional[EngineSection] = None

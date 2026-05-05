@@ -7,8 +7,15 @@ Output layout (matches `crates/new-ime-engine-core/src/session.rs::derive_*`):
     <out_dir>/<name>.fp32.tokenizer.json.vocab.hex.tsv
 
 The exported graph wraps `CTCNAT.proposal_logits` so its single output `logits`
-(shape [1, T, V]) is what the Rust engine reads. Inputs are fixed (1, 128) i64
-`input_ids` / `attention_mask` to match `EngineSession::run_proposal`.
+(shape [1, T, V]) is what the Rust engine reads. Inputs are i64
+`input_ids` / `attention_mask` of shape (1, T) where T is dynamic.
+
+Why dynamic T: with a fixed seq_len=128 export, ORT pays full 128-token
+compute even for short prompts (typical IME readings are 5-30 chars).
+Probe_v3 latency was ~3x higher than legacy PyTorch greedy under fixed
+shape. The legacy TorchScript export path constant-folds seq_len=128
+inside nn.MultiheadAttention reshape; switching to `dynamo=True` forces
+torch.export which preserves seq_len as a symbolic dimension.
 
 Usage:
     uv run --with onnx --with onnxruntime python scripts/export_onnx.py \
@@ -118,8 +125,12 @@ def main() -> None:
         output_names=["logits"],
         opset_version=args.opset,
         do_constant_folding=True,
-        dynamic_axes=None,  # fixed (1, seq_len) — matches Rust EngineSession
-        dynamo=False,
+        dynamic_axes={
+            "input_ids": {1: "seq"},
+            "attention_mask": {1: "seq"},
+            "logits": {1: "seq"},
+        },
+        dynamo=True,
     )
 
     print(f"[2/3] write vocab hex TSV → {tsv_path}")
