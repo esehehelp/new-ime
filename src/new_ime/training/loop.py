@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import torch
+from tqdm import tqdm
 
 
 @dataclass
@@ -167,6 +168,21 @@ def run_loop(
     interrupted = False
     stopped_via_file = False
 
+    # tqdm progress bar over optimizer steps (not microbatches). Output to
+    # stderr so stdout-redirected log files capture only the [train]/[eval]
+    # lines while the terminal sees a live bar; use `tqdm.write()` for any
+    # in-loop logs to avoid tearing the bar.
+    pbar_total = max(0, int(max_steps) - int(start_step))
+    pbar = tqdm(
+        total=pbar_total,
+        initial=0,
+        dynamic_ncols=True,
+        mininterval=1.0,
+        smoothing=0.1,
+        desc=f"train step {step}",
+        leave=True,
+    )
+
     with _SignalCatcher() as catcher:
         iterator = iter(loader)
         micro_idx = 0
@@ -222,6 +238,8 @@ def run_loop(
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             step += 1
+            pbar.update(1)
+            pbar.set_description(f"train step {step}")
 
             if step % log_every == 0 or step == max_steps:
                 avg = accum_loss / grad_accum
@@ -236,6 +254,9 @@ def run_loop(
                 history.append(rec)
                 if on_log is not None:
                     on_log(rec)
+                # Surface latest loss/lr/rate on the tqdm bar without redrawing
+                # noisy text inside the loop. Postfix re-renders on next refresh.
+                pbar.set_postfix(loss=f"{avg:.4f}", lr=f"{lr:.2e}", rate=f"{sps:.2f}/s")
             accum_loss = 0.0
 
             eval_due = eval_every > 0 and on_eval is not None and step % eval_every == 0
@@ -249,6 +270,8 @@ def run_loop(
             ):
                 on_checkpoint(step, last_eval)
                 last_checkpointed_step = step
+
+    pbar.close()
 
     if (
         (interrupted or stopped_via_file)
