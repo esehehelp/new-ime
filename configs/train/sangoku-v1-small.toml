@@ -1,0 +1,97 @@
+# Sangoku-v1-small: 第一の DAT 本走 config (= Sangoku 系統 v1)。
+# Suiko (水滸 = CTC-NAT 系統) の suiko-v1.x と並走、同 mix・同 tokenizer・
+# 同 size 帯 (phase3_30m) で kana→kanji の multi-modality (homophone) 緩和
+# 効果を比較する。
+#
+# 命名:
+#   - 系統名 Sangoku (三国) は arch (DAT) ベースの系列識別子
+#   - v1 = 本系統の第一回本走、small = phase3_30m 帯の size tag
+#
+# 設計判断:
+#   - upsample_scale=4: kana→kanji は target/source ≈ 1.0-1.2 帯。reference
+#     default 8 は overkill。4 でも DAG vertex 数が target の 4 倍 = ample.
+#   - glat_p "0.5:0.1@40k": 100k step 学習想定で、序盤 40k で glance 率 50→10%
+#     にアニーリング。reference の 0.5:0.1@200k より圧縮 (本タスク短い).
+#   - decode_strategy="lookahead": greedy (速) と viterbi (精) の中間。bench
+#     接続 stage 後に viterbi も比較する。
+#   - num_link_heads=4: phase3_30m の num_heads=6 とは独立。link-mixing は
+#     transition 専用 head なので少なめで十分。
+#   - [refine] は incompatible (run.py で error). DAT は 1 segment loss。
+#
+# 中断再開: kill switch (touch STOP) で安全停止。 [resume] をコメント解除。
+
+[run]
+name = "sangoku-v1-small"
+seed = 60
+out_dir = "checkpoints/sangoku-v1-small"
+
+# [resume]
+# checkpoint = "checkpoints/sangoku-v1-small/checkpoint_step_20000.pt"
+# reset_optimizer = false
+# reset_scheduler = false
+# reset_best_metric = false
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "dat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 32
+eval_batch_size = 32
+# DAT decoder activates over T_up = T_in * 4 positions, so memory grows
+# linearly with upsample_scale. batch 32 + grad_accum 4 = effective 128
+# at 5090-class VRAM headroom; tighten further if OOM on smaller cards.
+grad_accum = 4
+max_steps = 100000
+fp16 = false
+bf16 = true
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 500
+eval_every = 4000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 3
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[dat]
+upsample_scale = 4
+glat_p = "0.5:0.1@40k"
+glance_strategy = "number-random"
+max_transition_length = -1
+links_feature = "feature:position"
+num_link_heads = 4
+loss_factor = 1.0
+label_smoothing = 0.0
+decode_strategy = "lookahead"
+decode_beta = 1.0
+decode_viterbibeta = 1.0
+decode_upsample_scale = 4.0

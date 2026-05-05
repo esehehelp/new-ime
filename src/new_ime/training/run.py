@@ -80,16 +80,33 @@ def _resolve_amp_dtype(cfg: TrainConfig, device: torch.device) -> torch.dtype | 
 
 
 def _build_model(cfg: TrainConfig, vocab_size: int) -> torch.nn.Module:
-    if cfg.model.arch != "ctc-nat":
-        raise NotImplementedError(
-            f"arch={cfg.model.arch!r} not implemented in v1.0 "
-            "(only ctc-nat ships; ar / dat scaffolding only)"
+    if cfg.model.arch == "ctc-nat":
+        return CTCNAT.from_preset(
+            cfg.model.preset,
+            vocab_size=vocab_size,
+            use_cvae=cfg.model.use_cvae,
+            max_positions=cfg.model.max_seq_len,
         )
-    return CTCNAT.from_preset(
-        cfg.model.preset,
-        vocab_size=vocab_size,
-        use_cvae=cfg.model.use_cvae,
-        max_positions=cfg.model.max_seq_len,
+    if cfg.model.arch == "dat":
+        from new_ime.model.dat import DAT
+
+        if cfg.refine is not None:
+            raise ValueError(
+                "[refine] is CTC-NAT-specific and incompatible with arch=dat; "
+                "remove the [refine] section or switch arch to ctc-nat"
+            )
+        if cfg.dat is None:
+            raise ValueError("arch=dat requires a [dat] section in the TOML")
+        return DAT.from_preset(
+            cfg.model.preset,
+            vocab_size=vocab_size,
+            upsample_scale=cfg.dat.upsample_scale,
+            num_link_heads=cfg.dat.num_link_heads,
+            max_positions=cfg.model.max_seq_len,
+        )
+    raise NotImplementedError(
+        f"arch={cfg.model.arch!r} not implemented in v1.0 "
+        "(supported: ctc-nat, dat)"
     )
 
 
@@ -306,6 +323,10 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         aux_loss_fns.append(
             build_refine_loss_fn(cfg.refine, mask_id=tokenizer.mask_id)
         )
+    if cfg.dat is not None:
+        from new_ime.training.loss.dat import build_dat_loss_fn
+
+        aux_loss_fns.append(build_dat_loss_fn(cfg.dat))
     if cfg.kd is not None:
         from new_ime.training.loss.kd import build_kd_loss_fn
         from new_ime.training.teacher import build_teacher
@@ -471,6 +492,13 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
                 warmup_steps=cfg.loop.warmup_short_sample_steps,
                 short_max_chars=cfg.loop.short_sample_max_chars,
             )
+        # DAT GLAT schedule: feed the annealed glance ratio into the model
+        # so its forward(...) decides whether to run the 2-stage GLAT path.
+        if cfg.dat is not None and hasattr(raw_model, "set_glance_ratio"):
+            from new_ime.training.loss.dat import parse_anneal
+
+            ratio = parse_anneal(cfg.dat.glat_p, step)
+            raw_model.set_glance_ratio(ratio)
 
     result = run_loop(
         model=model,

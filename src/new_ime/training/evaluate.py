@@ -70,8 +70,12 @@ def evaluate_model(
         if has_blank and "logits" in outputs:
             argmax = outputs["logits"].argmax(dim=-1)
             valid = batch["attention_mask"].bool()
-            blank_count += int(((argmax == blank_id) & valid).sum().item())
-            blank_total += int(valid.sum().item())
+            # Some archs (DAT) emit logits over an upsampled length; the
+            # CTC-NAT-style blank fraction only makes sense when the time
+            # axis matches the source attention mask. Skip cleanly otherwise.
+            if argmax.shape == valid.shape:
+                blank_count += int(((argmax == blank_id) & valid).sum().item())
+                blank_total += int(valid.sum().item())
 
         if has_greedy:
             decoded = model.greedy_decode(
@@ -115,8 +119,7 @@ def evaluate_probe_em1(
     """Greedy-decode each probe item and compute EM1 against its references.
 
     Probe items are `BenchItem` instances from `eval/loaders.py:load_bench`,
-    with `reading`, `context`, `references` (list[str]) attributes. Per-item
-    encoding mirrors `eval/_ctc_nat_backend_legacy.py:_decode_one`.
+    with `reading`, `context`, `references` (list[str]) attributes.
     """
     was_training = model.training
     model.eval()

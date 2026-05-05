@@ -1,0 +1,96 @@
+# Suiko-v1.15c-small: refine 完全 off (loss_weight=0)。speed 最大化版。
+#
+# 対象環境: local RTX 3060 (Ampere, 12 GiB)。
+# v1.15(b) で rate 1.65 step/s 止まり、過去 baseline 比 x1.7 遅。原因は
+# 毎 step の refine forward + 3 部 loss + backward。
+#
+# 推論側調査結果:
+#   - eval/runner.py + rust_engine_backend は default greedy CTC のみ
+#   - Rust engine の refiner path は `enable_refiner: false` (off by default)
+#   - bench (= 評価出口) は greedy CTC で測定 → refine head の質寄与は無
+#   - refine 3 部 loss は encoder regularization 用途のみ
+#
+# 中庸 (throttle 等) は学習信号歪めるだけ。on か off の二択 → off を選択。
+#
+# v1.15(b) → v1.15c 差分:
+#   - refine.loss_weight 0.7 → 0.0  (refine 3 部 loss 完全 off、refine.py で
+#     weight<=0 早期 return。refine forward / backward 一切走らない)
+#   - 他のハイパラは v1.15b と同一
+#
+# 期待効果: rate 1.65 → 2.7-3.0 step/s (refine 計算消滅で過去 baseline 並み)。
+# 質: dev EM1 / probe EM1 (= greedy CTC) は v1.15(b) と同等以上の収束想定
+# (refine 勾配が encoder にもたらす regularization が無くなる影響を観察)。
+#
+# 戻したくなったら loss_weight を 0.7 に戻すだけ。code 変更不要。
+#
+# 中断再開: v1.15(b) を kill 後 ckpt を [resume].checkpoint に張替。
+# 暫定で v1.14 step 23783 から (v1.15(b) と同始点)。
+
+[run]
+name = "suiko-v1.15c-small"
+seed = 56
+out_dir = "checkpoints/suiko-v1.15c-small"
+
+[resume]
+checkpoint = "checkpoints/suiko-v1.14-small/checkpoint_step_23783.pt"
+reset_optimizer = false
+reset_scheduler = false
+reset_best_metric = false
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 100000
+fp16 = true
+bf16 = false
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 500
+eval_every = 4000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 3
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+loss_weight = 0.0
+warmup_steps = 3000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+refine_iterations = 1
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1

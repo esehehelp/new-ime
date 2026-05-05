@@ -17,7 +17,7 @@ new-ime/
 ├── results/        bench 結果 (TOML out_dir で生成、untracked)
 ├── scripts/        bench 補助 (_uv_env.sh, _canonical_compare.py, ...)
 └── docs/
-    └── benchmark.md   ← bench protocol。仕様の真はコード
+    └── benchmark.md   ← bench protocol
 ```
 
 ## Artifacts

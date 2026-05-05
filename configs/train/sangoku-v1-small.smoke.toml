@@ -1,0 +1,64 @@
+# Sangoku (三国) = DAT 系統の smoke 用 (CPU、10 step、tiny shard)。
+# 命名: Suiko (水滸) が CTC-NAT 系統、Sangoku (三国) が DAT 系統の総称。
+# v1 = 第一の本走系列、small = phase3_30m 帯の size tag。
+
+[run]
+name = "sangoku-v1-small.smoke"
+seed = 0
+out_dir = "checkpoints/sangoku-v1-small.smoke"
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 64
+max_context = 32
+use_cvae = false
+arch = "dat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 64
+max_dev_samples   = 16
+
+[optim]
+lr = 1e-4
+warmup_steps = 2
+schedule = "constant"
+lr_min_ratio = 1.0
+weight_decay = 0.0
+grad_clip = 1.0
+
+[loop]
+batch_size = 4
+eval_batch_size = 4
+grad_accum = 1
+max_steps = 10
+fp16 = false
+bf16 = false
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 1
+eval_every = 0
+checkpoint_every = 0
+keep_last_k = 0
+print_samples = 0
+
+[dat]
+upsample_scale = 4
+glat_p = "0.5:0.1@5"
+glance_strategy = "number-random"
+max_transition_length = -1
+links_feature = "feature:position"
+num_link_heads = 4
+loss_factor = 1.0
+label_smoothing = 0.0
+decode_strategy = "lookahead"
+decode_beta = 1.0
+decode_viterbibeta = 1.0
+decode_upsample_scale = 4.0

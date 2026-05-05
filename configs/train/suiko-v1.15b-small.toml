@@ -1,0 +1,89 @@
+# Suiko-v1.15b-small: v1.15 と同 arch・同 mix・同 ハイパラ。speed 用 config 微調整のみ。
+#
+# 対象環境: local RTX 3060 (Ampere, 12 GiB)。
+# v1.15 観測: rate 1.56 step/s、refine=1 戻し後も期待ほど伸びず → 3060 計算 bound +
+# bf16 kernel が consumer Ampere で fp16 ほど最適化されてない疑い。
+#
+# v1.15 → v1.15b 差分 (config-only、コード変更なし):
+#   1. bf16 → fp16          (consumer Ampere で fp16 kernel 有利)
+#   2. eval_every 2000 → 4000   (eval 頻度半減)
+#   3. probe.every 2000 → 5000  (probe overhead 微減)
+#   4. max_dev_samples 2000 → 1000  (eval 1 回の cost 半減、CI ±0.01 で十分)
+#   5. print_samples 5 → 3   (sample greedy_decode 微減)
+#
+# 期待効果: rate 1.56 → 2.0+ step/s (15-30% 改善目安)。
+# 質への影響: best.pt 選択精度が若干低下 (probe 5000 step 毎)、early-stop 反応遅。
+#
+# 中断再開: v1.15 を kill switch で graceful 停止後、checkpoint_step_*.pt を
+# 下記 [resume] に張り替えるのが望ましい。現状 v1.15 の最新 ckpt がまだ無い
+# (next save=30000) ので暫定で v1.14 step 23783 を指す (v1.15 と同始点)。
+
+[run]
+name = "suiko-v1.15b-small"
+seed = 55
+out_dir = "checkpoints/suiko-v1.15b-small"
+
+[resume]
+# v1.15 を kill 後にその ckpt に張り替えるべき。現状暫定 = v1.15 と同始点。
+checkpoint = "checkpoints/suiko-v1.14-small/checkpoint_step_23783.pt"
+reset_optimizer = false
+reset_scheduler = false
+reset_best_metric = false
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 100000
+fp16 = true
+bf16 = false
+compile = false
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 500
+eval_every = 4000
+checkpoint_every = 10000
+keep_last_k = 5
+print_samples = 3
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+loss_weight = 0.7
+warmup_steps = 3000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+refine_iterations = 1
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1

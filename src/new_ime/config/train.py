@@ -118,6 +118,25 @@ class RefineSection(_Strict):
     stop_loss_weight: float = 0.1
 
 
+class DatSection(_Strict):
+    """DA-Transformer (DAT) hyperparameters. Optional — only consumed when
+    `model.arch == "dat"`. Mutually exclusive with `[refine]` (which is
+    CTC-NAT-specific)."""
+
+    upsample_scale: int = 4
+    glat_p: str = "0.5:0.1@100k"
+    glance_strategy: Literal["number-random", "none"] = "number-random"
+    max_transition_length: int = -1  # -1 = full square (only mode supported in v1.0)
+    links_feature: Literal["feature", "feature:position"] = "feature:position"
+    num_link_heads: int = 4
+    loss_factor: float = 1.0
+    label_smoothing: float = 0.0
+    decode_strategy: Literal["greedy", "lookahead", "viterbi"] = "lookahead"
+    decode_beta: float = 1.0
+    decode_viterbibeta: float = 1.0
+    decode_upsample_scale: float = 4.0
+
+
 class KdSection(_Strict):
     teacher_type: Literal["ctc", "ar", "seq2seq"]
     teacher_path: Path
@@ -148,3 +167,4 @@ class TrainConfig(_Strict):
     probe: Optional[ProbeSection] = None
     refine: Optional[RefineSection] = None
     kd: Optional[KdSection] = None
+    dat: Optional[DatSection] = None
