@@ -523,6 +523,8 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         grad_accum=cfg.loop.grad_accum,
         grad_clip=cfg.optim.grad_clip,
         log_every=cfg.logging.log_every,
+        early_log_every=cfg.logging.early_log_every,
+        early_log_steps=cfg.logging.early_log_steps,
         amp_dtype=amp_dtype,
         aux_loss_fns=aux_loss_fns,
         eval_every=cfg.logging.eval_every,

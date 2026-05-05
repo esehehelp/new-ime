@@ -85,6 +85,12 @@ class LoggingSection(_Strict):
     checkpoint_every: int = 10000
     keep_last_k: int = 5
     print_samples: int = 5
+    # Adaptive log cadence (port of Rust-train's early_log pattern). For the
+    # first `early_log_steps` optimizer steps, log every `early_log_every`
+    # steps so initial loss / rate / blank-fraction is visible at high
+    # resolution. Set `early_log_every = 0` to disable (use only `log_every`).
+    early_log_every: int = 10
+    early_log_steps: int = 200
 
 
 class ResumeSection(_Strict):

@@ -1,0 +1,75 @@
+# Suiko-v1.17-small: 最小構成 CTC-NAT。Phase 1 全機能を捨てて、scaling 則の
+# 速い適応を目的とした clean baseline。
+#
+# 設計:
+#   - Fresh init (no [resume]) — scaling baseline として再現可能
+#   - [refine] / [kd] / [deep_supervision] / [cvae] 全部 OFF
+#   - compile=true — 1.5-2x speedup 可能性、3060 で再試行
+#   - cosine_warm_restarts は維持 (速度コストほぼ無、長期 train 用)
+#   - logging adaptive: 序盤 200 step は 10 step ごと、以降 100 step ごと
+#     (Rust-train の early_log pattern を Python-train に port)
+#   - probe / eval / checkpoint cadence は探索向けに緩めに (file I/O 削減)
+#   - print_samples=0 (探索中は decode 表示無し)
+#
+# 期待 step rate: 2 step/s (= baseline 維持) + compile=true で 2.5-3 step/s。
+# 1 epoch (~7600 step at eff 128 over 500m token) ≈ 50 分。100k step ≈ 14h。
+#
+# 後継 v1.18 以降で機能追加する際は、本 config からの差分で計測する。
+
+[run]
+name = "suiko-v1.17-small"
+seed = 70
+out_dir = "checkpoints/suiko-v1.17-small"
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine_warm_restarts"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+lr_restart_period = 60000
+lr_restart_decay = 0.85
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 100000
+fp16 = true
+bf16 = false
+compile = true
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+# adaptive log cadence: 序盤 high-resolution + 以降 regular
+log_every = 100
+early_log_every = 10
+early_log_steps = 300
+eval_every = 20000
+checkpoint_every = 20000
+keep_last_k = 3
+print_samples = 0
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 20000
+limit = 0
+metric_priority = "probe_em1"

@@ -143,6 +143,8 @@ def run_loop(
     grad_accum: int = 1,
     grad_clip: float = 1.0,
     log_every: int = 100,
+    early_log_every: int = 0,
+    early_log_steps: int = 0,
     amp_dtype: torch.dtype | None = None,
     aux_loss_fns: list[Callable[[torch.nn.Module, dict, dict, int], dict]] | None = None,
     eval_every: int = 0,
@@ -241,7 +243,16 @@ def run_loop(
             pbar.update(1)
             pbar.set_description(f"train step {step}")
 
-            if step % log_every == 0 or step == max_steps:
+            # Adaptive log cadence: high-resolution during the first
+            # `early_log_steps` (so initial blank-collapse / loss curves are
+            # visible at fine grain), regular `log_every` afterwards.
+            regular_log_due = log_every > 0 and step % log_every == 0
+            early_log_due = (
+                early_log_every > 0
+                and step <= early_log_steps
+                and step % early_log_every == 0
+            )
+            if regular_log_due or early_log_due or step == max_steps:
                 avg = accum_loss / grad_accum
                 lr = scheduler.get_last_lr()[0]
                 now = time.monotonic()
