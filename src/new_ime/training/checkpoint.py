@@ -83,7 +83,29 @@ def load(
     """Load weights into model and optionally optimizer/scheduler. Returns the blob."""
     path = Path(path)
     blob = torch.load(path, map_location=map_location, weights_only=False)
-    model.load_state_dict(blob["model_state_dict"])
+    # strict=False: new aux modules added after this checkpoint was written
+    # (Phase 1 introduced stop_log_temperature / remask_log_temperature, and
+    # future deep-supervision aux heads will be tied to the existing
+    # ctc_head so add no new params). Missing keys are initialized from the
+    # model's default; unexpected keys are warned but not fatal so we can
+    # still load older checkpoints.
+    missing, unexpected = model.load_state_dict(blob["model_state_dict"], strict=False)
+    if missing:
+        # Filter to params we know are safe to default-initialize.
+        safe_prefixes = (
+            "stop_log_temperature",
+            "remask_log_temperature",
+        )
+        truly_missing = [k for k in missing if not k.startswith(safe_prefixes)]
+        if truly_missing:
+            raise RuntimeError(
+                f"checkpoint missing required keys: {truly_missing}"
+            )
+    if unexpected:
+        print(
+            f"[checkpoint] WARNING: ignored unexpected keys in {path.name}: {unexpected}",
+            file=__import__("sys").stderr,
+        )
     if optimizer is not None and "optimizer_state_dict" in blob:
         optimizer.load_state_dict(blob["optimizer_state_dict"])
     if (

@@ -116,6 +116,14 @@ class RefineSection(_Strict):
     refine_source: Literal["target", "proposal"] = "target"
     remask_loss_weight: float = 0.1
     stop_loss_weight: float = 0.1
+    # GLAT-style hint leakage during training (Phase 1 γ). After building the
+    # masked hypothesis, run a no-grad refine pass and identify positions
+    # where the prediction misses the target; replace mask_token with the
+    # oracle id at `glance_ratio` × miss_count of those positions before the
+    # graded forward. Curriculum form `"0.3:0.1@40k"` (start:end@steps) — see
+    # `training/loss/dat.parse_anneal`. `"0.0"` disables.
+    glat_p: str = "0.0"
+    glance_strategy: Literal["number-random", "none"] = "number-random"
 
 
 class DatSection(_Strict):

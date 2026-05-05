@@ -147,6 +147,14 @@ class CTCNAT(nn.Module):
         # Sequence-level scalar: "refinement converged (argmax matches target
         # everywhere inside valid span)." Pooled via mean over valid positions.
         self.stop_head = nn.Linear(hidden_size, 1)
+        # Learnable temperature for calibrating stop / remask thresholds at
+        # inference time (Phase 1 η). Logits are divided by τ before sigmoid;
+        # the existing BCE loss in `training/loss/refine.py` propagates
+        # gradient to τ. Initialized to 1.0 (no scaling) — small log-τ L2
+        # regularization in `compute_aux_losses` discourages drift unless
+        # data demands it.
+        self.stop_log_temperature = nn.Parameter(torch.zeros(1))
+        self.remask_log_temperature = nn.Parameter(torch.zeros(1))
         self.blank_id = blank_id
         self.output_vocab_size = output_vocab_size
         self.cvae = (
@@ -189,6 +197,12 @@ class CTCNAT(nn.Module):
         if self.cvae is not None and "kl" in outputs:
             weight = float(getattr(self, "_cvae_kl_weight", 0.1))
             aux["cvae_kl"] = weight * outputs["kl"]
+        # Phase 1 η: L2 on log-τ keeps the stop/remask temperature near 1
+        # unless the BCE losses pull it. Tiny weight — should not dominate.
+        temp_l2_weight = float(getattr(self, "_temperature_l2_weight", 1e-3))
+        if temp_l2_weight > 0.0:
+            log_t = self.stop_log_temperature.pow(2).sum() + self.remask_log_temperature.pow(2).sum()
+            aux["temperature_l2"] = temp_l2_weight * log_t
         return aux
 
     def set_cvae_kl_weight(self, weight: float) -> None:
@@ -632,18 +646,38 @@ class CTCNAT(nn.Module):
             film_conditioning=proposal.get("film_conditioning"),
         )
         logits = self.refine_head(decoder_out)
-        remask_logits = self.remask_head(decoder_out).squeeze(-1)
+        # Temperature scaling: divide raw logit by exp(log_τ) so τ > 0 always.
+        # Inference threshold-at-0.5 on sigmoid(logit/τ) is equivalent to
+        # threshold-at-0 on (logit/τ), so changing τ moves the operating
+        # point. Training BCE supplies the calibration gradient.
+        remask_temperature = self.remask_log_temperature.exp()
+        remask_logits = self.remask_head(decoder_out).squeeze(-1) / remask_temperature
         valid = hypothesis_attention_mask.bool()
-        pooled = (decoder_out * valid.unsqueeze(-1)).sum(dim=1) / valid.sum(
-            dim=1
-        ).clamp(min=1).unsqueeze(-1)
-        stop_logit = self.stop_head(pooled).squeeze(-1)
+        # Phase 1 ζ: stop_head is now per-position. Each position predicts
+        # "this position is converged on the gold target" via BCE in
+        # `training/loss/refine.py`. Iterative inference stops when all
+        # valid positions have sigmoid(stop_logit) > threshold (any-position
+        # uncertainty → continue iterating). This replaces the previous
+        # mean-pool-then-scalar setup, which rarely fired and led to fixed
+        # max_iterations runs in practice.
+        stop_temperature = self.stop_log_temperature.exp()
+        stop_logits = self.stop_head(decoder_out).squeeze(-1) / stop_temperature
+        # Sequence-level stop scalar: aggregate per-position via masked min
+        # (most-uncertain position drives the decision). Kept under the same
+        # `stop_logit` key so existing iterative_refine inference still
+        # consumes a per-row scalar without code change.
+        masked_min = stop_logits.masked_fill(~valid, float("inf")).min(dim=1).values
+        stop_logit = masked_min
         result = {
             "encoder_out": proposal["encoder_out"],
             "encoder_padding_mask": proposal["encoder_padding_mask"],
             "decoder_out": decoder_out,
             "logits": logits,
             "remask_logits": remask_logits,
+            # Per-position stop logits — surfaced for the per-position BCE in
+            # training/loss/refine.py. Inference still consumes the scalar
+            # `stop_logit` (= masked min over valid positions).
+            "stop_logits": stop_logits,
             "stop_logit": stop_logit,
         }
         if "latent" in proposal:

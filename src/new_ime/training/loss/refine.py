@@ -39,6 +39,63 @@ def resolve_refine_mask_ratio(mask_ratio_min: float, mask_ratio_max: float) -> f
     return random.uniform(lo, hi)
 
 
+def _apply_glat_leak(
+    *,
+    model: torch.nn.Module,
+    proposal: dict,
+    hypothesis_ids: torch.Tensor,
+    hypothesis_attention_mask: torch.Tensor,
+    mask_positions: torch.Tensor,
+    target_ids: torch.Tensor,
+    glance_ratio: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """GLAT-style leak: run a no-grad refine pass, find masked positions
+    whose prediction misses the target, and replace mask_token with oracle
+    at `glance_ratio` × per-row miss_count of those positions.
+
+    Returns updated `(hypothesis_ids, mask_positions)`. Loss is still
+    computed only on positions where mask_positions is True after the
+    leak — leaked positions are treated as "given" and excluded from the
+    CE so the model focuses on the remaining masks.
+
+    Reference: DAT `_glance_hint_ids` (model/dat.py:370-430) — same
+    number-random strategy adapted to refine's masked-hypothesis setup.
+    """
+    if glance_ratio <= 0.0:
+        return hypothesis_ids, mask_positions
+
+    with torch.no_grad():
+        first_pass = model.refine_from_proposal(
+            proposal=proposal,
+            hypothesis_ids=hypothesis_ids,
+            hypothesis_attention_mask=hypothesis_attention_mask,
+        )
+        first_pred = first_pass["logits"].argmax(dim=-1)
+        missed = (first_pred != target_ids) & mask_positions
+
+    miss_count = missed.sum(dim=1)                                # (B,)
+    leak_count = ((miss_count.float() * glance_ratio) + 0.5).long()
+    if int(leak_count.max().item()) == 0:
+        return hypothesis_ids, mask_positions
+
+    rand = torch.rand_like(missed, dtype=torch.float)
+    rand = rand.masked_fill(~missed, -float("inf"))
+    sorted_rand, _ = rand.sort(dim=-1, descending=True)
+    idx = (leak_count - 1).clamp(min=0).unsqueeze(-1)             # (B, 1)
+    thresh = sorted_rand.gather(-1, idx).squeeze(-1)              # (B,)
+    # Rows with leak_count == 0 must accept no entries → push threshold to +inf.
+    thresh = torch.where(
+        leak_count == 0,
+        torch.full_like(thresh, float("inf")),
+        thresh,
+    )
+    leak_mask = (rand >= thresh.unsqueeze(-1)) & missed
+
+    hypothesis_ids = torch.where(leak_mask, target_ids, hypothesis_ids)
+    mask_positions = mask_positions & ~leak_mask
+    return hypothesis_ids, mask_positions
+
+
 def build_refinement_batch(
     target_ids: torch.Tensor,
     target_lengths: torch.Tensor,
@@ -128,6 +185,17 @@ def build_refine_loss_fn(
         last_refine_result = None
         first_refine_result = None
 
+        # GLAT schedule (Phase 1 γ). parse_anneal lives in dat.py since DAT
+        # also uses it; reuse to keep one source of truth.
+        glat_spec = getattr(cfg, "glat_p", "0.0")
+        glance_strategy = getattr(cfg, "glance_strategy", "none")
+        if glance_strategy == "number-random" and model.training:
+            from new_ime.training.loss.dat import parse_anneal
+
+            glance_ratio = parse_anneal(glat_spec, step)
+        else:
+            glance_ratio = 0.0
+
         for it in range(max(cfg.refine_iterations, 1)):
             mask_ratio = resolve_refine_mask_ratio(cfg.mask_ratio_min, cfg.mask_ratio_max)
             refinement = build_refinement_batch(
@@ -141,6 +209,20 @@ def build_refine_loss_fn(
             mask_positions = refinement["mask_positions"]
             valid_positions = refinement["valid_positions"]
             hypothesis_attention_mask = refinement["hypothesis_attention_mask"]
+
+            # GLAT leak — only on the first iteration (rest of the loop
+            # uses argmax-fill from prior iteration anyway, so leak there
+            # would be redundant).
+            if it == 0 and glance_ratio > 0.0:
+                hypothesis_ids, mask_positions = _apply_glat_leak(
+                    model=model,
+                    proposal=outputs,
+                    hypothesis_ids=hypothesis_ids,
+                    hypothesis_attention_mask=hypothesis_attention_mask,
+                    mask_positions=mask_positions,
+                    target_ids=target_ids,
+                    glance_ratio=glance_ratio,
+                )
 
             refine_result = model.refine_from_proposal(
                 proposal=outputs,
@@ -195,14 +277,27 @@ def build_refine_loss_fn(
             last_filled = torch.where(
                 first_mask_positions, last_argmax, first_hypothesis_ids
             )
-            row_correct = (
-                (last_filled == target_ids) | ~first_valid_positions
-            ).all(dim=1).float()
-            stop_bce = F.binary_cross_entropy_with_logits(
-                last_refine_result["stop_logit"],
-                row_correct,
-                reduction="mean",
-            )
+            # Phase 1 ζ: per-position stop BCE. Each position learns whether
+            # it is converged on the gold target. Use stop_logits (per-pos)
+            # if surfaced by the model; otherwise fall back to the scalar
+            # path for older model versions.
+            position_correct = (last_filled == target_ids).float()
+            if "stop_logits" in last_refine_result:
+                stop_logits = last_refine_result["stop_logits"]
+                bce = F.binary_cross_entropy_with_logits(
+                    stop_logits, position_correct, reduction="none"
+                )
+                denom = first_valid_positions.float().sum().clamp(min=1.0)
+                stop_bce = (bce * first_valid_positions.float()).sum() / denom
+            else:
+                row_correct = (
+                    (last_filled == target_ids) | ~first_valid_positions
+                ).all(dim=1).float()
+                stop_bce = F.binary_cross_entropy_with_logits(
+                    last_refine_result["stop_logit"],
+                    row_correct,
+                    reduction="mean",
+                )
             accum["stop_loss"] = cfg.stop_loss_weight * stop_bce
 
         return accum
