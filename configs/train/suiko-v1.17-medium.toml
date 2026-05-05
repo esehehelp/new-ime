@@ -1,0 +1,69 @@
+# Suiko-v1.17-medium: scaling 則 sweep の大端、phase3_90m。
+#
+# v1.17-small から preset を phase3_30m → phase3_90m に拡大、~3x params。
+# VRAM tight: 30m が peak ~8.4 GiB だったので 90m は 12 GiB 限界に近い。
+# 安全のため batch_size=32 grad_accum=4 で eff_batch=128 維持しつつ
+# 1 microbatch あたりの activation memory を半分に抑制。
+#
+# step rate は 30m の 0.5-0.7 倍想定 (compile=true で 1.0-1.5 step/s 期待)。
+# 100k step ≈ 18-28h。
+#
+# memory「90M は zenz-v2.5-small parity の必要最低」基準で残し置く。
+# 当 size での scaling 則 fit の右端 anchor。
+
+[run]
+name = "suiko-v1.17-medium"
+seed = 70
+out_dir = "checkpoints/suiko-v1.17-medium"
+
+[model]
+preset = "phase3_90m"
+max_seq_len = 128
+max_context = 32
+use_cvae = false
+arch = "ctc-nat"
+
+[data]
+train     = "datasets/mixes/student-v1.13-500m.kkc"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-jis-24k.json"
+max_train_samples = 0
+max_dev_samples   = 1000
+
+[optim]
+lr = 3e-4
+warmup_steps = 4000
+schedule = "cosine_warm_restarts"
+lr_min_ratio = 0.05
+weight_decay = 0.01
+grad_clip = 1.0
+lr_restart_period = 60000
+lr_restart_decay = 0.85
+
+[loop]
+batch_size = 32
+eval_batch_size = 32
+grad_accum = 4
+max_steps = 100000
+fp16 = true
+bf16 = false
+compile = true
+num_workers = 0
+warmup_short_sample_steps = 0
+short_sample_max_chars = 16
+tiny_overfit_samples = 0
+
+[logging]
+log_every = 100
+early_log_every = 10
+early_log_steps = 300
+eval_every = 20000
+checkpoint_every = 20000
+keep_last_k = 3
+print_samples = 0
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 20000
+limit = 0
+metric_priority = "probe_em1"
