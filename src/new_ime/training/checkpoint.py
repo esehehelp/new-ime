@@ -107,7 +107,20 @@ def load(
             file=__import__("sys").stderr,
         )
     if optimizer is not None and "optimizer_state_dict" in blob:
-        optimizer.load_state_dict(blob["optimizer_state_dict"])
+        try:
+            optimizer.load_state_dict(blob["optimizer_state_dict"])
+        except ValueError as e:
+            # Param-group size mismatch when the live model has more params
+            # than the saved checkpoint (e.g. Phase 1 added stop_log_temperature
+            # / remask_log_temperature; future phases will add more aux heads).
+            # Skip optimizer-state restoration in this case so the training
+            # restarts with fresh momentum on the new params; existing model
+            # weights are still loaded above so prior learning is preserved.
+            print(
+                f"[checkpoint] WARNING: optimizer state size mismatch in {path.name}; "
+                f"skipping optimizer load. Reason: {e}",
+                file=__import__("sys").stderr,
+            )
     if (
         scheduler is not None
         and blob.get("scheduler_state_dict") is not None
