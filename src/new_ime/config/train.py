@@ -137,6 +137,34 @@ class DatSection(_Strict):
     decode_upsample_scale: float = 4.0
 
 
+class DeepSupervisionSection(_Strict):
+    """Auxiliary CTC heads on intermediate decoder layers (Phase 1 β).
+
+    Each `layers[i]` is a 0-indexed decoder layer at which to apply the
+    shared `ctc_head` (after `final_norm`) and add a CTC loss with weight
+    `weights[i]`. Setting `layers=[]` (default) disables the path entirely
+    — model ignores the capture argument and inference cost is unchanged.
+
+    The heads themselves are NOT new parameters: we reuse the main
+    `ctc_head` (which is tied to the encoder embedding) so deep
+    supervision adds zero learnable params and only ~30% training cost.
+    """
+
+    layers: list[int] = []
+    weights: list[float] = []
+    warmup_steps: int = 0
+
+    @field_validator("weights")
+    @classmethod
+    def _len_match(cls, v: list[float], info) -> list[float]:
+        layers = info.data.get("layers", [])
+        if v and len(v) != len(layers):
+            raise ValueError(
+                f"deep_supervision.weights ({len(v)}) must match layers ({len(layers)})"
+            )
+        return v
+
+
 class KdSection(_Strict):
     teacher_type: Literal["ctc", "ar", "seq2seq"]
     teacher_path: Path
@@ -168,3 +196,4 @@ class TrainConfig(_Strict):
     refine: Optional[RefineSection] = None
     kd: Optional[KdSection] = None
     dat: Optional[DatSection] = None
+    deep_supervision: Optional[DeepSupervisionSection] = None

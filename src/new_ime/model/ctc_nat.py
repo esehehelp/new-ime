@@ -195,6 +195,19 @@ class CTCNAT(nn.Module):
         """Set the multiplier applied to the CVAE KL term in compute_aux_losses."""
         self._cvae_kl_weight = float(weight)
 
+    def set_deep_supervision_layers(self, layers: list[int]) -> None:
+        """Configure intermediate decoder layers for the deep-supervision aux
+        CTC heads. Empty list disables the path entirely (no extra forward
+        cost). Layer indices are 0-based; values must be < decoder.num_layers.
+        """
+        valid = [int(i) for i in layers if 0 <= int(i) < self.decoder.num_layers]
+        if len(valid) != len(layers):
+            raise ValueError(
+                f"deep_sup layers {layers} contain indices outside "
+                f"[0, {self.decoder.num_layers})"
+            )
+        self._deep_sup_layers = valid
+
     @staticmethod
     def collapse_predictions(
         predictions: torch.Tensor,
@@ -534,11 +547,21 @@ class CTCNAT(nn.Module):
             sample_posterior=sample_posterior,
         )
 
-        decoder_out = self.decoder(
-            encoder_out,
-            encoder_padding_mask,
-            film_conditioning=cvae_output.film_conditioning if cvae_output else None,
-        )
+        deep_sup_layers = getattr(self, "_deep_sup_layers", None)
+        if deep_sup_layers:
+            decoder_out, captures = self.decoder(
+                encoder_out,
+                encoder_padding_mask,
+                film_conditioning=cvae_output.film_conditioning if cvae_output else None,
+                capture_layers=deep_sup_layers,
+            )
+        else:
+            decoder_out = self.decoder(
+                encoder_out,
+                encoder_padding_mask,
+                film_conditioning=cvae_output.film_conditioning if cvae_output else None,
+            )
+            captures = []
         logits = self.ctc_head(decoder_out)
         result = {
             "encoder_out": encoder_out,
@@ -547,6 +570,13 @@ class CTCNAT(nn.Module):
             "logits": logits,
             "film_conditioning": cvae_output.film_conditioning if cvae_output else None,
         }
+        if captures:
+            # Apply the shared (and weight-tied) ctc_head to each captured
+            # mid-layer hidden so the aux CTC loss sees the same vocabulary
+            # projection. Zero new params, ~vocab_size matmul per capture.
+            result["intermediate_logits"] = [
+                (idx, self.ctc_head(hidden)) for idx, hidden in captures
+            ]
         if cvae_output is not None:
             result["latent"] = cvae_output.latent
             result["kl"] = cvae_output.kl

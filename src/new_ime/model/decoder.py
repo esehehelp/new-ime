@@ -15,11 +15,18 @@ class NATDecoderLayer(nn.Module):
             hidden_size, num_heads, dropout=dropout, batch_first=True
         )
         self.self_attn_norm = nn.LayerNorm(hidden_size)
+        # Output dropout on attended representation before residual add. The
+        # MHA's internal `dropout` only drops attention weights; the standard
+        # transformer recipe (Vaswani 2017) also drops the attention output.
+        # Without this, the only stochasticity on the attn path is on the
+        # weight pattern itself — too weak as regularization.
+        self.self_attn_out_dropout = nn.Dropout(dropout)
 
         self.cross_attn = nn.MultiheadAttention(
             hidden_size, num_heads, dropout=dropout, batch_first=True
         )
         self.cross_attn_norm = nn.LayerNorm(hidden_size)
+        self.cross_attn_out_dropout = nn.Dropout(dropout)
 
         self.ffn = nn.Sequential(
             nn.Linear(hidden_size, ffn_size),
@@ -41,14 +48,14 @@ class NATDecoderLayer(nn.Module):
         residual = x
         x = self.self_attn_norm(x)
         x, _ = self.self_attn(x, x, x, key_padding_mask=self_attn_padding_mask)
-        x = residual + x
+        x = residual + self.self_attn_out_dropout(x)
 
         residual = x
         x = self.cross_attn_norm(x)
         x, _ = self.cross_attn(
             x, encoder_out, encoder_out, key_padding_mask=cross_attn_padding_mask
         )
-        x = residual + x
+        x = residual + self.cross_attn_out_dropout(x)
 
         residual = x
         x = self.ffn_norm(x)
@@ -88,7 +95,15 @@ class NATDecoder(nn.Module):
         encoder_out: torch.Tensor,
         encoder_padding_mask: torch.Tensor | None = None,
         film_conditioning: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
-    ) -> torch.Tensor:
+        capture_layers: list[int] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, list[tuple[int, torch.Tensor]]]:
+        """
+        capture_layers: when given, return `(final, [(idx, hidden_at_idx), ...])`
+        where each captured hidden has been passed through `final_norm` (so the
+        caller can apply the same head as the final output without an extra
+        LayerNorm). When None, the original `final_only` return is preserved
+        for backward compatibility with existing callers.
+        """
         batch_size, seq_len, _ = encoder_out.shape
         if seq_len > self.pos_embed.num_embeddings:
             raise ValueError(
@@ -97,6 +112,9 @@ class NATDecoder(nn.Module):
         x = self.input_projection(encoder_out)
         positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, -1)
         x = x + self.pos_embed(positions)
+
+        capture_set = set(capture_layers) if capture_layers else set()
+        captures: list[tuple[int, torch.Tensor]] = []
 
         decoder_padding_mask = encoder_padding_mask
         for layer_idx, layer in enumerate(self.layers):
@@ -110,8 +128,13 @@ class NATDecoder(nn.Module):
                 cross_attn_padding_mask=encoder_padding_mask,
                 film_condition=film_condition,
             )
+            if layer_idx in capture_set:
+                captures.append((layer_idx, self.final_norm(x)))
 
-        return self.final_norm(x)
+        final = self.final_norm(x)
+        if capture_layers is None:
+            return final
+        return final, captures
 
 
 class MaskCTCRefinementDecoder(nn.Module):

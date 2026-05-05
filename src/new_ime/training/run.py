@@ -323,6 +323,18 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         aux_loss_fns.append(
             build_refine_loss_fn(cfg.refine, mask_id=tokenizer.mask_id)
         )
+    if cfg.deep_supervision is not None and cfg.deep_supervision.layers:
+        from new_ime.training.loss.deep_supervision import build_deep_supervision_loss_fn
+
+        if hasattr(raw_model, "set_deep_supervision_layers"):
+            raw_model.set_deep_supervision_layers(cfg.deep_supervision.layers)
+        aux_loss_fns.append(build_deep_supervision_loss_fn(cfg.deep_supervision))
+        print(
+            f"[train] deep_supervision: layers={cfg.deep_supervision.layers} "
+            f"weights={cfg.deep_supervision.weights or 'uniform'} "
+            f"warmup={cfg.deep_supervision.warmup_steps}",
+            file=sys.stderr,
+        )
     if cfg.dat is not None:
         from new_ime.training.loss.dat import build_dat_loss_fn
 
