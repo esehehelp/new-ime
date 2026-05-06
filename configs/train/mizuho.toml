@@ -1,22 +1,24 @@
-# Suiko-30m-mozc: CTC-NAT 30M trained on student-v2.6-100m-mozc mix.
+# mizuho: experimental Suiko run on the Kotodama mix.
 #
-# Mix differential (vs v2.5 lowbunsetsu):
-#   - synth ratio 0.10 → 0.15
-#   - synth pool now includes datasets/corpus/synth/mozc_homophone.jsonl
+# Lowercase / version-less name = not yet a published "Suiko-vN-small";
+# promotes to Suiko-v2-small only when greedy probe_v3 EM1 > 0.65.
+#
+# Mix delta (vs Hibiki):
+#   - synth pool ratio 0.10 → 0.15
+#   - synth pool gains datasets/corpus/synth/mozc_homophone.jsonl
 #     (393k reading→surface pairs over 123k homophone groups, mozc OSS)
 #
-# Goal: lift probe_v3 homophone EM1 (0.487 baseline = same as zenz-v3.1-small,
-# so the gap is data-side not capacity-side) without regressing other
-# categories. After-train bench target = greedy >= 0.59, +KenLM-MoE >= 0.65
-# overall, with homophone column >= 0.55 (vs 0.487 baseline).
+# Targets (after 50k step on 3060):
+#   greedy probe_v3 EM1 >= 0.65 (= promotion bar)
+#   per-category homophone EM1 >= 0.55 (vs 0.487 zenz/Suiko-v1 floor)
 #
-# Past trace anchor (8cdf0df era, same hardware, same tokenizer):
+# Past trace anchor (same hardware, same tokenizer):
 #   step 50k: CharAcc ≈ 0.885 / blank ≈ 0.49 / rate ≈ 2.4 step/s
 
 [run]
-name = "suiko-30m-mozc"
+name = "mizuho"
 seed = 70
-out_dir = "checkpoints/suiko-30m-mozc"
+out_dir = "checkpoints/mizuho"
 
 [model]
 preset = "phase3_30m"
@@ -24,7 +26,7 @@ max_seq_len = 128
 max_context = 32
 
 [data]
-train     = "datasets/mixes/student-v2.6-100m-mozc.jsonl"
+train     = "datasets/mixes/Kotodama.jsonl"
 dev       = "datasets/eval/general/dev.jsonl"
 tokenizer = "datasets/tokenizers/char-5k.json"
 # 2M reservoir: 50k step × eff_batch 128 = 6.4M samples processed,

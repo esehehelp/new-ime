@@ -106,6 +106,85 @@ pub fn hira_to_kata(s: &str) -> String {
         .collect()
 }
 
+/// Map a hira char to its vowel ('あ' / 'い' / 'う' / 'え' / 'お') or None
+/// for chars outside the gojuon (numerics, kana that have no clean vowel
+/// like ん, small ぁぃぅぇぉ themselves which already ARE vowels).
+fn hira_vowel(c: char) -> Option<char> {
+    match c {
+        // a-row
+        'あ' | 'か' | 'が' | 'さ' | 'ざ' | 'た' | 'だ' | 'な' | 'は' | 'ば' | 'ぱ'
+        | 'ま' | 'や' | 'ら' | 'わ' | 'ぁ' | 'ゃ' => Some('あ'),
+        // i-row
+        'い' | 'き' | 'ぎ' | 'し' | 'じ' | 'ち' | 'ぢ' | 'に' | 'ひ' | 'び' | 'ぴ'
+        | 'み' | 'り' | 'ぃ' => Some('い'),
+        // u-row
+        'う' | 'く' | 'ぐ' | 'す' | 'ず' | 'つ' | 'づ' | 'ぬ' | 'ふ' | 'ぶ' | 'ぷ'
+        | 'む' | 'ゆ' | 'る' | 'ぅ' | 'ゅ' => Some('う'),
+        // e-row
+        'え' | 'け' | 'げ' | 'せ' | 'ぜ' | 'て' | 'で' | 'ね' | 'へ' | 'べ' | 'ぺ'
+        | 'め' | 'れ' | 'ぇ' => Some('え'),
+        // o-row
+        'お' | 'こ' | 'ご' | 'そ' | 'ぞ' | 'と' | 'ど' | 'の' | 'ほ' | 'ぼ' | 'ぽ'
+        | 'も' | 'よ' | 'ろ' | 'を' | 'ぉ' | 'ょ' => Some('お'),
+        _ => None,
+    }
+}
+
+/// Phonetic normalisation for kana strings. Length-preserving collapse so
+/// the validator can match candidate "ペイロード" against reading
+/// "ペーロード" (same pronunciation, two transliteration conventions).
+///
+/// Length is intentionally preserved so callers can keep using `out.len()`
+/// to advance the cursor and the R2 same-char-split check (which indexes
+/// candidate vs input by position) stays consistent. Sokuon-strip and
+/// other length-changing normalisations are out of scope here.
+///
+/// Rules (applied in order on hira-normalised input):
+///   1. Expand chōon ー to the previous char's vowel ("ぺー" → "ぺえ").
+///   2. Collapse e-row + い → e-row + え ("ぺい" → "ぺえ"). The /e:/
+///      long-vowel sound is written either way depending on convention.
+///   3. Collapse o-row + う → o-row + お ("こう" → "こお") for /o:/.
+///      Loses the orthographic kango/loanword distinction but that's the
+///      desired behaviour — the validator should accept "コー" and "コウ"
+///      as equivalent transcriptions of the same reading.
+pub fn normalize_phonetic(s: &str) -> String {
+    let hira = kata_to_hira(s);
+    let chars: Vec<char> = hira.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    for &c in &chars {
+        if c == 'ー' {
+            if let Some(&prev) = out.last() {
+                if let Some(v) = hira_vowel(prev) {
+                    out.push(v);
+                    continue;
+                }
+            }
+            out.push(c);
+            continue;
+        }
+        out.push(c);
+    }
+    let mut collapsed: Vec<char> = Vec::with_capacity(out.len());
+    for (k, &c) in out.iter().enumerate() {
+        if k == 0 {
+            collapsed.push(c);
+            continue;
+        }
+        let prev = collapsed[collapsed.len() - 1];
+        let prev_vowel = hira_vowel(prev);
+        if c == 'い' && prev_vowel == Some('え') {
+            collapsed.push('え');
+            continue;
+        }
+        if c == 'う' && prev_vowel == Some('お') {
+            collapsed.push('お');
+            continue;
+        }
+        collapsed.push(c);
+    }
+    collapsed.into_iter().collect()
+}
+
 fn find_subseq(haystack: &[char], needle: &[char]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
@@ -153,15 +232,18 @@ fn kana_run_kind_switch_ok(out_run: &str, input_slice: &[char]) -> bool {
 
 pub fn validate_candidate(reading: &str, candidate: &str) -> bool {
     let runs = split_runs(candidate);
-    // Normalise the input reading to hira so it matches the candidate kana
-    // runs (which are themselves normalised at comparison time). probe_v3
-    // reading strings are pure kata ("サンジュウニン...") while the model
-    // typically emits hira particles ("が"); without this normalisation the
-    // reading "ガ" would never match candidate "が" and every kana-bearing
-    // candidate would be rejected.
+    // Normalise the input reading to hira so it matches candidate kana.
+    // probe_v3 readings are pure kata ("サンジュウニン..."); the model
+    // typically emits hira particles ("が"); without this normalisation
+    // the reading "ガ" would never match candidate "が".
+    //
+    // Phonetic collapse (chōon expansion + e-row+い / o-row+う) was
+    // tested but turned out net-negative: it accepts foreign-loan
+    // variants but also conflates intentional native orthography
+    // (e.g. 経営=けいえい must not be treated as けえええ matching
+    // every long-/e:/ reading). Left for future re-design when paired
+    // with a per-context rule.
     let input: Vec<char> = kata_to_hira(reading).chars().collect();
-    // Pre-extract original kana runs so the R2 same-char-split check can
-    // see the candidate's hira/kata kind without re-walking runs.
     validate_from(&runs, 0, &input, 0)
 }
 

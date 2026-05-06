@@ -90,3 +90,4 @@ Thumbs.db
 
 # Large transfer bundles (local only)
 /transfer/
+datasets/external/

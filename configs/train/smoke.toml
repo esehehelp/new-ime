@@ -9,9 +9,9 @@
 # on the full v2.5 mix being staged.
 
 [run]
-name = "smoke-ctc-jsonl"
+name = "smoke"
 seed = 70
-out_dir = "checkpoints/smoke-ctc-jsonl"
+out_dir = "checkpoints/smoke"
 
 [model]
 preset = "phase3_30m"
