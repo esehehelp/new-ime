@@ -1,0 +1,23 @@
+# mizuho greedy probe — measure unpromoted run vs Suiko-v1 anchor.
+# step40000 = best probe EM1 (0.5144 from training metrics.jsonl).
+
+[run]
+name = "mizuho-greedy"
+out_dir = "results/bench/mizuho-greedy"
+
+[model]
+type = "ctc-nat"
+onnx = "models/onnx/mizuho-step40000.int8.onnx"
+
+[decode]
+mode = "greedy"
+num_beams = 1
+num_return = 1
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"

@@ -1,0 +1,92 @@
+# hatsuyume: Suiko-lineage CTC-NAT with zenz-v3.1-small as KD teacher.
+#
+# Strategy: zenz-v3.1-small (91M AR, probe 0.718 / homophone 0.487) is the
+# strongest open Japanese AR model in the same probe regime. Distilling
+# its surface-text outputs into a 30M CTC student via text-roundtrip KD
+# gives the student a context-aware signal that pure CTC training can't
+# reach (Mizuho run confirmed: mozc data alone is net-negative for
+# homophone disambiguation, the gap is in context modelling not lexical
+# coverage).
+#
+# Mix: Hibiki (no mozc — mozc dictionary distribution is flat and
+# confirmed to hurt homophone confidence on context-bearing reads).
+#
+# Promotion gate: greedy probe_v3 EM1 > 0.65 → renames to Suiko-v2-small.
+
+[run]
+name = "hatsuyume"
+seed = 70
+out_dir = "checkpoints/hatsuyume"
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+
+[data]
+train     = "datasets/mixes/Hibiki.jsonl"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-5k.json"
+max_train_samples = 2000000
+max_dev_samples   = 2000
+
+[optim]
+lr = 4e-4
+warmup_steps = 2000
+schedule = "cosine"
+lr_min_ratio = 0.10
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 50000
+fp16 = true
+bf16 = false
+compile = true
+num_workers = 0
+
+[logging]
+log_every = 500
+eval_every = 1000
+checkpoint_every = 5000
+keep_last_k = 3
+print_samples = 3
+early_log_every = 10
+early_log_steps = 200
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+loss_weight = 0.7
+warmup_steps = 5000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1
+
+[kd]
+teacher_type = "zenz"
+teacher_path = "references/zenz-v3.1-small"
+max_new_tokens = 48
+# alpha schedule mirrors the 8cdf0df trace that worked: 6k start, 1.5k
+# warmup to alpha=0.075, hold to 9k, then 8k decay to alpha_final=0.1.
+alpha = 0.075
+alpha_final = 0.1
+start_step = 6000
+warmup_steps = 1500
+alpha_decay_start = 9000
+alpha_decay_steps = 8000
+# Run zenz only every 16 steps (= 16 × eff_batch 128 = 2048 items per
+# trigger). At ~30 ms/item batched on 3060 fp16 ≈ 0.4 s overhead per
+# trigger → 0.025 s/step amortised, ~1% rate hit.
+every = 16
+gate_mode = "low_conf"
+hard_threshold = 0.95

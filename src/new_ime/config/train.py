@@ -111,18 +111,22 @@ class RefineSection(_Strict):
 
 
 class KdSection(_Strict):
-    """AR-teacher knowledge distillation via text-roundtrip + CTC loss.
+    """Text-roundtrip knowledge distillation.
 
     The teacher generates `texts` from `(contexts, readings)`; the student
     is then trained with an additional CTC loss against the teacher text
-    (gated by teacher confidence). teacher_path may point at any AR
-    checkpoint; the SimpleGPT2 architecture is rebuilt from
-    teacher_hidden / teacher_layers / teacher_heads / teacher_max_seq_len
-    so a separate teacher tokenizer can be loaded from teacher_vocab.
+    (gated by teacher confidence).
+
+    Two teacher backends, dispatched by `teacher_type`:
+        "zenz" → HuggingFace GPT-2 directory (e.g. references/zenz-v3.1-small).
+                 teacher_path = directory; teacher_vocab/hidden/etc unused.
+        "ar"   → SimpleGPT2 + char-level vocab (.pt + _vocab.json).
+                 Requires teacher_vocab + teacher_hidden/layers/heads/max_seq_len.
     """
 
+    teacher_type: Literal["zenz", "ar"] = "zenz"
     teacher_path: Path
-    teacher_vocab: Path
+    teacher_vocab: Optional[Path] = None
     teacher_hidden: int = 512
     teacher_layers: int = 8
     teacher_heads: int = 8
