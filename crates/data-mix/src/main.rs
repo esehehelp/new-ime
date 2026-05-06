@@ -75,6 +75,7 @@ struct Args {
         "datasets/corpus/synth/numeric.jsonl".to_string(),
         "datasets/corpus/synth/numeric_ext.jsonl".to_string(),
         "datasets/corpus/synth/homophone.jsonl".to_string(),
+        "datasets/corpus/synth/mozc_homophone.jsonl".to_string(),
         "datasets/corpus/synth/numeric_units.jsonl".to_string(),
         "datasets/corpus/synth/name.jsonl".to_string(),
         "datasets/corpus/synth/synth_typo.jsonl".to_string(),
