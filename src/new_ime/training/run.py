@@ -1,9 +1,6 @@
-"""Training entry point. Builds device / tokenizer / model / loaders / loop.
+"""v2.5 training entry point. Builds device / tokenizer / model / loaders / loop.
 
-Dataset dispatch:
-    cfg.data.train ending in `.kkc`        → KanaKanjiShardIterable
-    anything else                          → KanaKanjiJsonlDataset
-    cfg.data.dev: same dispatch (map-style for shard, eager for JSONL).
+Data path is JSONL only — `.kkc` shards are no longer used by training.
 
 AMP:
     cfg.loop.bf16    → bfloat16 (CUDA only; falls back to fp16 if GPU
@@ -11,8 +8,9 @@ AMP:
     cfg.loop.fp16    → float16 (with GradScaler).
     neither / no CUDA → fp32.
 
-eval / checkpoint rhythm + STOP file are wired here as callbacks; the
-loop itself stays model-agnostic.
+Refine and KD are wired as explicit closures into `run_loop`. Adding
+another arch (AR / DAT) means adding another loss closure here, not
+plumbing through `aux_loss_fns` lists.
 """
 
 from __future__ import annotations
@@ -24,12 +22,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from new_ime.config.train import TrainConfig
-from new_ime.data.jsonl import KanaKanjiJsonlDataset
-from new_ime.data.shards import (
-    CTCShardCollator,
-    KanaKanjiShardDataset,
-    KanaKanjiShardIterable,
-)
+from new_ime.data.jsonl import JsonlCollator, KanaKanjiJsonlDataset
 from new_ime.data.tokenizer import SharedCharTokenizer
 from new_ime.model.ctc_nat import CTCNAT
 from new_ime.training.checkpoint import (
@@ -38,15 +31,9 @@ from new_ime.training.checkpoint import (
     save,
     validate_resume_compatibility,
 )
-from new_ime.training.curriculum import apply_short_sample_warmup
 from new_ime.training.evaluate import evaluate_model, evaluate_probe_em1
 from new_ime.training.loop import StepRecord, run_loop
 from new_ime.training.loss.refine import build_refine_loss_fn
-from new_ime.training.memory import (
-    estimate_training_memory,
-    format_memory_table,
-    measure_peak_vram,
-)
 from new_ime.training.optim import build_optimizer, build_scheduler
 
 
@@ -69,8 +56,7 @@ def _resolve_amp_dtype(cfg: TrainConfig, device: torch.device) -> torch.dtype | 
         if torch.cuda.is_bf16_supported():
             return torch.bfloat16
         print(
-            "[train] WARNING: bf16 not supported by this GPU; "
-            "falling back to fp16 (memory: feedback_local_precision_fp16)",
+            "[train] WARNING: bf16 not supported by this GPU; falling back to fp16",
             file=sys.stderr,
         )
         return torch.float16
@@ -80,100 +66,32 @@ def _resolve_amp_dtype(cfg: TrainConfig, device: torch.device) -> torch.dtype | 
 
 
 def _build_model(cfg: TrainConfig, vocab_size: int) -> torch.nn.Module:
-    if cfg.model.arch == "ctc-nat":
-        return CTCNAT.from_preset(
-            cfg.model.preset,
-            vocab_size=vocab_size,
-            use_cvae=cfg.model.use_cvae,
-            max_positions=cfg.model.max_seq_len,
-        )
-    if cfg.model.arch == "dat":
-        from new_ime.model.dat import DAT
-
-        if cfg.refine is not None:
-            raise ValueError(
-                "[refine] is CTC-NAT-specific and incompatible with arch=dat; "
-                "remove the [refine] section or switch arch to ctc-nat"
-            )
-        if cfg.dat is None:
-            raise ValueError("arch=dat requires a [dat] section in the TOML")
-        return DAT.from_preset(
-            cfg.model.preset,
-            vocab_size=vocab_size,
-            upsample_scale=cfg.dat.upsample_scale,
-            num_link_heads=cfg.dat.num_link_heads,
-            max_positions=cfg.model.max_seq_len,
-        )
-    raise NotImplementedError(
-        f"arch={cfg.model.arch!r} not implemented in v1.0 "
-        "(supported: ctc-nat, dat)"
+    return CTCNAT.from_preset(
+        cfg.model.preset,
+        vocab_size=vocab_size,
+        use_cvae=cfg.model.use_cvae,
+        max_positions=cfg.model.max_seq_len,
     )
 
 
 def _build_train_loader(
     cfg: TrainConfig, tokenizer: SharedCharTokenizer
 ) -> DataLoader:
-    train_path = Path(cfg.data.train)
-    collator = CTCShardCollator(max_seq_len=cfg.model.max_seq_len)
-    pin = torch.cuda.is_available()
-    if cfg.loop.tiny_overfit_samples > 0:
-        if train_path.suffix == ".kkc":
-            ds = KanaKanjiShardDataset(
-                train_path, expected_vocab_size=tokenizer.vocab_size
-            )
-        else:
-            ds = KanaKanjiJsonlDataset(
-                train_path,
-                tokenizer=tokenizer,
-                max_context_chars=cfg.model.max_context,
-            )
-        n = min(int(cfg.loop.tiny_overfit_samples), len(ds))
-        ds = Subset(ds, range(n))
-        return DataLoader(
-            ds,
-            batch_size=cfg.loop.batch_size,
-            shuffle=True,
-            num_workers=cfg.loop.num_workers,
-            collate_fn=collator,
-            pin_memory=pin,
-        )
-    if train_path.suffix == ".kkc":
-        if cfg.data.max_train_samples > 0:
-            ds = KanaKanjiShardDataset(
-                train_path, expected_vocab_size=tokenizer.vocab_size
-            )
-            n = min(int(cfg.data.max_train_samples), len(ds))
-            ds = Subset(ds, range(n))
-            return DataLoader(
-                ds,
-                batch_size=cfg.loop.batch_size,
-                shuffle=True,
-                num_workers=cfg.loop.num_workers,
-                collate_fn=collator,
-                pin_memory=pin,
-            )
-        ds = KanaKanjiShardIterable(
-            train_path,
-            block_size=1024,
-            shuffle=True,
-            seed=cfg.run.seed,
-            expected_vocab_size=tokenizer.vocab_size,
-        )
-        return DataLoader(
-            ds,
-            batch_size=cfg.loop.batch_size,
-            num_workers=cfg.loop.num_workers,
-            collate_fn=collator,
-            pin_memory=pin,
-        )
     ds = KanaKanjiJsonlDataset(
-        train_path,
+        cfg.data.train,
         tokenizer=tokenizer,
         max_context_chars=cfg.model.max_context,
+        max_samples=cfg.data.max_train_samples,
+        seed=cfg.run.seed,
     )
-    if cfg.data.max_train_samples > 0:
-        n = min(int(cfg.data.max_train_samples), len(ds))
-        ds = Subset(ds, range(n))
+    print(
+        f"[train] train loader: rows={len(ds)} "
+        f"(max_train_samples={cfg.data.max_train_samples} → "
+        f"{'reservoir' if cfg.data.max_train_samples > 0 else 'eager'})",
+        file=sys.stderr,
+    )
+    collator = JsonlCollator(max_seq_len=cfg.model.max_seq_len)
+    pin = torch.cuda.is_available()
     return DataLoader(
         ds,
         batch_size=cfg.loop.batch_size,
@@ -181,6 +99,30 @@ def _build_train_loader(
         num_workers=cfg.loop.num_workers,
         collate_fn=collator,
         pin_memory=pin,
+        persistent_workers=cfg.loop.num_workers > 0,
+    )
+
+
+def _build_dev_loader(
+    cfg: TrainConfig, tokenizer: SharedCharTokenizer
+) -> DataLoader:
+    ds = KanaKanjiJsonlDataset(
+        cfg.data.dev,
+        tokenizer=tokenizer,
+        max_context_chars=cfg.model.max_context,
+        max_samples=cfg.data.max_dev_samples,
+        seed=cfg.run.seed + 1,
+    )
+    collator = JsonlCollator(max_seq_len=cfg.model.max_seq_len)
+    pin = torch.cuda.is_available()
+    return DataLoader(
+        ds,
+        batch_size=cfg.loop.eval_batch_size,
+        shuffle=False,
+        num_workers=cfg.loop.num_workers,
+        collate_fn=collator,
+        pin_memory=pin,
+        persistent_workers=cfg.loop.num_workers > 0,
     )
 
 
@@ -247,32 +189,6 @@ def _print_eval_samples(
         model.train()
 
 
-def _build_dev_loader(
-    cfg: TrainConfig, tokenizer: SharedCharTokenizer
-) -> DataLoader:
-    dev_path = Path(cfg.data.dev)
-    collator = CTCShardCollator(max_seq_len=cfg.model.max_seq_len)
-    pin = torch.cuda.is_available()
-    if dev_path.suffix == ".kkc":
-        ds = KanaKanjiShardDataset(
-            dev_path, expected_vocab_size=tokenizer.vocab_size
-        )
-    else:
-        ds = KanaKanjiJsonlDataset(
-            dev_path,
-            tokenizer=tokenizer,
-            max_context_chars=cfg.model.max_context,
-        )
-    return DataLoader(
-        ds,
-        batch_size=cfg.loop.eval_batch_size,
-        shuffle=False,
-        num_workers=cfg.loop.num_workers,
-        collate_fn=collator,
-        pin_memory=pin,
-    )
-
-
 def run(cfg: TrainConfig, config_path: Path) -> int:
     torch.manual_seed(cfg.run.seed)
     out_dir = Path(cfg.run.out_dir)
@@ -316,62 +232,32 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
 
     train_loader = _build_train_loader(cfg, tokenizer)
     dev_loader = _build_dev_loader(cfg, tokenizer)
-    train_collator = train_loader.collate_fn
 
-    aux_loss_fns: list = []
+    refine_loss_fn = None
     if cfg.refine is not None:
-        aux_loss_fns.append(
-            build_refine_loss_fn(cfg.refine, mask_id=tokenizer.mask_id)
-        )
-    if cfg.deep_supervision is not None and cfg.deep_supervision.layers:
-        from new_ime.training.loss.deep_supervision import build_deep_supervision_loss_fn
-
-        if hasattr(raw_model, "set_deep_supervision_layers"):
-            raw_model.set_deep_supervision_layers(cfg.deep_supervision.layers)
-        aux_loss_fns.append(build_deep_supervision_loss_fn(cfg.deep_supervision))
+        refine_loss_fn = build_refine_loss_fn(cfg.refine, mask_id=tokenizer.mask_id)
         print(
-            f"[train] deep_supervision: layers={cfg.deep_supervision.layers} "
-            f"weights={cfg.deep_supervision.weights or 'uniform'} "
-            f"warmup={cfg.deep_supervision.warmup_steps}",
+            f"[train] refine: loss_weight={cfg.refine.loss_weight} "
+            f"warmup={cfg.refine.warmup_steps} "
+            f"mask_ratio=[{cfg.refine.mask_ratio_min},{cfg.refine.mask_ratio_max}] "
+            f"source={cfg.refine.refine_source}",
             file=sys.stderr,
         )
-    if cfg.dat is not None:
-        from new_ime.training.loss.dat import build_dat_loss_fn
 
-        aux_loss_fns.append(build_dat_loss_fn(cfg.dat))
+    kd_loss_fn = None
     if cfg.kd is not None:
         from new_ime.training.loss.kd import build_kd_loss_fn
         from new_ime.training.teacher import build_teacher
 
-        teacher = build_teacher(
-            cfg.kd, device=device, expected_vocab_size=tokenizer.vocab_size
-        )
-        aux_loss_fns.append(build_kd_loss_fn(cfg.kd, teacher))
+        teacher = build_teacher(cfg.kd, device=device)
+        kd_loss_fn = build_kd_loss_fn(cfg.kd, teacher, tokenizer)
         print(
-            f"[train] KD: teacher={cfg.kd.teacher_type} "
+            f"[train] KD: AR teacher path={cfg.kd.teacher_path} "
             f"alpha={cfg.kd.alpha} warmup={cfg.kd.warmup_steps} "
-            f"gate={cfg.kd.gate_mode} T={cfg.kd.temperature}",
+            f"every={cfg.kd.every} gate={cfg.kd.gate_mode} "
+            f"hard_threshold={cfg.kd.hard_threshold}",
             file=sys.stderr,
         )
-
-    # Memory estimate (and actual peak VRAM on CUDA).
-    estimate = estimate_training_memory(
-        raw_model,
-        batch_size=cfg.loop.batch_size,
-        seq_len=cfg.model.max_seq_len,
-        bytes_per_param=2 if amp_dtype is not None else 4,
-    )
-    peak = measure_peak_vram(
-        raw_model,
-        batch_size=cfg.loop.batch_size,
-        seq_len=cfg.model.max_seq_len,
-        vocab_size=tokenizer.vocab_size,
-        device=device,
-    )
-    print(
-        "[train] memory:\n" + format_memory_table(estimate, peak),
-        file=sys.stderr,
-    )
 
     probe_items = None
     if cfg.probe is not None:
@@ -411,8 +297,14 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
             if rec.steps_per_sec > 0
             else "rate=-"
         )
+        suffix = ""
+        if rec.extra:
+            suffix = " " + " ".join(
+                f"{k}={float(v):.3f}" for k, v in rec.extra.items()
+            )
         print(
-            f"[train] step={rec.step} loss={rec.loss:.4f} lr={rec.lr:.2e} {rate_str}",
+            f"[train] step={rec.step} loss={rec.loss:.4f} lr={rec.lr:.2e} "
+            f"{rate_str}{suffix}",
             file=sys.stderr,
         )
 
@@ -496,22 +388,6 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
                     tokenizer=tokenizer,
                 )
 
-    def _on_step_start(step: int) -> None:
-        if cfg.loop.warmup_short_sample_steps > 0:
-            apply_short_sample_warmup(
-                train_collator,
-                step=step,
-                warmup_steps=cfg.loop.warmup_short_sample_steps,
-                short_max_chars=cfg.loop.short_sample_max_chars,
-            )
-        # DAT GLAT schedule: feed the annealed glance ratio into the model
-        # so its forward(...) decides whether to run the 2-stage GLAT path.
-        if cfg.dat is not None and hasattr(raw_model, "set_glance_ratio"):
-            from new_ime.training.loss.dat import parse_anneal
-
-            ratio = parse_anneal(cfg.dat.glat_p, step)
-            raw_model.set_glance_ratio(ratio)
-
     result = run_loop(
         model=model,
         optimizer=optimizer,
@@ -526,14 +402,14 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         early_log_every=cfg.logging.early_log_every,
         early_log_steps=cfg.logging.early_log_steps,
         amp_dtype=amp_dtype,
-        aux_loss_fns=aux_loss_fns,
+        refine_loss_fn=refine_loss_fn,
+        kd_loss_fn=kd_loss_fn,
         eval_every=cfg.logging.eval_every,
         on_eval=_on_eval,
         checkpoint_every=cfg.logging.checkpoint_every,
         on_checkpoint=_on_checkpoint,
         stop_file=out_dir / "STOP",
         on_log=_log,
-        on_step_start=_on_step_start,
     )
 
     if result.interrupted:

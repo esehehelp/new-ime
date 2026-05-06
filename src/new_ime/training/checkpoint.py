@@ -2,7 +2,7 @@
 
 The checkpoint blob is arch-agnostic: model-specific fields (preset,
 vocab_size, use_cvae, arch_tag) are pulled from `model.checkpoint_metadata()`
-so adding new architectures (AR / DAT) requires no change here.
+so adding new architectures requires no change here.
 
 A tokenizer sidecar `<ckpt_stem>_tokenizer.json` is written next to the
 .pt blob. The export pipeline (scripts/export_onnx.py) and the resume
@@ -11,6 +11,10 @@ path both rely on this exact naming.
 `rolling_keep(out_dir, keep_last_k)` deletes old `checkpoint_step_<N>.pt`
 (and their tokenizer sidecars) when more than `keep_last_k` exist. best.pt
 and final.pt are never touched; keep_last_k=0 disables the policy.
+
+Resume is `strict=True`: param shape changes require explicitly
+`reset_optimizer = true`. v2.5 dropped the strict=False / param-group
+graceful path because it masked silent regressions.
 """
 
 from __future__ import annotations
@@ -83,44 +87,9 @@ def load(
     """Load weights into model and optionally optimizer/scheduler. Returns the blob."""
     path = Path(path)
     blob = torch.load(path, map_location=map_location, weights_only=False)
-    # strict=False: new aux modules added after this checkpoint was written
-    # (Phase 1 introduced stop_log_temperature / remask_log_temperature, and
-    # future deep-supervision aux heads will be tied to the existing
-    # ctc_head so add no new params). Missing keys are initialized from the
-    # model's default; unexpected keys are warned but not fatal so we can
-    # still load older checkpoints.
-    missing, unexpected = model.load_state_dict(blob["model_state_dict"], strict=False)
-    if missing:
-        # Filter to params we know are safe to default-initialize.
-        safe_prefixes = (
-            "stop_log_temperature",
-            "remask_log_temperature",
-        )
-        truly_missing = [k for k in missing if not k.startswith(safe_prefixes)]
-        if truly_missing:
-            raise RuntimeError(
-                f"checkpoint missing required keys: {truly_missing}"
-            )
-    if unexpected:
-        print(
-            f"[checkpoint] WARNING: ignored unexpected keys in {path.name}: {unexpected}",
-            file=__import__("sys").stderr,
-        )
+    model.load_state_dict(blob["model_state_dict"], strict=True)
     if optimizer is not None and "optimizer_state_dict" in blob:
-        try:
-            optimizer.load_state_dict(blob["optimizer_state_dict"])
-        except ValueError as e:
-            # Param-group size mismatch when the live model has more params
-            # than the saved checkpoint (e.g. Phase 1 added stop_log_temperature
-            # / remask_log_temperature; future phases will add more aux heads).
-            # Skip optimizer-state restoration in this case so the training
-            # restarts with fresh momentum on the new params; existing model
-            # weights are still loaded above so prior learning is preserved.
-            print(
-                f"[checkpoint] WARNING: optimizer state size mismatch in {path.name}; "
-                f"skipping optimizer load. Reason: {e}",
-                file=__import__("sys").stderr,
-            )
+        optimizer.load_state_dict(blob["optimizer_state_dict"])
     if (
         scheduler is not None
         and blob.get("scheduler_state_dict") is not None

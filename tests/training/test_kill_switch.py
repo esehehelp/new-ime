@@ -86,8 +86,8 @@ def test_stop_file_triggers_final_checkpoint(tmp_path: Path) -> None:
     def on_checkpoint(step: int, _metrics: dict | None) -> None:
         ckpt_calls.append(step)
 
-    def on_step_start(step: int) -> None:
-        if step == 3:
+    def on_log(rec) -> None:  # touch STOP after step 3 logs
+        if rec.step == 3:
             stop_file.touch()
 
     model, optimizer, scheduler = _build()
@@ -104,15 +104,15 @@ def test_stop_file_triggers_final_checkpoint(tmp_path: Path) -> None:
         checkpoint_every=0,  # disable periodic; only the kill-switch save should fire
         on_checkpoint=on_checkpoint,
         stop_file=stop_file,
-        on_step_start=on_step_start,
+        on_log=on_log,
     )
 
     assert result.stopped_via_file is True
     assert result.interrupted is False
-    # on_step_start(3) touches STOP, step 3 still completes, top-of-loop check
-    # at the next iteration sees STOP and breaks with step=4.
-    assert result.final_step == 4
-    assert ckpt_calls == [4], f"expected single final-save at step 4, got {ckpt_calls}"
+    # on_log(3) touches STOP after step 3 logs (post-completion). The next
+    # loop iteration's top-of-loop check sees STOP and breaks; final_step==3.
+    assert result.final_step == 3
+    assert ckpt_calls == [3], f"expected single final-save at step 3, got {ckpt_calls}"
 
 
 def test_stop_file_does_not_double_checkpoint(tmp_path: Path) -> None:
@@ -160,8 +160,8 @@ def test_sigint_triggers_final_checkpoint() -> None:
     def on_checkpoint(step: int, _metrics: dict | None) -> None:
         ckpt_calls.append(step)
 
-    def on_step_start(step: int) -> None:
-        if step == 3:
+    def on_log(rec) -> None:
+        if rec.step == 3:
             os.kill(os.getpid(), signal.SIGINT)
 
     model, optimizer, scheduler = _build()
@@ -177,7 +177,7 @@ def test_sigint_triggers_final_checkpoint() -> None:
         log_every=1,
         checkpoint_every=0,
         on_checkpoint=on_checkpoint,
-        on_step_start=on_step_start,
+        on_log=on_log,
     )
 
     assert result.interrupted is True

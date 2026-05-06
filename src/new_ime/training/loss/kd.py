@@ -1,13 +1,13 @@
-"""KD loss helpers and aux-fn factory.
+"""KD loss helpers and aux-fn factory for v2.5 (AR text-roundtrip only).
 
 `alpha_at(step, cfg)` reproduces the pre-v2 schedule: linear warmup of α
-from 0 to `cfg.alpha` over `warmup_steps`, then optional linear decay to
-`alpha_final` between `alpha_decay_start` and `alpha_decay_start +
-alpha_decay_steps`.
+from 0 to `cfg.alpha` over `warmup_steps` (gated by `cfg.start_step`), then
+optional linear decay to `alpha_final` between `alpha_decay_start` and
+`alpha_decay_start + alpha_decay_steps`.
 
-`compute_kd_kl_loss` is logits-based and arch-agnostic: any teacher whose
-output shape matches the student plugs in. `compute_kd_ctc_loss` covers
-the text-roundtrip path (AR / Seq2Seq teachers) for v1.1.
+The student is trained to reproduce the AR teacher's text via CTC against
+the teacher tokens. This is the same path used in the 8cdf0df trace.
+Logits-based KL (CTC teacher) is out of v2.5 scope.
 """
 
 from __future__ import annotations
@@ -52,36 +52,6 @@ def hard_example_mask(
     raise ValueError(f"unknown gate_mode: {mode!r}")
 
 
-def compute_kd_kl_loss(
-    student_logits: torch.Tensor,    # (B, T, V)
-    teacher_logits: torch.Tensor,    # (B, T, V)
-    attention_mask: torch.Tensor,    # (B, T)
-    hard_mask: torch.Tensor,         # (B,) bool
-    temperature: float = 1.0,
-) -> tuple[torch.Tensor, int]:
-    device = student_logits.device
-    valid = hard_mask.to(device)
-    num_hard = int(valid.sum().item())
-    if num_hard == 0:
-        return (
-            torch.zeros((), device=device, dtype=student_logits.dtype),
-            0,
-        )
-    idx = valid.nonzero(as_tuple=False).squeeze(-1)
-    s_log = F.log_softmax(
-        student_logits.index_select(0, idx) / temperature, dim=-1
-    )
-    t_log = F.log_softmax(
-        teacher_logits.index_select(0, idx) / temperature, dim=-1
-    )
-    t_prob = t_log.exp()
-    kl = (t_prob * (t_log - s_log)).sum(dim=-1)
-    mask = attention_mask.index_select(0, idx).float()
-    loss = (kl * mask).sum() / mask.sum().clamp_min(1.0)
-    loss = loss * (temperature ** 2)
-    return loss, num_hard
-
-
 def compute_kd_ctc_loss(
     student_log_probs: torch.Tensor,   # (T, B, V) time-first
     input_lengths: torch.Tensor,
@@ -90,8 +60,7 @@ def compute_kd_ctc_loss(
     hard_mask: torch.Tensor,           # (B,) bool
     blank_id: int = 4,
 ) -> tuple[torch.Tensor, int]:
-    """For text-roundtrip teachers: train student to reproduce teacher tokens
-    via CTC. Used by AR / Seq2Seq teacher path (v1.1)."""
+    """Train student to reproduce teacher tokens via CTC."""
     device = student_log_probs.device
     valid = hard_mask.to(device) & (teacher_lengths.to(device) > 0)
     num_hard = int(valid.sum().item())
@@ -135,10 +104,14 @@ def compute_kd_ctc_loss(
 def build_kd_loss_fn(
     cfg: KdSection,
     teacher,
+    tokenizer,
 ) -> Callable[[torch.nn.Module, dict, dict, int], dict[str, torch.Tensor]]:
-    """Closure for training/loop.run_loop.aux_loss_fns. Logits-based KL only.
+    """Closure for run.py's `kd_loss_fn` argument.
 
-    Text-roundtrip teachers (AR / Seq2Seq) have their own factory in v1.1.
+    Each call (subject to `every` / `start_step` / `alpha`) runs the AR
+    teacher on `(context_texts, reading_texts)` to obtain teacher
+    surface text, encodes that with the *student* tokenizer, then adds a
+    CTC loss against the teacher surface (gated by teacher confidence).
     """
 
     def fn(model, batch, outputs, step):
@@ -149,22 +122,67 @@ def build_kd_loss_fn(
         alpha = alpha_at(step, cfg)
         if alpha <= 0.0:
             return {}
-        teacher_out = teacher.forward(batch)
-        teacher_logits = teacher_out["logits"]
-        confidence = teacher_out["confidence"]
+
+        contexts = batch["context_texts"]
+        readings = batch["reading_texts"]
+        with torch.no_grad():
+            texts, confidences = teacher.generate(
+                contexts, readings, max_new_tokens=cfg.max_new_tokens
+            )
+        confidences = confidences.to(outputs["logits"].device)
         hard_mask = hard_example_mask(
-            confidence, cfg.hard_threshold, cfg.gate_mode
+            confidences, cfg.hard_threshold, cfg.gate_mode
         )
-        student_logits = outputs["logits"]
-        loss, n = compute_kd_kl_loss(
-            student_logits,
-            teacher_logits,
-            batch["attention_mask"],
-            hard_mask,
-            cfg.temperature,
-        )
-        if n == 0:
+        if not bool(hard_mask.any().item()):
             return {}
-        return {"kd_kl": alpha * loss}
+
+        # Encode teacher text with student tokenizer.
+        teacher_id_lists = [tokenizer.encode(t) for t in texts]
+        teacher_lengths = torch.tensor(
+            [len(ids) for ids in teacher_id_lists],
+            dtype=torch.long,
+            device=outputs["logits"].device,
+        )
+        max_len = max(int(teacher_lengths.max().item()), 1)
+        pad_id = getattr(tokenizer, "pad_id", 0)
+        teacher_ids = torch.full(
+            (len(teacher_id_lists), max_len),
+            pad_id,
+            dtype=torch.long,
+            device=outputs["logits"].device,
+        )
+        for i, ids in enumerate(teacher_id_lists):
+            if ids:
+                teacher_ids[i, : len(ids)] = torch.tensor(
+                    ids, dtype=torch.long, device=outputs["logits"].device
+                )
+
+        # CTC needs (T, B, V).
+        student_logits = outputs["logits"]
+        log_probs = F.log_softmax(student_logits, dim=-1).transpose(0, 1)
+        input_lengths = batch["attention_mask"].sum(dim=1).long()
+
+        loss, n_hard = compute_kd_ctc_loss(
+            log_probs,
+            input_lengths,
+            teacher_ids,
+            teacher_lengths,
+            hard_mask,
+            blank_id=getattr(model, "blank_id", 4),
+        )
+        if n_hard == 0:
+            return {}
+
+        diag = {
+            "kd_loss": loss.detach(),
+            "kd_alpha": torch.tensor(alpha, device=loss.device),
+            "kd_hard": torch.tensor(
+                n_hard / max(len(texts), 1), device=loss.device
+            ),
+            "kd_conf": confidences.mean(),
+        }
+        # The training loop adds the weighted loss back; diag entries are
+        # passed through for logging.
+        return {"kd_ctc": alpha * loss, **{f"_diag_{k}": v for k, v in diag.items()}}
 
     return fn

@@ -1,24 +1,28 @@
-"""Model-agnostic training loop.
+"""Training loop for v2.5 (CTC-NAT + optional refine + optional KD).
 
 Pulls a `loss` tensor out of `model(**batch)`'s output dict, optionally
-adds aux losses via `model.compute_aux_losses(batch, outputs)`, and steps
-the optimizer with grad accumulation + clip. Does not import a specific
-architecture: any model whose forward returns `{"loss": Tensor, ...}` plugs
-in.
+adds refine and KD losses (passed in as explicit closures, not a list), and
+steps the optimizer with grad accumulation + clip.
 
-Stage 2 surface area:
-    - AMP: pass `amp_dtype=torch.float16` (FP16 path with GradScaler) or
-      `torch.bfloat16` (bf16 path, no scaler). `None` runs in fp32.
-    - eval rhythm: `eval_every` + `on_eval(step) -> dict | None`. The
-      returned dict (best metric candidate) is propagated to `on_checkpoint`
-      so the caller can use it for `best.pt` selection.
+Stage 2 surface area (preserved from v2):
+    - AMP: pass `amp_dtype=torch.float16` (FP16 + GradScaler) or
+      `torch.bfloat16` (bf16, no scaler). `None` runs in fp32.
+    - eval rhythm: `eval_every` + `on_eval(step) -> dict | None`.
     - checkpoint rhythm: `checkpoint_every` + `on_checkpoint(step, eval_metrics)`.
     - STOP file: when `out_dir/STOP` appears, the loop exits cleanly at
       the next microbatch boundary and the final step is checkpointed.
     - SIGINT / SIGTERM: first signal sets a flag and exits at the next
       step boundary, calling `on_checkpoint` so the run is resumable.
-      A second signal restores the default handler and re-raises so the
-      user can force-quit if the graceful path stalls.
+      A second signal restores the default handler and re-raises.
+    - Adaptive log cadence: `early_log_every` for first `early_log_steps`,
+      `log_every` afterwards.
+    - tqdm progress bar with loss/lr/rate postfix.
+
+`refine_loss_fn` and `kd_loss_fn` are independent function arguments.
+A loss-fn returning entries prefixed with `_diag_` is treated as
+diagnostics: the `_diag_` prefix is stripped and the value is forwarded
+to `on_log` via the StepRecord's `extra` dict; only the non-prefixed
+entries are summed into the gradient path.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from __future__ import annotations
 import signal
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -40,6 +44,7 @@ class StepRecord:
     loss: float
     lr: float
     steps_per_sec: float = 0.0
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -55,13 +60,7 @@ class _SignalCatcher:
     """Catch SIGINT / SIGTERM so the loop can save before exiting.
 
     First signal flips `flag`; the loop notices at the next step boundary
-    and breaks. A second signal restores the previous handler and re-raises
-    so the user can force-quit when graceful shutdown stalls (e.g. a
-    teacher forward hangs on a long batch).
-
-    Best-effort: signals can only be installed on the main thread, and not
-    every signal exists on every platform. Failures are swallowed so the
-    training still runs (just without the kill switch).
+    and breaks. A second signal restores the previous handler and re-raises.
     """
 
     def __init__(self) -> None:
@@ -106,29 +105,33 @@ def _move_to_device(batch: dict, device: torch.device) -> dict:
     }
 
 
-def _compute_aux(
+def _forward_tensor_kwargs(batch: dict) -> dict:
+    return {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+
+LossFn = Callable[[torch.nn.Module, dict, dict, int], dict]
+
+
+def _apply_aux(
+    fn: LossFn | None,
     model: torch.nn.Module,
     batch: dict,
     outputs: dict,
-    aux_loss_fns: list | None,
     step: int,
-) -> dict:
-    aux: dict = {}
-    fn = getattr(model, "compute_aux_losses", None)
-    if fn is not None:
-        result = fn(batch, outputs)
-        if result:
-            aux.update(result)
-    if aux_loss_fns:
-        for f in aux_loss_fns:
-            result = f(model, batch, outputs, step)
-            if result:
-                aux.update(result)
-    return aux
-
-
-def _forward_tensor_kwargs(batch: dict) -> dict:
-    return {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
+    loss: torch.Tensor,
+    diag: dict,
+) -> torch.Tensor:
+    if fn is None:
+        return loss
+    result = fn(model, batch, outputs, step)
+    if not result:
+        return loss
+    for k, v in result.items():
+        if k.startswith("_diag_"):
+            diag[k[len("_diag_") :]] = float(v.detach().item()) if isinstance(v, torch.Tensor) else float(v)
+        else:
+            loss = loss + v
+    return loss
 
 
 def run_loop(
@@ -146,14 +149,14 @@ def run_loop(
     early_log_every: int = 0,
     early_log_steps: int = 0,
     amp_dtype: torch.dtype | None = None,
-    aux_loss_fns: list[Callable[[torch.nn.Module, dict, dict, int], dict]] | None = None,
+    refine_loss_fn: LossFn | None = None,
+    kd_loss_fn: LossFn | None = None,
     eval_every: int = 0,
     on_eval: Callable[[int], dict | None] | None = None,
     checkpoint_every: int = 0,
     on_checkpoint: Callable[[int, dict | None], None] | None = None,
     stop_file: Path | None = None,
     on_log: Callable[[StepRecord], None] | None = None,
-    on_step_start: Callable[[int], None] | None = None,
 ) -> LoopResult:
     """Run until optimizer step `max_steps` over `loader` (which may be infinite)."""
     use_amp = amp_dtype is not None and device.type == "cuda"
@@ -165,15 +168,12 @@ def run_loop(
     last_eval: dict | None = None
     step = int(start_step)
     accum_loss = 0.0
+    accum_diag: dict = {}
     optimizer.zero_grad(set_to_none=True)
     last_checkpointed_step = step
     interrupted = False
     stopped_via_file = False
 
-    # tqdm progress bar over optimizer steps (not microbatches). Output to
-    # stderr so stdout-redirected log files capture only the [train]/[eval]
-    # lines while the terminal sees a live bar; use `tqdm.write()` for any
-    # in-loop logs to avoid tearing the bar.
     pbar_total = max(0, int(max_steps) - int(start_step))
     pbar = tqdm(
         total=pbar_total,
@@ -197,8 +197,6 @@ def run_loop(
             if stop_file is not None and stop_file.exists():
                 stopped_via_file = True
                 break
-            if on_step_start is not None and micro_idx % grad_accum == 0:
-                on_step_start(step)
             try:
                 batch = next(iterator)
             except StopIteration:
@@ -215,8 +213,8 @@ def run_loop(
             with autocast_ctx:
                 outputs = model(**_forward_tensor_kwargs(batch))
                 loss = outputs["loss"]
-                for v in _compute_aux(model, batch, outputs, aux_loss_fns, step).values():
-                    loss = loss + v
+                loss = _apply_aux(refine_loss_fn, model, batch, outputs, step, loss, accum_diag)
+                loss = _apply_aux(kd_loss_fn, model, batch, outputs, step, loss, accum_diag)
 
             scaled = loss / grad_accum
             if needs_scaler:
@@ -243,9 +241,6 @@ def run_loop(
             pbar.update(1)
             pbar.set_description(f"train step {step}")
 
-            # Adaptive log cadence: high-resolution during the first
-            # `early_log_steps` (so initial blank-collapse / loss curves are
-            # visible at fine grain), regular `log_every` afterwards.
             regular_log_due = log_every > 0 and step % log_every == 0
             early_log_due = (
                 early_log_every > 0
@@ -261,14 +256,15 @@ def run_loop(
                 sps = (steps_done / elapsed) if elapsed > 0 and steps_done > 0 else 0.0
                 last_log_time = now
                 last_log_step = step
-                rec = StepRecord(step=step, loss=avg, lr=lr, steps_per_sec=sps)
+                rec = StepRecord(
+                    step=step, loss=avg, lr=lr, steps_per_sec=sps, extra=dict(accum_diag)
+                )
                 history.append(rec)
                 if on_log is not None:
                     on_log(rec)
-                # Surface latest loss/lr/rate on the tqdm bar without redrawing
-                # noisy text inside the loop. Postfix re-renders on next refresh.
                 pbar.set_postfix(loss=f"{avg:.4f}", lr=f"{lr:.2e}", rate=f"{sps:.2f}/s")
             accum_loss = 0.0
+            accum_diag = {}
 
             eval_due = eval_every > 0 and on_eval is not None and step % eval_every == 0
             if eval_due:

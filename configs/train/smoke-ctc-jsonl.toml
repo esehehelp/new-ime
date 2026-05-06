@@ -1,0 +1,53 @@
+# Smoke target for v2.5-train rebuild. Goal:
+#   - 1000 step completes
+#   - logging / eval / probe / STOP / SIGINT / resume / checkpoint / tokenizer
+#     sidecar all behave per current spec
+#   - step rate >= 2.0 step/s on 3060 (with compile=true; fallback ~1.6 still
+#     acceptable for the smoke gate)
+#
+# Uses the existing dev jsonl as a tiny train file so smoke does not depend
+# on the full v2.5 mix being staged.
+
+[run]
+name = "smoke-ctc-jsonl"
+seed = 70
+out_dir = "checkpoints/smoke-ctc-jsonl"
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+
+[data]
+train     = "datasets/eval/general/train.jsonl"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-5k.json"
+max_train_samples = 0
+max_dev_samples   = 500
+
+[optim]
+lr = 4e-4
+warmup_steps = 200
+schedule = "cosine"
+lr_min_ratio = 0.10
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 1000
+fp16 = true
+bf16 = false
+compile = true
+num_workers = 0
+
+[logging]
+log_every = 100
+eval_every = 250
+checkpoint_every = 500
+keep_last_k = 2
+print_samples = 2
+early_log_every = 10
+early_log_steps = 100

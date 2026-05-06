@@ -83,37 +83,6 @@ def test_loop_runs_on_stub_model():
     assert len(result.history) == 8
 
 
-def test_loop_runs_on_dat_model(mock_shard, tiny_dat_factory, tiny_tokenizer):
-    """The same arch-agnostic loop accepts DAT (different output dict shape,
-    different aux structure) without any DAT-specific branches. Rough proxy
-    for the contract `model.forward(...)["loss"]` only."""
-    from torch.utils.data import DataLoader
-
-    from new_ime.data.shards import CTCShardCollator, KanaKanjiShardIterable
-
-    device = torch.device("cpu")
-    model = tiny_dat_factory(seed=0).to(device)
-    cfg = _OptimCfg()
-    optimizer = build_optimizer(model, cfg)
-    scheduler = build_scheduler(optimizer, cfg, max_steps=4)
-    ds = KanaKanjiShardIterable(
-        mock_shard, block_size=8, shuffle=True, seed=0,
-        expected_vocab_size=tiny_tokenizer.vocab_size,
-    )
-    loader = DataLoader(
-        ds, batch_size=4, num_workers=0,
-        collate_fn=CTCShardCollator(max_seq_len=64),
-    )
-
-    result = run_loop(
-        model=model, optimizer=optimizer, scheduler=scheduler,
-        loader=loader, device=device,
-        max_steps=4, grad_accum=1, grad_clip=1.0, log_every=1,
-    )
-    assert result.final_step == 4
-    assert len(result.history) == 4
-
-
 def test_loop_resumes_from_start_step():
     """Resume path treats max_steps as the absolute target optimizer step."""
     model = _StubModel()

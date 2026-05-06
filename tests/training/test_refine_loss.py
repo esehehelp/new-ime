@@ -26,7 +26,6 @@ def test_refine_loss_components(
         warmup_steps=0,
         mask_ratio_min=0.3,
         mask_ratio_max=0.3,
-        refine_iterations=1,
         refine_source="target",
         remask_loss_weight=0.5,
         stop_loss_weight=0.5,
