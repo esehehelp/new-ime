@@ -1,0 +1,17 @@
+[package]
+name = "data-row"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "data-row"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+ratatui = "0.28"
+crossterm = "0.28"
+memmap2.workspace = true
