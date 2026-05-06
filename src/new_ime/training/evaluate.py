@@ -121,10 +121,14 @@ def evaluate_probe_em1(
     Probe items are `BenchItem` instances from `eval/loaders.py:load_bench`,
     with `reading`, `context`, `references` (list[str]) attributes.
     """
+    from collections import defaultdict
+
     was_training = model.training
     model.eval()
     matches = 0
     total = 0
+    cat_correct: dict[str, int] = defaultdict(int)
+    cat_total: dict[str, int] = defaultdict(int)
     for i, item in enumerate(probe_items):
         if limit > 0 and i >= limit:
             break
@@ -136,14 +140,29 @@ def evaluate_probe_em1(
         attention_mask = torch.ones_like(input_ids)
         decoded = model.greedy_decode(input_ids, attention_mask)
         pred = tokenizer.decode(decoded[0])
-        if pred in item.references:
+        is_match = pred in item.references
+        if is_match:
             matches += 1
         total += 1
+        cat = getattr(item, "category", None)
+        if cat is not None:
+            cat_total[cat] += 1
+            if is_match:
+                cat_correct[cat] += 1
 
     if was_training:
         model.train()
 
-    return {
+    result: dict = {
         "em1": matches / max(total, 1),
         "n": total,
     }
+    if cat_total:
+        result["categories"] = {
+            c: {
+                "n": cat_total[c],
+                "em1": cat_correct[c] / max(cat_total[c], 1),
+            }
+            for c in sorted(cat_total)
+        }
+    return result

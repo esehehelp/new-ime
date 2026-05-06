@@ -281,6 +281,9 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
         file=sys.stderr,
     )
 
+    import time as _time
+    _wall_t0 = _time.monotonic()
+
     eval_max_batches = (
         max(
             1,
@@ -343,6 +346,21 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
                 f"[probe] step={step} EM1={probe_m['em1']:.4f} n={probe_m['n']}",
                 file=sys.stderr,
             )
+            cats = probe_m.get("categories")
+            if cats:
+                m["probe_categories"] = cats
+                cat_str = " ".join(
+                    f"{c}={cats[c]['em1']:.3f}" for c in sorted(cats)
+                )
+                below = [
+                    c for c in sorted(cats) if cats[c]["em1"] < 0.65
+                ]
+                print(
+                    f"[probe] step={step} per-cat: {cat_str}\n"
+                    f"[probe] step={step} below 0.65: "
+                    f"{', '.join(below) if below else '<none>'}",
+                    file=sys.stderr,
+                )
         print(
             f"[eval] step={step} loss={m['loss']:.4f} "
             f"EM1={m['exact_match_top1']:.4f} "
@@ -350,6 +368,28 @@ def run(cfg: TrainConfig, config_path: Path) -> int:
             f"blank={m['blank_fraction']:.3f} n={m['num_samples']}",
             file=sys.stderr,
         )
+        # Append to metrics.jsonl so plot_metrics.py / external dashboards
+        # can read per-step trajectories without re-parsing the train log.
+        try:
+            import json as _json
+            metrics_path = out_dir / "metrics.jsonl"
+            row = {
+                "step": int(step),
+                "wall_s": round(__import__("time").monotonic() - _wall_t0, 2),
+                "eval_loss": float(m.get("loss", 0.0)),
+                "eval_em1": float(m.get("exact_match_top1", 0.0)),
+                "eval_charAcc": float(m.get("char_acc_top1", 0.0)),
+                "eval_blank": float(m.get("blank_fraction", 0.0)),
+                "eval_n": int(m.get("num_samples", 0)),
+            }
+            if "probe_em1" in m:
+                row["probe_em1"] = float(m["probe_em1"])
+            if "probe_categories" in m:
+                row["probe_categories"] = m["probe_categories"]
+            with metrics_path.open("a", encoding="utf-8") as fh:
+                fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
+        except Exception as e:
+            print(f"[train] WARNING: metrics.jsonl write failed: {e}", file=sys.stderr)
         _print_eval_samples(
             model=model,
             loader=dev_loader,
