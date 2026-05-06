@@ -153,89 +153,120 @@ fn kana_run_kind_switch_ok(out_run: &str, input_slice: &[char]) -> bool {
 
 pub fn validate_candidate(reading: &str, candidate: &str) -> bool {
     let runs = split_runs(candidate);
-    let input: Vec<char> = reading.chars().collect();
-    let mut cursor = 0usize;
-    let mut i = 0usize;
+    // Normalise the input reading to hira so it matches the candidate kana
+    // runs (which are themselves normalised at comparison time). probe_v3
+    // reading strings are pure kata ("サンジュウニン...") while the model
+    // typically emits hira particles ("が"); without this normalisation the
+    // reading "ガ" would never match candidate "が" and every kana-bearing
+    // candidate would be rejected.
+    let input: Vec<char> = kata_to_hira(reading).chars().collect();
+    // Pre-extract original kana runs so the R2 same-char-split check can
+    // see the candidate's hira/kata kind without re-walking runs.
+    validate_from(&runs, 0, &input, 0)
+}
 
-    while i < runs.len() {
-        match &runs[i] {
-            Run::Kanji(_) | Run::Other(_) => {
-                // A contiguous block of Kanji + Other (digits / ASCII /
-                // punctuation) is treated as one "opaque consumer" — we
-                // don't have a kanji→reading dictionary, and digits like
-                // `100` represent reading-form chars `ひゃく` we can't
-                // verify char-by-char. The block as a whole consumes the
-                // gap between `cursor` and where the next Kana run
-                // matches in the input. This matches what users expect
-                // from outputs like `100キロ` against reading
-                // `ひゃくじゅっきろ` — `100` + `キロ` together cover the
-                // whole reading even though `100` carries no input chars
-                // of its own.
-                let next_kana_idx = (i + 1..runs.len())
-                    .find(|&j| matches!(&runs[j], Run::Kana(_)));
-                match next_kana_idx {
-                    Some(j) => {
-                        let Run::Kana(text) = &runs[j] else {
-                            unreachable!()
-                        };
-                        let normalized = kata_to_hira(text);
-                        let kana_chars: Vec<char> = normalized.chars().collect();
-                        let Some(p) = find_subseq(&input[cursor..], &kana_chars) else {
-                            return false;
-                        };
-                        // Pure-Other prefixes (no Kanji at the head of the
-                        // block) are allowed to consume zero input chars
-                        // — `100キロ` against `ひゃくじゅっきろ` would
-                        // pin `キロ` at position 6, leaving `ひゃくじゅっ`
-                        // (positions 0..6) for `100` which is fine.
-                        // Pure-Other zero-consume is equally fine. But if
-                        // the block contains at least one Kanji, that
-                        // kanji must consume ≥1 char — keep the existing
-                        // R1 `p == 0` check for that case.
-                        let block_has_kanji = (i..j)
-                            .any(|k| matches!(&runs[k], Run::Kanji(_)));
-                        if block_has_kanji && p == 0 {
-                            return false;
-                        }
-                        cursor += p;
-                        i = j;
-                    }
-                    None => {
-                        // Trailing Kanji/Other block.
-                        // - Has Kanji: must have ≥1 char left, consumes
-                        //   everything to the end (kanji-end relaxation).
-                        // - Pure Other: consumes nothing; cursor stays.
-                        let block_has_kanji = (i..runs.len())
-                            .any(|k| matches!(&runs[k], Run::Kanji(_)));
-                        if block_has_kanji {
-                            if cursor >= input.len() {
-                                return false;
-                            }
-                            cursor = input.len();
-                        }
-                        break;
-                    }
-                }
+/// Recursive validator with backtracking on Kanji/Other → Kana boundaries.
+///
+/// The previous iterative version greedy-picked the first occurrence of
+/// the next Kana run inside the remaining input. That breaks cases like
+/// `友達と` against `ともだちと`: `と` first appears at position 0 (`友`'s
+/// own reading), the `block_has_kanji && p == 0` rule then rejects, even
+/// though picking the second `と` (position 4) makes the whole alignment
+/// work. With backtracking we try every legal anchor position for the
+/// next kana run; if any of them allows the rest of the candidate to
+/// validate, the candidate is accepted.
+fn validate_from(
+    runs: &[Run],
+    i: usize,
+    input: &[char],
+    cursor: usize,
+) -> bool {
+    if i >= runs.len() {
+        return cursor == input.len();
+    }
+    match &runs[i] {
+        Run::Kana(text) => {
+            let normalized = kata_to_hira(text);
+            let chars: Vec<char> = normalized.chars().collect();
+            let n = chars.len();
+            if cursor + n > input.len() {
+                return false;
             }
-            Run::Kana(text) => {
-                let normalized = kata_to_hira(text);
-                let chars: Vec<char> = normalized.chars().collect();
-                let n = chars.len();
-                if cursor + n > input.len() {
-                    return false;
+            if input[cursor..cursor + n] != chars[..] {
+                return false;
+            }
+            if !kana_run_kind_switch_ok(text, &input[cursor..cursor + n]) {
+                return false;
+            }
+            validate_from(runs, i + 1, input, cursor + n)
+        }
+        Run::Kanji(_) | Run::Other(_) => {
+            // A contiguous Kanji + Other block is opaque — without a
+            // kanji→reading dictionary we only know it consumes some
+            // number of input chars, bounded by where the next Kana run
+            // can be anchored.
+            let next_kana_idx =
+                (i + 1..runs.len()).find(|&j| matches!(&runs[j], Run::Kana(_)));
+            match next_kana_idx {
+                Some(j) => {
+                    let Run::Kana(text) = &runs[j] else {
+                        unreachable!()
+                    };
+                    let normalized = kata_to_hira(text);
+                    let kana_chars: Vec<char> = normalized.chars().collect();
+                    let n = kana_chars.len();
+                    let block_has_kanji =
+                        (i..j).any(|k| matches!(&runs[k], Run::Kanji(_)));
+                    // Block-with-kanji must consume at least 1 char;
+                    // pure-Other prefix may consume zero (e.g. "100キロ"
+                    // against "ひゃくじゅっきろ" pins "キロ" at pos 6 and
+                    // leaves the prefix to absorb the rest).
+                    let min_p = if block_has_kanji { 1 } else { 0 };
+                    let mut start = cursor + min_p;
+                    while start + n <= input.len() {
+                        if input[start..start + n] == kana_chars[..]
+                            && kana_run_kind_switch_ok(
+                                text,
+                                &input[start..start + n],
+                            )
+                            && validate_from(runs, j + 1, input, start + n)
+                        {
+                            return true;
+                        }
+                        start += 1;
+                    }
+                    false
                 }
-                if input[cursor..cursor + n] != chars[..] {
-                    return false;
+                None => {
+                    // Trailing Kanji/Other block.
+                    // - Has Kanji: must have ≥1 char left, consumes
+                    //   everything to the end (kanji-end relaxation).
+                    // - Pure Other: accept if either cursor already at
+                    //   end (consume nothing) OR remaining input chars
+                    //   equal the trailing Other text verbatim
+                    //   (1:1 transcription, e.g. closing 」 or ASCII
+                    //   punctuation).
+                    let block_has_kanji = (i..runs.len())
+                        .any(|k| matches!(&runs[k], Run::Kanji(_)));
+                    if block_has_kanji {
+                        cursor < input.len()
+                    } else if cursor == input.len() {
+                        true
+                    } else {
+                        let other_text: String = runs[i..]
+                            .iter()
+                            .map(|r| match r {
+                                Run::Other(t) => t.as_str(),
+                                _ => "",
+                            })
+                            .collect();
+                        let other_chars: Vec<char> = other_text.chars().collect();
+                        input[cursor..] == other_chars[..]
+                    }
                 }
-                if !kana_run_kind_switch_ok(text, &input[cursor..cursor + n]) {
-                    return false;
-                }
-                cursor += n;
-                i += 1;
             }
         }
     }
-    cursor == input.len()
 }
 
 #[cfg(test)]

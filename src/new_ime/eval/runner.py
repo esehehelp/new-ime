@@ -270,6 +270,11 @@ def run_bench_suite(
             "artifact_format": s["artifact_format"],
             "latency_comparable": s["latency_comparable"],
         }
+        if "probe_categories" in s:
+            # Surface per-category breakdown so summary.json carries enough
+            # signal for data-mix improvement (which categories are the
+            # weakest, which respond to KenLM, etc.).
+            row["probe_categories"] = s["probe_categories"]
         rows.append(row)
         print(
             f"[bench] {bench_name}: EM1={row['em1']:.4f} EM5={row['em5']:.4f} "
@@ -278,6 +283,27 @@ def run_bench_suite(
             + (f" -> {log_path.name}" if verbose else ""),
             file=sys.stderr,
         )
+        if "probe_categories" in s:
+            cats = s["probe_categories"]
+            # Stable column order (sorted) + threshold marker for the goal of
+            # "every category >= 0.65 → overall EM1 >= 0.65 follows trivially".
+            header = "  ".join(f"{c:<10}" for c in sorted(cats))
+            em1_row = "  ".join(
+                f"{cats[c]['em1']:<10.4f}" for c in sorted(cats)
+            )
+            em1_nfkc_row = "  ".join(
+                f"{cats[c]['em1_nfkc']:<10.4f}" for c in sorted(cats)
+            )
+            below = [c for c in sorted(cats) if cats[c]["em1_nfkc"] < 0.65]
+            print(
+                f"[bench] {bench_name} per-category:\n"
+                f"           {header}\n"
+                f"  em1      {em1_row}\n"
+                f"  em1_nfkc {em1_nfkc_row}\n"
+                f"  below 0.65 (em1_nfkc): "
+                f"{', '.join(below) if below else '<none>'}",
+                file=sys.stderr,
+            )
 
     summary_path = out_dir / "summary.json"
     summary_path.write_text(
