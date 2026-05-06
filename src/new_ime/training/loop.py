@@ -263,8 +263,14 @@ def run_loop(
                 if on_log is not None:
                     on_log(rec)
                 pbar.set_postfix(loss=f"{avg:.4f}", lr=f"{lr:.2e}", rate=f"{sps:.2f}/s")
+                # Reset diag only on log boundaries: an aux loss that
+                # fires every M optimizer steps (KD `every=16` is the
+                # canonical case) would otherwise leave accum_diag empty
+                # at every log emission ≠ KD trigger step. Resetting at
+                # log boundaries means the [train] line carries the most
+                # recent diag values from the current log window.
+                accum_diag = {}
             accum_loss = 0.0
-            accum_diag = {}
 
             eval_due = eval_every > 0 and on_eval is not None and step % eval_every == 0
             if eval_due:
