@@ -21,7 +21,7 @@
 | 5 | zenz-v2.5-small | 0.7184 | ~94M | IME AR | n/a | HF (local) |
 | 6 | DeepSeek V4-Pro thinking | 0.7155† | 671B/37B-act | LLM open | yes | DeepSeek |
 | 7 | zenz-v2.5-xsmall | 0.7011 | ~24M | IME AR | n/a | HF (local) |
-| 8 | jinen-v1-small | 0.6983 | ~230M | IME AR | n/a | HF (local) |
+| 8 | jinen-v1-small | 0.6983 | 110M | IME AR | n/a | HF (local) |
 | 9 | Gemini 3.1 Pro | 0.693 | unk | LLM closed | yes? | Google AI Studio chat |
 | 10 | GLM-5.1 thinking | 0.692 | 357B | LLM open | yes | DeepInfra |
 | 11 | **Suiko-v1-small + KenLM-MoE** | **0.678** | **42M** + LM | CTC-NAT (own) | n/a | local |
