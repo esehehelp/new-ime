@@ -80,6 +80,11 @@ target/
 *.old
 /tools/
 
+# Local secrets (.env loaded by data-row TUI, etc.). Commit .env.example
+# (template), never .env.
+.env
+.env.local
+
 # OS and editor files.
 .DS_Store
 Thumbs.db
