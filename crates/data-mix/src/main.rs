@@ -21,7 +21,7 @@ use data_core::NgramSet;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -55,13 +55,14 @@ struct Args {
     #[arg(long, default_value = "datasets/corpus/legacy/hplt3_ja.jsonl")]
     hplt_path: PathBuf,
     /// Bunsetsu pool: multiple .jsonl files (wikibooks / wiktionary / wikinews /
-    /// aozora_dialogue / tatoeba).
+    /// aozora_dialogue).
+    /// tatoeba は監査で format / 質双方が低水準と判明したため除外
+    /// (短い left_context_surface の断片が大量、訳文の不自然な日本語が混入)。
     #[arg(long, num_args = 0.., default_values_t = [
         "datasets/corpus/bunsetsu/wikibooks.jsonl".to_string(),
         "datasets/corpus/bunsetsu/wiktionary.jsonl".to_string(),
         "datasets/corpus/bunsetsu/wikinews.jsonl".to_string(),
         "datasets/corpus/bunsetsu/aozora_dialogue.jsonl".to_string(),
-        "datasets/corpus/bunsetsu/tatoeba.jsonl".to_string(),
     ])]
     bunsetsu_paths: Vec<String>,
 
@@ -215,14 +216,42 @@ fn extend_contamination_from_probe_json(set: &mut NgramSet, path: &Path) -> Resu
     Ok(count)
 }
 
-/// Minimal row view: we only need `surface` / `reading` for filtering +
-/// length checks. The raw JSONL line is emitted verbatim (no re-encoding).
-#[derive(Deserialize)]
-struct RowSurface {
-    #[serde(default)]
-    surface: String,
+/// Input row schema — accepts both legacy Schema A (`context`) and the
+/// canonical Schema B (`left_context_surface` / `left_context_reading`).
+/// The mix output is normalized to Schema B so jsonl.py / data-row /
+/// downstream tools all see one consistent schema.
+#[derive(Deserialize, Default)]
+struct InputRow {
     #[serde(default)]
     reading: String,
+    #[serde(default)]
+    surface: String,
+    // Schema A.
+    #[serde(default)]
+    context: String,
+    // Schema B.
+    #[serde(default)]
+    left_context_surface: String,
+    #[serde(default)]
+    left_context_reading: String,
+    #[serde(default)]
+    source: String,
+    // Optional metadata (pass through).
+    sentence_id: Option<String>,
+    span_bunsetsu: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct OutputRow<'a> {
+    reading: &'a str,
+    surface: &'a str,
+    left_context_surface: &'a str,
+    left_context_reading: &'a str,
+    source: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sentence_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span_bunsetsu: Option<u64>,
 }
 
 struct FilePool {
@@ -345,7 +374,7 @@ impl FilePool {
             if trimmed.is_empty() {
                 continue;
             }
-            let row: RowSurface = match serde_json::from_str(trimmed) {
+            let row: InputRow = match serde_json::from_str(trimmed) {
                 Ok(r) => r,
                 Err(_) => {
                     self.skipped_parse += 1;
@@ -391,9 +420,34 @@ impl FilePool {
                 }
                 *slot += 1;
             }
-            if !scratch.ends_with('\n') {
-                scratch.push('\n');
-            }
+            // Canonicalize to Schema B: legacy rows expose `context` which
+            // we map to `left_context_surface`; `left_context_reading` is
+            // left empty when only the surface form is known. Source tag
+            // falls back to the pool's static label when absent.
+            let lcs: &str = if !row.left_context_surface.is_empty() {
+                &row.left_context_surface
+            } else {
+                &row.context
+            };
+            let src: &str = if !row.source.is_empty() {
+                &row.source
+            } else {
+                self.source_tag
+            };
+            let canon = OutputRow {
+                reading: &row.reading,
+                surface: &row.surface,
+                left_context_surface: lcs,
+                left_context_reading: &row.left_context_reading,
+                source: src,
+                sentence_id: row.sentence_id.as_deref(),
+                span_bunsetsu: row.span_bunsetsu,
+            };
+            let serialized = serde_json::to_string(&canon)
+                .with_context(|| format!("serialize canonical row in pool {}", self.name))?;
+            scratch.clear();
+            scratch.push_str(&serialized);
+            scratch.push('\n');
             return Ok(NextLine::Yielded);
         }
     }

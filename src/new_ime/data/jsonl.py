@@ -78,16 +78,11 @@ class KanaKanjiJsonlDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         row = self._rows[idx]
-        # Two corpus schemas coexist in our mixes:
-        #   legacy pool (zenz / fineweb2 / hplt / wiki / aozora):
-        #     `context` field carries already-converted kanji text.
-        #   bunsetsu pool (wikibooks / wiktionary / wikinews / aozora_dialogue
-        #                  / tatoeba):
-        #     `left_context_surface` carries the kanji prefix instead.
-        # The original reader only honoured `context`, silently dropping
-        # ~10 % of context-bearing training rows. Fall back to
-        # left_context_surface when `context` is empty.
-        context = row.get("context") or row.get("left_context_surface") or ""
+        # data-mix (≥ 2026-05-07) normalizes every output row to Schema B
+        # (`left_context_surface` only). The earlier `context` fallback
+        # used to bridge legacy and bunsetsu pools is now handled at mix
+        # build time, so the loader trusts `left_context_surface`.
+        context = row.get("left_context_surface") or row.get("context") or ""
         context = context[-self.max_context_chars :]
         reading = row.get("reading") or ""
         surface = row.get("surface") or ""
