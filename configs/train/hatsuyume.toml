@@ -88,5 +88,10 @@ alpha_decay_steps = 8000
 # trigger). At ~30 ms/item batched on 3060 fp16 ≈ 0.4 s overhead per
 # trigger → 0.025 s/step amortised, ~1% rate hit.
 every = 16
-gate_mode = "low_conf"
+# gate_mode="all": zenz-v3.1-small is consistently very confident
+# (mean conf ~0.999 on probe samples). The legacy 8cdf0df setup
+# (low_conf threshold 0.95) was tuned for the much weaker AR baseline
+# (conf ~0.97) and filters every zenz output. "all" uses the full
+# teacher signal — what we actually want here.
+gate_mode = "all"
 hard_threshold = 0.95

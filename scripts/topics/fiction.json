@@ -1,0 +1,18 @@
+[
+  {"tag": "fiction_mystery", "label": "ミステリ・推理小説の場面 (会話 + 地の文、登場人物名あり)"},
+  {"tag": "fiction_romance", "label": "恋愛小説の場面 (心情描写 + 会話、固有名詞混じり)"},
+  {"tag": "fiction_scifi", "label": "SF 小説の場面 (技術用語 + 物語進行)"},
+  {"tag": "fiction_fantasy", "label": "ファンタジー小説の場面 (架空地名・職業名・キャラ会話)"},
+  {"tag": "fiction_historical", "label": "歴史小説の場面 (江戸・明治期、人物会話と情景)"},
+  {"tag": "fiction_horror", "label": "ホラー小説の場面 (恐怖描写 + 内的独白)"},
+  {"tag": "fiction_slice_of_life", "label": "日常系小説の場面 (家族・友人・職場の会話描写)"},
+  {"tag": "fiction_school", "label": "学園小説の場面 (高校生キャラ会話、授業 / 部活 / 恋)"},
+  {"tag": "fiction_business", "label": "ビジネス小説の場面 (社内会議 / 交渉 / 派閥)"},
+  {"tag": "fiction_dialogue_heavy", "label": "会話劇 (登場人物 3-4 人、台詞中心、地の文最小限)"},
+  {"tag": "fiction_narration_heavy", "label": "情景描写中心の地の文 (会話無し、3 人称)"},
+  {"tag": "fiction_first_person", "label": "1 人称小説の独白 (内面 + 行動、心情)"},
+  {"tag": "fiction_letter", "label": "書簡体小説の一通 (誰々への手紙、敬語)"},
+  {"tag": "fiction_short_story_complete", "label": "完結する超短編 (起承転結が 800 字に収まる)"},
+  {"tag": "fiction_battle", "label": "戦闘描写 (剣戟・近代戦・SF 戦闘の動き)"},
+  {"tag": "fiction_quote_collection", "label": "名言・印象的な一節を風に集めた創作 (文体の変化)"}
+]

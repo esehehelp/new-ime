@@ -1,0 +1,72 @@
+# akari: Suiko-lineage CTC-NAT, normalized Hibiki (Schema B, tatoeba dropped).
+#
+# Strategy: isolate the data normalization effect. Same arch / hyperparams /
+# step budget as Hatsuyume, but:
+#   - Hibiki regenerated with data-mix Schema-B normalization (every row
+#     now has `left_context_surface` / `left_context_reading`, no more
+#     legacy `context` field skew between pools).
+#   - tatoeba.jsonl removed from the bunsetsu pool (audit-confirmed
+#     low quality + format inconsistency, Hatsuyume regression suspect).
+#   - KD disabled (Hatsuyume's zenz KD gave −16pt homophone vs Suiko-v1;
+#     this run measures data-only effect with no teacher signal).
+#
+# Promotion gate: greedy probe_v3 EM1 > 0.65 → renames to Suiko-v2-small.
+
+[run]
+name = "akari"
+seed = 71
+out_dir = "checkpoints/akari"
+
+[model]
+preset = "phase3_30m"
+max_seq_len = 128
+max_context = 32
+
+[data]
+train     = "datasets/mixes/Hibiki.jsonl"
+dev       = "datasets/eval/general/dev.jsonl"
+tokenizer = "datasets/tokenizers/char-5k.json"
+max_train_samples = 2000000
+max_dev_samples   = 2000
+
+[optim]
+lr = 4e-4
+warmup_steps = 2000
+schedule = "cosine"
+lr_min_ratio = 0.10
+weight_decay = 0.01
+grad_clip = 1.0
+
+[loop]
+batch_size = 64
+eval_batch_size = 64
+grad_accum = 2
+max_steps = 50000
+fp16 = true
+bf16 = false
+compile = true
+num_workers = 0
+
+[logging]
+log_every = 500
+eval_every = 1000
+checkpoint_every = 5000
+keep_last_k = 3
+print_samples = 3
+early_log_every = 10
+early_log_steps = 200
+
+[probe]
+path = "datasets/eval/probe/probe.json"
+every = 5000
+limit = 0
+metric_priority = "probe_em1"
+
+[refine]
+loss_weight = 0.7
+warmup_steps = 5000
+mask_ratio_min = 0.15
+mask_ratio_max = 0.35
+refine_source = "target"
+remask_loss_weight = 0.1
+stop_loss_weight = 0.1

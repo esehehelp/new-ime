@@ -1,0 +1,14 @@
+[
+  {"tag": "codemix_python_blog", "label": "Python のコード断片混じり技術ブログ (関数名・モジュール名・引数名は英数のまま使う)"},
+  {"tag": "codemix_rust_blog", "label": "Rust のコード断片混じり技術ブログ (`impl`, `trait`, `Result<T, E>` 等のキーワードを英語のまま使う)"},
+  {"tag": "codemix_sql_blog", "label": "SQL クエリ断片混じり DB 技術ブログ (`SELECT`, `JOIN` 等のキーワード英語、テーブル名は混在)"},
+  {"tag": "codemix_js_blog", "label": "JavaScript / TypeScript コード混じり Web 技術記事 (フレームワーク名カタカナ + コード英語)"},
+  {"tag": "codemix_shell_blog", "label": "シェルコマンド (`grep`, `awk`, `xargs` 等) 混じり運用 / スクリプト解説"},
+  {"tag": "codemix_yaml_config", "label": "YAML / TOML / JSON 設定ファイル断片混じり構築解説 (Kubernetes / CI 等)"},
+  {"tag": "codemix_aws_gcp", "label": "AWS / GCP サービス名 (S3 / EC2 / BigQuery) 混じりクラウド運用記事"},
+  {"tag": "codemix_lib_review", "label": "ライブラリ・ツール名 (FastAPI / Django / React / TanStack) 混じり比較記事"},
+  {"tag": "codemix_error_log", "label": "エラーログ + トラブルシュート (英語スタックトレース + 日本語解説)"},
+  {"tag": "codemix_changelog", "label": "ソフトウェア更新情報・リリースノート風 (英語バージョン番号 + 機能解説)"},
+  {"tag": "codemix_command_tutorial", "label": "git / docker / kubectl 等のコマンド使用法解説 (`docker run -it ...` を本文に挿入)"},
+  {"tag": "codemix_api_doc", "label": "API ドキュメント風 (エンドポイント `/api/v1/users` + リクエスト / レスポンス例)"}
+]

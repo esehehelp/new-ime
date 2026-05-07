@@ -1,0 +1,13 @@
+[
+  {"tag": "okurigana_kudasai", "label": "「ください」と「下さい」を意識的に混ぜた依頼文・敬語文の文章"},
+  {"tag": "okurigana_kaku", "label": "「描く」「書く」「掻く」「欠く」など同読み多義動詞を文脈で使い分けた文章"},
+  {"tag": "okurigana_okiru", "label": "「起きる」「興きる」「置く」など類似動詞の使い分け文"},
+  {"tag": "okurigana_aru_form", "label": "「ある / 在る / 有る」を場面で使い分けた説明文 (存在動詞)"},
+  {"tag": "okurigana_iku", "label": "「行く / 往く / 逝く」など類似漢字・送り仮名の使い分け"},
+  {"tag": "okurigana_yobu", "label": "「呼ぶ / 招ぶ」「聞く / 訊く / 聴く」などニュアンス使い分け"},
+  {"tag": "okurigana_compound", "label": "複合動詞 (取り組む / 申し込む / 受け取る) の表記揺れを含む文"},
+  {"tag": "okurigana_adj_to_verb", "label": "形容詞・形容動詞 (難しい / 嬉しい / 静か) と動詞化の表記"},
+  {"tag": "okurigana_keigo", "label": "敬語 (なさる / いたす / させていただく) の表記揺れ含む文"},
+  {"tag": "okurigana_jukugo_kana", "label": "熟語のかな表記揺れ (ふだん/普段、いっしょ/一緒、もちろん/勿論) を混ぜた文"},
+  {"tag": "okurigana_quote", "label": "引用符・句読点パターンの混在 (「」『』 ’ ” )"}
+]

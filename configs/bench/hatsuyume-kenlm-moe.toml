@@ -1,0 +1,31 @@
+# hatsuyume + KenLM-MoE 6gram-q8 — production-equivalent decoding.
+
+[run]
+name = "hatsuyume-kenlm-moe"
+out_dir = "results/bench/hatsuyume-kenlm-moe"
+
+[model]
+type = "ctc-nat"
+onnx = "models/onnx/hatsuyume-step50000.int8.onnx"
+
+[decode]
+mode = "beam"
+num_beams = 5
+num_return = 5
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"
+
+[lm]
+mode = "moe"
+alpha = 0.2
+beta = 0.6
+[lm.paths_by_domain]
+general = "assets/kenlm/kenlm_general_6gram_q8.bin"
+tech    = "assets/kenlm/kenlm_tech_6gram_q8.bin"
+entity  = "assets/kenlm/kenlm_entity_4gram.bin"

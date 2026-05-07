@@ -1,0 +1,23 @@
+# hatsuyume greedy probe — measure Suiko-v1 / Mizuho との比較。
+# step50000 = best probe EM1 (0.5172 from training metrics.jsonl).
+
+[run]
+name = "hatsuyume-greedy"
+out_dir = "results/bench/hatsuyume-greedy"
+
+[model]
+type = "ctc-nat"
+onnx = "models/onnx/hatsuyume-step50000.int8.onnx"
+
+[decode]
+mode = "greedy"
+num_beams = 1
+num_return = 1
+top_k = 5
+
+[benches]
+probe_v3    = "datasets/eval/probe/probe.json"
+ajimee_jwtd = "references/AJIMEE-Bench/JWTD_v2/v1/evaluation_items.json"
+
+[device]
+backend = "cpu"

@@ -1,0 +1,22 @@
+[
+  {"tag": "sns_post_short", "label": "SNS の短文投稿 4-6 個 (Twitter/X 風、150 字以内ずつ、絵文字なし、改行で区切る)"},
+  {"tag": "chat_friend", "label": "友人との LINE/メッセージ会話のログ (10-20 ターン、Aさん:〜 Bさん:〜 形式)"},
+  {"tag": "chat_family", "label": "家族間の LINE 会話ログ (10-15 ターン、買い物・予定調整など日常)"},
+  {"tag": "blog_diary_long", "label": "日記風ブログ (1 日の出来事を 600-800 字、口語混じり)"},
+  {"tag": "blog_complaint", "label": "愚痴・お悩み相談ブログ (口語多め、感情表現あり)"},
+  {"tag": "blog_review_food", "label": "外食レビュー (評価 + 感想、雑な話し言葉)"},
+  {"tag": "dialogue_couple", "label": "カップル/夫婦の会話シーン (10-15 ターン、生活の話題)"},
+  {"tag": "dialogue_workmate", "label": "同僚との雑談 (休憩中の会話、10-15 ターン)"},
+  {"tag": "dialogue_classmate", "label": "学生同士の会話 (授業や部活、10-15 ターン)"},
+  {"tag": "monologue_self", "label": "ひとりごと・思考の流れ (口語的な独白 500 字程度)"},
+  {"tag": "review_consumer", "label": "口語的なネット商品レビュー (ガジェット/化粧品/書籍/ゲーム)"},
+  {"tag": "question_qa", "label": "知恵袋風の質問本文 + 回答 (口語、生活相談、5 ペア程度)"},
+  {"tag": "step_recipe_casual", "label": "ノリで書いた料理レシピ (材料リストなし、本文のみ口語)"},
+  {"tag": "travel_diary_casual", "label": "旅行記 (口語混じりで具体地名混在)"},
+  {"tag": "opinion_rant", "label": "ネット民の意見・主張 (やや過激な口語、論理は雑)"},
+  {"tag": "kakikomi_2ch", "label": "雑談スレ風カキコミ (匿名掲示板、5-10 レス連続、>>1 形式 OK)"},
+  {"tag": "nichijou_observation", "label": "日常の小さな観察 (200-400 字、つぶやき風)"},
+  {"tag": "haiku_diary", "label": "短歌・俳句風の感想を散りばめた日記 (口語と詩情の混在)"},
+  {"tag": "kids_voice", "label": "子供の発言 (台詞引用形式、3-5 個まとめて)"},
+  {"tag": "elder_voice", "label": "年配の方の語り (戦後の思い出・近況など、口語)"}
+]
