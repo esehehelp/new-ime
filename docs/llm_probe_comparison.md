@@ -35,11 +35,9 @@
 
 † context-prefix 出力の post-hoc strip 後
 
-(DeepSeek V4-Pro thinking は計測中、結果出次第追記)
-
 ## 観察
 
-**Closed frontier LLM が ceiling (0.82-0.85)**: GPT-5.5 と Opus 4.7 が突出。zenz-v2.5-medium (1.3B) が 0.76 で 7pt 差まで肉薄するも届かず。
+**Closed frontier LLM が ceiling (0.82-0.85)**: GPT-5.5 と Opus 4.7 が突出。zenz-v2.5-medium (~310M) が 0.76 で 7pt 差まで肉薄するも届かず。
 
 **zenz-v3.1-small は param 効率の頂点**:
 - ~94M 単体で 0.7213 — open-weight 系 thinking モデル全般を上回る
@@ -65,6 +63,7 @@
 |zenz-v3.1-small|0.775|0.667|0.487|0.818|0.677|0.875|0.795|
 |Gemini 3.1 Pro|**0.950**|0.627|0.730|0.636|0.569|0.875|0.659|
 |GLM-5.1 thinking|0.850|0.640|0.639|0.655|0.600|0.906|0.705|
+|DeepSeek V4-Pro think (rescored)|0.900|0.667|0.622|0.636|0.692|0.875|0.727|
 |Suiko-v1 KenLM-MoE|0.700|0.653|0.486|0.691|0.662|0.875|0.727|
 |Gemma 4 31B|0.900|0.653|0.432|0.618|0.554|0.875|0.818|
 |DeepSeek V4-Flash|0.800|0.547|0.486|0.636|0.538|0.875|0.614|
